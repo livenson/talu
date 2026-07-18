@@ -117,6 +117,21 @@ whenever you burn time on a non-obvious issue.
       non-nested Talos** (real VMs / nested KVM where Talos udevd manages real devices). Talos never
       exposes the dynamic device nodes to kubelet on the docker provisioner.
 
+15. **CephFS WORKS where RBD doesn't — the storage answer for the no-KVM lab.** The `/dev` wall is
+    block-device-specific (rbd/krbd/nbd map a `/dev/*` node). CephFS mounts are network **filesystem**
+    mounts (kernel `mount -t ceph`, or ceph-fuse via `/dev/fuse`) — no block device, so they work on
+    the nested Talos node. Validated: enable CephFS on MicroCeph (`microceph.ceph fs volume create talufs`),
+    install **ceph-csi-cephfs** against the external cluster, and an **RWX** PVC mounts across two pods
+    (writer→reader verified). Gives RWX Filesystem + snapshots — and RWX Filesystem can back KubeVirt
+    disks AND **enable live migration** (RWX is the requirement), which RBD-block couldn't do here.
+    GOTCHA: the ceph-csi-cephfs helm chart writes the secret with `userID`/`userKey`, but the driver
+    needs **`adminID`/`adminKey`** — create the secret manually with those keys or provisioning fails
+    with `rados: ret=-22`. Use a dedicated `client.cephfs` (mon 'allow r', mgr 'allow rw',
+    osd 'allow rw tag cephfs *=*', mds 'allow rw').
+    Re: **Rook + CephFS** — Rook-managed still needs OSDs on the node (same udev wall); Rook-external
+    against MicroCeph would work but is redundant vs plain ceph-csi-cephfs. Use CephFS here; RBD/Rook
+    on real nodes (KVM) in production.
+
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the
   controller events (the real error) immediately — far faster than polling `.status.phase` and
