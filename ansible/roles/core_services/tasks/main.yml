@@ -3,7 +3,7 @@
 - name: Install local-path-provisioner
   ansible.builtin.command: >
     kubectl apply -f
-    https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
+    https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.36/deploy/local-path-storage.yaml
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
 
@@ -17,7 +17,7 @@
 - name: Install cert-manager
   ansible.builtin.command: >
     kubectl apply -f
-    https://github.com/cert-manager/cert-manager/releases/download/v1.16.2/cert-manager.yaml
+    https://github.com/cert-manager/cert-manager/releases/download/v1.21.0/cert-manager.yaml
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
 

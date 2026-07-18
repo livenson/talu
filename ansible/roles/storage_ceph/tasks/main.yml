@@ -46,7 +46,7 @@
 
 - name: Install external-snapshotter CRDs + controller
   ansible.builtin.shell: |
-    S=https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/release-8.2
+    S=https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/release-8.6
     kubectl apply -f $S/client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml \
                   -f $S/client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml \
                   -f $S/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml

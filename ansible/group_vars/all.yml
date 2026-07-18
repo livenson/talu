@@ -7,7 +7,7 @@ podman_socket: "unix:///run/podman/podman.sock"   # talosctl docker provisioner 
 lab_home: /home/rocky
 kubeconfig_path: /home/rocky/.talu/kubeconfig
 
-cilium_version: "1.18.1"
+cilium_version: "1.19.6"          # multi-pool IPAM GA; bump via -f values (NOT --reuse-values, gotcha #24)
 cilium_mtu: 1300                 # 1300 + VXLAN 50 < host 1400
 dns_forwarders: "8.8.8.8 1.1.1.1"   # CoreDNS default upstream is unusable here (gotcha #12)
 
