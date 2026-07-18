@@ -33,7 +33,7 @@
     dnf -y install "https://dl.rockylinux.org/vault/rocky/${VERSION_ID}/BaseOS/x86_64/os/Packages/k/kernel-modules-${K}.x86_64.rpm"
     depmod -a "$(uname -r)"
   register: km
-  changed_when: "'already installed' not in km.stdout"
+  changed_when: "'Installed:' in km.stdout or 'Complete!' in km.stdout"
   failed_when: false
 
 - name: Persist + load kernel modules (br_netfilter may be absent — best effort)
@@ -77,19 +77,21 @@
     enabled: true
     state: started
 
-- name: Install CLI tooling
+- name: Install CLI tooling (force:false skips if the binary already exists on the target)
   become: true
   ansible.builtin.get_url:
     url: "{{ item.url }}"
     dest: "/usr/local/bin/{{ item.name }}"
     mode: "0755"
+    force: false
   loop:
     - { name: kubectl,  url: "https://dl.k8s.io/release/{{ lookup('url','https://dl.k8s.io/release/stable.txt') }}/bin/linux/amd64/kubectl" }
     - { name: talosctl, url: "https://github.com/siderolabs/talos/releases/latest/download/talosctl-linux-amd64" }
     - { name: cosign,   url: "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64" }
     - { name: virtctl,  url: "https://github.com/kubevirt/kubevirt/releases/download/v1.8.4/virtctl-v1.8.4-linux-amd64" }
 
-- name: Install helm
+- name: Install helm (idempotent via creates guard; get-helm-3 self-check is noisy)
   become: true
-  ansible.builtin.shell: "command -v helm || (curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash)"
-  changed_when: false
+  ansible.builtin.shell: "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true; test -x /usr/local/bin/helm"
+  args:
+    creates: /usr/local/bin/helm

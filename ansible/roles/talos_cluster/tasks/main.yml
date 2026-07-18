@@ -1,8 +1,8 @@
 ---
 # Stage 1a: Talos cluster as Podman containers via talosctl docker provisioner.
-- name: Check if cluster already exists
-  ansible.builtin.command: "talosctl config info"
-  environment: { TALOSCONFIG: "{{ lab_home }}/.talos/config" }
+- name: Check if the Talos cluster container already exists (reliable idempotence guard)
+  become: true
+  ansible.builtin.command: "podman container exists {{ cluster_name }}-controlplane-1"
   register: cluster_exists
   changed_when: false
   failed_when: false
@@ -36,7 +36,7 @@
       --config-patch @/tmp/talu-talos-patch.yaml {{ nbd_mounts | default('') }} \
       >/root/talos-create.log 2>&1 </dev/null &
   environment: { DOCKER_HOST: "{{ podman_socket }}" }
-  when: "'talu-lab' not in (cluster_exists.stdout | default(''))"
+  when: cluster_exists.rc != 0
   changed_when: true
 
 - name: Wait for the Kubernetes API to come healthy
