@@ -148,6 +148,12 @@ on the same floating IP behind Pomerium. Components + gotchas:
     `certificate_authority: <base64 talu-ca>` in config + a **pod `hostAlias`** mapping `id.<host>` and
     `authenticate.<host>` → `127.0.0.1` so Pomerium loops through its own `:443` internally. Browsers
     still resolve the real floating IP via public sslip.io.
+18b. **Pomerium is v0.33.0** (bumped from v0.28.0 — a plain image-tag change, ConfigMap kept, rollback =
+    tag back). v0.33 adds the **Routes Portal** app-launcher at `/.pomerium/routes` (+ JSON at
+    `/.pomerium/api/v1/routes`) — lists each user's authorized apps; **v0.28 only had the User Info
+    Dashboard at `/.pomerium/`** (no portal). No OSS admin/management console (that's Pomerium Enterprise).
+    After any Pomerium restart, a live `pomerium-cli tcp` tunnel gets one `401`, re-auths via its
+    browser-cmd, and reconnects — transient, self-heals; not a regression.
 18. **Exposing a cluster :443/:80 on the lab floating IP:** the SG allows only 22/80/443. NodePort the
     service (30443/30080) and `systemd-run socat TCP-LISTEN:443 → 10.5.0.2:30443` (kubectl port-forward
     is too fragile; plain `&`-backgrounding over ssh drops the session — **use `systemd-run`**).
