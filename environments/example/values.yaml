@@ -1,0 +1,19 @@
+# example — reference site. COPY this directory to environments/<yoursite>/ (in your own
+# repo), edit values, and never edit components/. `git merge` upstream stays clean.
+# Secrets do NOT live here — use SOPS/age or OpenBao; ship only *.example stubs.
+kubevirt:
+  useEmulation: false         # real hardware with /dev/kvm
+  guestArch: amd64
+cilium:
+  mtu: 1500
+  ipamMode: kubernetes        # decide at Phase-2 bootstrap; immutable afterwards
+rook:
+  osdCount: 2                 # per node; real NVMe
+  poolSize: 2                 # -> 3 at 3+ nodes (a values change, not a migration)
+  failureDomain: osd          # -> host at 3+ nodes
+replicas:
+  openbao: 3
+  keycloak: 2
+  pomerium: 2
+hostnames:
+  scheme: wildcard            # *.apps.<site>.example.com

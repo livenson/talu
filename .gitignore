@@ -1,0 +1,11 @@
+# Local lab state — kubeconfig, talosconfig, SSH control socket (fetched per developer).
+/.lab/
+
+# Decrypted secrets must never be committed. Only *.example stubs live in the repo.
+secrets.yaml
+*.secret.yaml
+*.decrypted.yaml
+
+# Editor / OS noise
+.DS_Store
+*.swp

@@ -1,0 +1,7 @@
+# Tenant identity — the project-uuid becomes the talu.io/project-uuid label on every object.
+projectUuid: ""            # REQUIRED, e.g. 3f2a91bc-...
+slug: ""                   # frozen at creation, survives manager renames
+# VMs this tenant owns (name -> spec); consumed by templates/.
+vms: {}
+# Tier-1 stable internal IP pool (CiliumLoadBalancerIPPool), internal non-announced range.
+internalIpPool: ""         # e.g. 10.200.4.0/26  (empty = feature off)
