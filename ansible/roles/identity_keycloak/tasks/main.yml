@@ -1,0 +1,79 @@
+---
+# Stage 6a: Keycloak — the single OIDC IdP. Realm `platform`, an OIDC client for Pomerium,
+# a groups mapper (tokens carry group paths), and a demo group+user for the acceptance test.
+- name: Namespace identity
+  ansible.builtin.command: "kubectl create ns {{ identity_ns | default('identity') }} --dry-run=client -o yaml"
+  register: ns_yaml
+  changed_when: false
+
+- name: Apply identity namespace
+  ansible.builtin.shell: "echo '{{ ns_yaml.stdout }}' | kubectl apply -f -"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+- name: Deploy Keycloak (dev mode) + Service
+  ansible.builtin.shell: |
+    cat <<'EOF' | kubectl apply -f -
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata: {name: keycloak, namespace: identity}
+    spec:
+      replicas: 1
+      selector: {matchLabels: {app: keycloak}}
+      template:
+        metadata: {labels: {app: keycloak}}
+        spec:
+          containers:
+            - name: keycloak
+              image: quay.io/keycloak/keycloak:26.0
+              args: ["start-dev"]
+              env:
+                - {name: KC_BOOTSTRAP_ADMIN_USERNAME, value: "{{ keycloak_admin_user | default('admin') }}"}
+                - {name: KC_BOOTSTRAP_ADMIN_PASSWORD, value: "{{ keycloak_admin_password | default('admin') }}"}
+                - {name: KC_PROXY_HEADERS, value: xforwarded}
+                - {name: KC_HTTP_ENABLED, value: "true"}
+                - {name: KC_HOSTNAME_STRICT, value: "false"}
+              ports: [{containerPort: 8080}]
+              readinessProbe: {httpGet: {path: /realms/master, port: 8080}, initialDelaySeconds: 25, periodSeconds: 5, failureThreshold: 40}
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata: {name: keycloak, namespace: identity}
+    spec: {selector: {app: keycloak}, ports: [{name: http, port: 8080, targetPort: 8080}]}
+    EOF
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Wait for Keycloak ready
+  ansible.builtin.command: "kubectl -n identity rollout status deploy/keycloak --timeout=300s"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+- name: Configure realm, client, groups mapper, demo user (idempotent via '|| true')
+  ansible.builtin.shell: |
+    kubectl -n identity exec deploy/keycloak -- bash -c '
+      K=/opt/keycloak/bin/kcadm.sh
+      $K config credentials --server http://localhost:8080 --realm master --user {{ keycloak_admin_user | default("admin") }} --password {{ keycloak_admin_password | default("admin") }}
+      $K create realms -s realm=platform -s enabled=true 2>/dev/null || true
+      CID=$($K create clients -r platform -s clientId=pomerium -s enabled=true -s protocol=openid-connect -s publicClient=false -s standardFlowEnabled=true -s directAccessGrantsEnabled=true -s "redirectUris=[\"https://*\",\"http://*\"]" -s "webOrigins=[\"+\"]" -i 2>/dev/null) || CID=$($K get clients -r platform -q clientId=pomerium --fields id --format csv --noquotes | head -1)
+      $K create clients/$CID/protocol-mappers/models -r platform -s name=groups -s protocol=openid-connect -s protocolMapper=oidc-group-membership-mapper -s "config.\"full.path\"=true" -s "config.\"claim.name\"=groups" -s "config.\"id.token.claim\"=true" -s "config.\"access.token.claim\"=true" -s "config.\"userinfo.token.claim\"=true" 2>/dev/null || true
+      $K create groups -r platform -s name=platform-admin 2>/dev/null || true
+      GID=$($K get groups -r platform -q search=platform-admin --fields id --format csv --noquotes | head -1)
+      # NOTE: Keycloak 26 user-profile requires firstName/lastName, else "Account is not fully set up".
+      $K create users -r platform -s username=alice -s enabled=true -s emailVerified=true -s firstName=Alice -s lastName=Test -s "requiredActions=[]" 2>/dev/null || true
+      $K set-password -r platform --username alice --new-password {{ keycloak_demo_password | default("alice") }} 2>/dev/null || true
+      UUID=$($K get users -r platform -q username=alice --fields id --format csv --noquotes | head -1)
+      $K update users/$UUID/groups/$GID -r platform -n 2>/dev/null || true
+      $K get clients/$CID/client-secret -r platform
+    '
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: kc_config
+  changed_when: false
+
+- name: Extract Pomerium client secret
+  ansible.builtin.set_fact:
+    pomerium_client_secret: "{{ kc_config.stdout | regex_search('\"value\"\\s*:\\s*\"([^\"]+)\"','\\1') | first }}"
+
+- name: Show captured client secret (for the pomerium role)
+  ansible.builtin.debug:
+    msg: "Keycloak ready; realm=platform client=pomerium secret={{ pomerium_client_secret }}"
