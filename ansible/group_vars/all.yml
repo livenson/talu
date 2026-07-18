@@ -33,8 +33,7 @@ pomerium_version: "v0.33.0"
 pomerium_idp_client_secret: "pomerium-secret-lab"
 pomerium_nodeport_https: 30443
 pomerium_nodeport_http: 30080
-
-openbao_version: "2.1.1"                                   # dev-mode (ephemeral); prod = Raft + unseal (plan §6)
-openbao_ssh_principal: "talu"
+pomerium_nodeport_ssh: 30022
+pomerium_ssh_host_port: 23        # dedicated SG-open port for Pomerium native SSH (was :80 before 23 opened)
 
 kubevirt_manager_version: "v1.5.4"

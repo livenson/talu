@@ -1,10 +1,11 @@
 # Kyverno guardrails for VM SSH access — ENFORCEMENT, not generation.
 #
-# The tenant chart generates the Service / route / pinning policy / OpenBao role
+# The tenant chart generates the cloud-init Secret / Service / ssh:// route / pinning policy
 # (single source of truth, Flux-reconciled). Kyverno's job is to guarantee nobody
 # ships an SSH-exposed VM without its guardrails, and that the labels the platform
 # joins on are always present. Kyverno cannot create the Pomerium route (shared
-# config blob) or the OpenBao role (external system), so it must not be the generator.
+# config blob), so it must not be the generator. (SSH auth is Pomerium Native SSH —
+# Pomerium is the SSH CA; there is no OpenBao in this path.)
 #
 # Install Kyverno first (helm repo kyverno/kyverno) — these are optional hardening.
 ---

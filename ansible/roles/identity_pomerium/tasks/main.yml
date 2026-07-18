@@ -1,8 +1,9 @@
 ---
-# Stage 6c: Pomerium IAP (gotchas #17, #18, #18b). OIDC->Dex, autocert Let's Encrypt on :443,
-# pod hostAlias for the OIDC hairpin, NodePort + host `socat` to expose the floating IP :443/:80.
-# Ships the BASE routes (id/whoami/vms); per-VM tcp SSH routes are layered by dev/lab/expose-vm.sh
-# (or the tenant chart), not this role.
+# Stage 6c: Pomerium IAP (gotchas #17, #18, #18b, #21). OIDC->Dex, autocert Let's Encrypt on :443,
+# pod hostAlias for the OIDC hairpin, NodePort + host `socat` to expose the floating IP :443/:80/:23.
+# Pomerium is ALSO the Native SSH proxy + SSH User CA (replaces OpenBao): ssh_address on :2222,
+# exposed via host :23. Ships the BASE HTTP routes (id/whoami/vms) + the SSH server block; per-VM
+# ssh:// routes are layered by dev/lab/expose-vm.sh (or the tenant chart), not this role.
 - name: Namespace pomerium
   ansible.builtin.command: "kubectl create ns pomerium --dry-run=client -o yaml"
   register: ns_pomerium
@@ -33,6 +34,38 @@
   when: pom_sec.rc != 0
   changed_when: true
 
+- name: Pomerium SSH keys (User CA + host keys) already present?
+  ansible.builtin.command: "kubectl -n pomerium get secret pomerium-ssh"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: pom_ssh_sec
+  changed_when: false
+  failed_when: false
+
+- name: Generate Pomerium SSH User CA + host keys (only if absent — VMs trust the CA, never rotate)
+  ansible.builtin.shell: |
+    set -e
+    T=$(mktemp -d); cd "$T"
+    ssh-keygen -t ed25519 -N "" -f user_ca -C "Pomerium User CA" -q
+    ssh-keygen -t ed25519 -N "" -f host_ed25519 -q
+    ssh-keygen -t rsa -b 3072 -N "" -f host_rsa -q
+    ssh-keygen -t ecdsa -N "" -f host_ecdsa -q
+    kubectl -n pomerium create secret generic pomerium-ssh \
+      --from-file=user_ca=user_ca --from-file=host_ed25519=host_ed25519 \
+      --from-file=host_rsa=host_rsa --from-file=host_ecdsa=host_ecdsa
+    cd /; rm -rf "$T"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  when: pom_ssh_sec.rc != 0
+  changed_when: true
+
+- name: Publish the User CA public key (ConfigMap the VM generator reads for TrustedUserCAKeys)
+  ansible.builtin.shell: |
+    kubectl -n pomerium get configmap pomerium-user-ca >/dev/null 2>&1 && exit 0
+    P=$(mktemp); kubectl -n pomerium get secret pomerium-ssh -o jsonpath='{.data.user_ca}' | base64 -d > "$P"
+    chmod 600 "$P"; ssh-keygen -y -f "$P" > "$P.pub"; rm -f "$P"
+    kubectl -n pomerium create configmap pomerium-user-ca --from-file=user_ca.pub="$P.pub"; rm -f "$P.pub"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
 - name: Pomerium ConfigMap (base routes id/whoami/vms)
   ansible.builtin.shell: |
     cat <<EOF | kubectl apply -f -
@@ -49,6 +82,9 @@
         idp_client_id: pomerium
         idp_client_secret: {{ pomerium_idp_client_secret }}
         idp_scopes: [openid, profile, email]
+        ssh_address: ":2222"
+        ssh_user_ca_key_file: /ssh/user_ca
+        ssh_host_key_files: [/ssh/host_ed25519, /ssh/host_rsa, /ssh/host_ecdsa]
         routes:
           - from: https://id.{{ lab_domain }}
             to: http://dex.identity.svc:5556
@@ -111,13 +147,15 @@
                   - { name: SHARED_SECRET, valueFrom: { secretKeyRef: { name: pomerium-secrets, key: shared_secret } } }
                   - { name: COOKIE_SECRET, valueFrom: { secretKeyRef: { name: pomerium-secrets, key: cookie_secret } } }
                   - { name: CONFIG_FILE, value: /pomerium/config.yaml }
-                ports: [{ containerPort: 443 }, { containerPort: 80 }]
+                ports: [{ containerPort: 443 }, { containerPort: 80 }, { containerPort: 2222 }]
                 volumeMounts:
                   - { name: config, mountPath: /pomerium }
                   - { name: data, mountPath: /data }
+                  - { name: ssh, mountPath: /ssh, readOnly: true }
             volumes:
               - { name: config, configMap: { name: pomerium-config } }
               - { name: data, persistentVolumeClaim: { claimName: pomerium-data } }
+              - { name: ssh, secret: { secretName: pomerium-ssh, defaultMode: 256 } }
       ---
       apiVersion: v1
       kind: Service
@@ -128,6 +166,7 @@
         ports:
           - { name: https, port: 443, targetPort: 443, nodePort: {{ pomerium_nodeport_https }} }
           - { name: http, port: 80, targetPort: 80, nodePort: {{ pomerium_nodeport_http }} }
+          - { name: ssh, port: 2222, targetPort: 2222, nodePort: {{ pomerium_nodeport_ssh }} }
   changed_when: false
 
 - name: Diff the Pomerium bundle (accurate drift signal; rc 1 == real change)
@@ -169,8 +208,9 @@
       [Install]
       WantedBy=multi-user.target
   loop:
-    - { port: 443, np: "{{ pomerium_nodeport_https }}" }
-    - { port: 80, np: "{{ pomerium_nodeport_http }}" }
+    - { port: 443, np: "{{ pomerium_nodeport_https }}" }   # HTTPS
+    - { port: 80, np: "{{ pomerium_nodeport_http }}" }      # HTTP -> HTTPS redirect
+    - { port: "{{ pomerium_ssh_host_port }}", np: "{{ pomerium_nodeport_ssh }}" }  # Pomerium native SSH
   register: socat_units
 
 - name: Enable + (re)start socat units
@@ -183,3 +223,4 @@
   loop:
     - { port: 443 }
     - { port: 80 }
+    - { port: "{{ pomerium_ssh_host_port }}" }

@@ -133,9 +133,10 @@ whenever you burn time on a non-obvious issue.
     on real nodes (KVM) in production.
 
 ## Stage 6 — identity & access plane (validated on the lab)
-Achieved end-to-end: **OIDC login → Pomerium tunnel → OpenBao-signed 15-min SSH cert → cert-auth into
-a Cilium-pinned VM sshd** (lands as `talu@ubuntu`, no static password). Also: **kubevirt-manager** VM UI
-on the same floating IP behind Pomerium. Components + gotchas:
+Achieved end-to-end: **OIDC login → Pomerium Native SSH → cert-auth into a Cilium-pinned VM sshd**
+(Pomerium is the SSH proxy AND the SSH User CA — lands as `talu@ubuntu` via a stock `ssh` client, no
+tunnel, no OpenBao, no static password). Also: **kubevirt-manager** VM UI on the same floating IP.
+Components + gotchas:
 16. **IdP = Dex** (not Keycloak, for the lab). Keycloak 26 fought us: JVM weight, **ephemeral H2 wiped
     on every restart** (needs a PVC or realm-import), user-profile requires firstName/lastName ("Account
     is not fully set up"), and a data-dir permission crash. Dex is a tiny Go OIDC provider, static
@@ -166,28 +167,36 @@ on the same floating IP behind Pomerium. Components + gotchas:
     occasionally fail with "too many certs".) With a real cert, drop `certificate_authority` from the
     Pomerium config; the internal OIDC loop trusts LE via system roots (keep the `hostAlias`).
 19. **Per-VM SSH exposure + pinning:** a Service (`selector: kubevirt.io/vm: <vm>`, port 22) fronts the
-    VM's dropbear; a Pomerium **`tcp+https://ssh.<host>:22`** route tunnels to it; a `CiliumNetworkPolicy`
+    VM's sshd; a Pomerium **`ssh://<vm>`** route (Native SSH, see #21) points at it; a `CiliumNetworkPolicy`
     on the VM namespace allows ingress only from the pomerium namespace — validated: a pod elsewhere is
-    DROPPED (Hubble: `Policy denied DROPPED`), Pomerium is allowed.
+    DROPPED (Hubble: `Policy denied DROPPED`), Pomerium is allowed. The route NAME is the VM selector — it's
+    the middle token users type: `ssh <principal>@<vm>@ssh.<host> -p 23`.
 20. **`pomerium-cli tcp` headless:** `--service-account` OR `--browser-cmd <script>` (script curls the
     Dex login for the user) + `--disable-tls-verification`. Run it via `systemd-run` (ssh-backgrounding
     drops); a binary dropped into `/usr/local/bin` needs **`restorecon`** or SELinux denies systemd exec
     (`Permission denied`).
-21. **OpenBao SSH CA — short-lived certs replace the VM password (§3 chain complete).** OpenBao dev mode
-    (`ghcr.io/openbao/openbao`, `server -dev -dev-root-token-id=root -dev-listen-address=0.0.0.0:8200`),
-    `bao secrets enable -path=ssh ssh` + `bao write ssh/config/ca generate_signing_key=true`. Role via
-    **JSON** (`kubectl exec -i ... bao write ssh/roles/talu -` fed a file), NOT `bao write k=v` — the
-    `default_extensions` map field rejects `permit-pty=` as a string (`expected a map, got 'string'`);
-    payload `{"key_type":"ca","allow_user_certificates":true,"allowed_users":"talu,alice",
-    "default_user":"talu","ttl":"15m","allowed_extensions":"permit-pty","default_extensions":{"permit-pty":""}}`.
-    Sign: `bao write -field=signed_key ssh/sign/talu public_key=@k.pub valid_principals=talu` → 15-min cert.
-    **CirrOS/dropbear CANNOT validate SSH certificates** — booted an **Ubuntu 24.04 containerDisk VM**
-    (`quay.io/containerdisks/ubuntu:24.04`) whose cloud-init `write_files` the CA pubkey + a
-    `sshd_config.d` drop-in (`TrustedUserCAKeys /etc/ssh/talu_ca.pub`, `PasswordAuthentication no`) and
-    creates user `talu`. Full chain proven: OIDC-gated Pomerium tunnel (`:2222`) → OpenBao-signed cert →
-    `ssh -o CertificateFile=... talu@localhost -p 2222` → lands as `talu@ubuntu`, no password anywhere.
-    **Caveat: dev-mode OpenBao is in-memory** — a pod restart wipes the mount/role (the *root CA key*
-    survived our restart but the *role* didn't); production needs Raft storage + unseal (see plan §6).
+21. **Pomerium Native SSH is the SSH CA (OpenBao REMOVED).** OSS Core v0.30+ (we run v0.33) makes
+    Pomerium the SSH proxy AND SSH User CA — users run stock `ssh <principal>@<route>@ssh.<host> -p 23`,
+    auth via browser OIDC (Dex), Pomerium issues the cert. No tunnel, no `pomerium-cli`, no OpenBao.
+    Config: `ssh_address: ":2222"`, `ssh_user_ca_key_file: /ssh/user_ca`, `ssh_host_key_files:[...]`
+    (User CA + 3 host keys in Secret `pomerium-ssh`, mounted `defaultMode 0400`); the User CA **public**
+    key is published as ConfigMap `pomerium-user-ca` (what VMs bake into `TrustedUserCAKeys`). SSH routes:
+    `from: ssh://<vm>` / `to: ssh://<vm>-ssh.<ns>.svc:22` / `policy:[{allow:{and:[{email:{is:...}}]}}]`.
+    **Exposure:** the SG opened **port 23** → host `socat :23 → NodePort 30022 → Pomerium :2222` (before 23
+    was opened, SSH squatted on host `:80`; the `pomerium_ssh_host_port` var flips it). The middle token
+    (`<route>`) selects the VM — it's the `ssh://<route>` route name, by convention == the VM name.
+    **CONNECT FLOW (for debugging):** client offers a key → Pomerium accepts with "partial success"
+    (binds the cert to it) → keyboard-interactive prints a device URL `authenticate.<host>/.pomerium/sign_in?user_code=…`
+    → user opens it, logs into Dex, clicks **"Verify Sign In"** (a JS SPA — a bare POST to the URL = *deny*).
+    **CirrOS/dropbear can't validate certs — use an OpenSSH guest (Ubuntu 24.04 containerDisk).**
+    Reliable, in-memory-free (unlike the removed dev-mode OpenBao). Encoded in `identity_pomerium` role +
+    `dev/lab/{expose-vm,vm-ssh,gen-vm-manifests}.sh`.
+21b. **Guest secrets via cloud-init from a Secret (no OpenBao, no guest agent).** KubeVirt
+    `cloudInitNoCloud.secretRef: {name: <vm>-userdata}` (the field is `secretRef`, NOT `userDataSecretRef` —
+    strict decoding rejects the latter on v1.8.4) sources the whole cloud-init (CA trust + app secrets like
+    `/etc/talu/app.env`) from a Secret whose key is `userdata`. Secrets stay out of the VM manifest; the
+    manager (Waldur) writes the labelled Secret. Static/boot-time; dynamic rotation would need a guest agent
+    (KubeVirt `accessCredentials`, SSH-keys/passwords only) — out of scope here.
 22. **kubevirt-manager on the floating IP.** Web UI for VM lifecycle. Install:
     `kubectl apply -f .../releases/download/<latest>/bundled-<latest>.yaml` (namespace `kubevirt-manager`,
     ClusterRole to drive KubeVirt/CDI, **ClusterIP Service :8080**; PSA warns "restricted" but it runs).
@@ -196,38 +205,35 @@ on the same floating IP behind Pomerium. Components + gotchas:
     ports: it rides the existing `socat :443 → NodePort → Pomerium` path; autocert mints the LE cert for
     `vms.<host>` on first hit. Verified: unauth → 302 to Dex; after alice's login the app is served.
     **Two access planes, don't conflate them:** kubevirt-manager's **Console (noVNC/serial)** and
-    **LB list** use the app's *ServiceAccount* (behind Pomerium), NOT OpenBao. Getting a *shell* in the
-    guest is the OpenBao SSH-cert path (#21) — a **terminal flow, not a UI button**.
+    **LB list** use the app's *ServiceAccount* (behind Pomerium). Getting a *shell* in the guest is the
+    Pomerium Native SSH path (#21) — a **terminal flow, not a UI button**.
     - **noVNC console needs `allow_websockets: true` on the Pomerium `vms.*` route** (the console is a
       WebSocket to `subresources.kubevirt.io/.../vnc`); without it the browser says "failed to connect".
-      And console drops you at the OS **login prompt** — the OpenBao-hardened Ubuntu VM has no password
+      And console drops you at the OS **login prompt** — the CA-hardened Ubuntu VM has no password
       (`lock_passwd`, `PasswordAuthentication no`) so you *can't* log in there by design; console is for
-      password/debug VMs (CirrOS `cirros/gocubsgorocks`). Enter the hardened VM via the SSH cert instead.
+      password/debug VMs (CirrOS `cirros/gocubsgorocks`). Enter the hardened VM via SSH instead.
     - **LB list needs a `CiliumLoadBalancerIPPool`** or every `type: LoadBalancer` stays `<pending>`.
       Added `talu-lab-pool` (blocks `192.168.99.0/24`); Cilium LB-IPAM assigns from it. BUT on this
       NAT'd single-NIC OpenStack VM the LB IP is **not externally routable** (no L2/BGP to the floating
       IP) — reachable in-cluster/on-node only. Practical external access stays **Pomerium routes**, not
       raw LB IPs. (LB IPs matter on real multi-NIC/L2 nodes; here they're control-plane validation.)
-23. **`dev/lab/{expose-vm,vm-ssh}.sh` — the actual "access a VM relying on OpenBao" commands.** Not the
-    web UI. The target VM is NOT chosen by the SSH command — it's fixed by the **Pomerium route → Service
-    selector**; the script arg is the *principal*, not the VM. Generalized to per-VM, label-driven:
-    - `expose-vm.sh <vm> <ns>` creates `<vm>-ssh` Service + a `<vm>-ssh-pin` CiliumNetworkPolicy, then
-      **re-renders the Pomerium routes from every Service labelled `talu.io/ssh-expose=true`** (one
-      `tcp+https://ssh-<vm>.<host>:22` route each — add a VM = add a label), and opens the OIDC-gated
-      tunnel on a per-VM port (`2200 + cksum(vm)%300`) via `systemd-run --user`.
-    - `vm-ssh.sh <vm> [principal]` derives that host/port, `kubectl exec`s OpenBao to sign a 15-min cert,
-      SSHes in; temp key wiped on exit. Validated: `expose-vm.sh ubuntu vmfs` → `vm-ssh.sh ubuntu talu`
-      lands as `talu@ubuntu` (first hit resets while autocert mints the new SNI's LE cert; retry wins).
-    **Correct productionization** (see `components/platform/access/`): the tenant chart generates all four
-    per-VM objects (Service, pinning policy, Pomerium route, OpenBao role), stamped `talu.io/project-uuid`,
-    Flux-reconciled. **Kyverno = enforce invariants, NOT generate** (can't edit the Pomerium config blob or
-    create OpenBao roles). Lab signs with dev root token; identity-bound = `bao login -method=oidc` (Dex) →
-    scoped policy on `ssh/sign/<role>` (TODO; dev-mode OpenBao wipes on restart anyway).
+23. **`dev/lab/{expose-vm,vm-ssh,gen-vm-manifests}.sh` — the "access a VM" commands (Native SSH).** Not the
+    web UI. The target VM is the **middle token** = the `ssh://<vm>` Pomerium route name (== VM selector).
+    - `expose-vm.sh <vm> <ns>` creates `<vm>-ssh` Service + `<vm>-ssh-pin` CiliumNetworkPolicy, then
+      **re-renders the Pomerium config from every Service labelled `talu.io/ssh-expose=true`** (base HTTP
+      routes + the SSH-server block + one `ssh://<vm>` route each — add a VM = add a label). No tunnel.
+    - `vm-ssh.sh <vm> [principal]` is a thin wrapper over `ssh <principal>@<vm>@ssh.<domain> -p 23`.
+    - `gen-vm-manifests.sh <vm> <ns>` (pure, for Waldur) emits the K8s bundle — cloud-init **Secret**
+      (CA trust + guest secrets), VM (`secretRef`), Service, pinning — + the `ssh://` route companion.
+      `CA_PUBKEY` reads cm `pomerium/pomerium-user-ca`; `GUEST_SECRET` env injects `/etc/talu/app.env`.
+    **Productionization** (see `components/platform/access/`): the tenant chart generates the per-VM
+    objects (cloud-init Secret, Service, pinning, `ssh://` route), stamped `talu.io/project-uuid`,
+    Flux-reconciled. **Kyverno = enforce invariants, NOT generate** (can't edit the Pomerium config blob).
 
-## Component versions (audited & bumped 2026-07-18)
-All on latest stable except OpenBao (dev-mode, ephemeral — not worth bumping):
+## Component versions (audited 2026-07-18; OpenBao removed — Pomerium is the SSH CA now)
+All on latest stable:
 K8s v1.36.2 · Talos v1.13.6 · **Cilium v1.19.6** · **cert-manager v1.21.0** · KubeVirt v1.8.4 ·
-CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** · kubevirt-manager 1.5.4 ·
+CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Native SSH) · kubevirt-manager 1.5.4 ·
 **local-path v0.0.36** · **external-snapshotter v8.6.0** · MicroCeph 19.2.3 (squid).
 24. **Cilium helm upgrade: DON'T use `--reuse-values` across a minor bump.** 1.18→1.19 fails with
     `standaloneDnsProxy.enabled: nil pointer` — `--reuse-values` drops the chart's NEW default subtrees.

@@ -2,16 +2,42 @@
 # SSH-accessible VM. Placeholders ${...} are filled by the chart from tenant values.
 # Every object carries talu.io/project-uuid (the join key any external manager uses).
 #
-# This is the "correct way" to generalize VM access: GENERATED FROM THE CHART at
-# reconcile time (Flux prunes all of it when the VM's values are removed), NOT
-# created at admission time. The Pomerium route is rendered into the Pomerium config
-# from the set of exposed VMs (see access/README.md); Kyverno enforces the invariants
-# below rather than generating these objects (see kyverno-guardrails.yaml).
+# Access model: Pomerium Native SSH. Pomerium is the SSH proxy AND the SSH User CA — users
+# run `ssh <principal>@<vm>@ssh.<domain> -p <port>`, authenticate via OIDC in the browser,
+# and Pomerium issues the short-lived cert (no OpenBao, no tunnel). The VM trusts Pomerium's
+# User CA (public key) via cloud-init, sourced from a Secret so guest secrets stay out of the
+# VM manifest.
 #
-# ${VM}        VM name (== kubevirt.io/vm label)
+# GENERATED FROM THE CHART at reconcile time (Flux prunes all of it when the VM's values are
+# removed). Kyverno enforces the invariants rather than generating these (see kyverno-guardrails.yaml).
+#
+# ${VM}        VM name (== kubevirt.io/vm label, == the ssh:// route name)
 # ${NS}        tenant namespace
+# ${PRINCIPAL} guest OS user / cert principal
 # ${PROJECT}   talu.io/project-uuid
-# ${POM_NS}    Pomerium namespace (default: pomerium)
+# ${CA_PUBKEY} Pomerium User CA public key (cm pomerium/pomerium-user-ca)
+---
+# Cloud-init lives in a Secret (guest secrets stay out of the VM manifest; the manager writes it).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${VM}-userdata
+  namespace: ${NS}
+  labels: { talu.io/vm: "${VM}", talu.io/project-uuid: "${PROJECT}" }
+type: Opaque
+stringData:
+  userdata: |
+    #cloud-config
+    users:
+      - { name: ${PRINCIPAL}, sudo: "ALL=(ALL) NOPASSWD:ALL", shell: /bin/bash, lock_passwd: true }
+    write_files:
+      - { path: /etc/ssh/talu_ca.pub, content: "${CA_PUBKEY}", permissions: "0644" }
+      - path: /etc/ssh/sshd_config.d/60-talu-ca.conf
+        content: |
+          TrustedUserCAKeys /etc/ssh/talu_ca.pub
+          PasswordAuthentication no
+      # ...any guest app secrets the manager wants delivered (e.g. /etc/talu/app.env)...
+    runcmd: [ [systemctl, restart, ssh] ]
 ---
 apiVersion: v1
 kind: Service
@@ -27,7 +53,7 @@ spec:
   ports: [{ name: ssh, port: 22, targetPort: 22 }]
 ---
 # Pin ingress to the VM's :22 so ONLY Pomerium can reach it — a pod elsewhere is
-# dropped (verified via Hubble). Defense in depth behind the OpenBao cert gate.
+# dropped (verified via Hubble). Defense in depth behind the Pomerium SSH gate.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -40,16 +66,12 @@ spec:
   endpointSelector: { matchLabels: { kubevirt.io/vm: ${VM} } }
   ingress:
     - fromEndpoints:
-        - matchLabels: { k8s:io.kubernetes.pod.namespace: ${POM_NS} }
+        - matchLabels: { k8s:io.kubernetes.pod.namespace: pomerium }
       toPorts: [{ ports: [{ port: "22", protocol: TCP }] }]
 ---
-# The Pomerium route this VM needs (rendered into the Pomerium config, one per
-# exposed VM). Shown here for reference — it is NOT a standalone CR in static-config
-# mode. With the Pomerium Ingress Controller it would instead be an Ingress object.
-#   - from: tcp+https://ssh-${VM}.${DOMAIN}:22
-#     to:   tcp://${VM}-ssh.${NS}.svc.cluster.local:22
-#     allowed_users: [ ...tenant members... ]
-#
-# And the matching OpenBao role (created by the chart/bootstrap job, NOT by Kyverno —
-# it's an external system): ssh/roles/${VM} with allowed_users/default_user scoped to
-# the tenant's principals, ttl 15m, key_type=ca.
+# The Pomerium ssh:// route this VM needs (rendered into the Pomerium config, one per
+# exposed VM). Shown here for reference — not a standalone CR in static-config mode.
+# The route NAME is the middle token users type: ssh ${PRINCIPAL}@${VM}@ssh.${DOMAIN} -p <port>
+#   - from: ssh://${VM}
+#     to:   ssh://${VM}-ssh.${NS}.svc.cluster.local:22
+#     policy: [{ allow: { and: [{ email: { is: <tenant-member> } }] } }]

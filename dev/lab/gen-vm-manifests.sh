@@ -2,26 +2,31 @@
 # Generate the manifest bundle for one SSH-accessible Talu VM — PURE OUTPUT, no cluster mutation.
 #
 # Intended to be driven by an external orchestrator (Waldur): Talu's stable surface is
-# "write labelled Kubernetes objects" (integration contract §10), so this emits exactly
-# those objects. Every object carries talu.io/project-uuid — the join key Waldur reconciles on.
+# "write labelled Kubernetes objects" (integration contract §10). Every object carries
+# talu.io/project-uuid — the join key Waldur reconciles on.
 #
-# Three kinds of artifact, because they live in three systems:
-#   - K8s objects  (Namespace, VirtualMachine, Service, CiliumNetworkPolicy)  -> kubectl apply
-#   - Pomerium route fragment                                                 -> merge into Pomerium config
-#   - OpenBao role payload (JSON)                                             -> bao write ssh/roles/<vm> -
+# Access model: Pomerium Native SSH. The VM trusts Pomerium's SSH **User CA** (public key,
+# baked via cloud-init); users run `ssh <principal>@<vm>@ssh.<domain> -p <port>` and Pomerium
+# issues the cert after OIDC. Guest secrets ride in via cloud-init sourced from a Secret
+# (cloudInitNoCloud.secretRef) — no OpenBao, no guest agent.
+#
+# Two artifact kinds:
+#   - K8s objects (Namespace, cloud-init Secret, VirtualMachine, Service, CiliumNetworkPolicy)
+#     -> kubectl apply
+#   - Pomerium ssh:// route fragment  -> merge into the Pomerium config (or the tenant-chart emits it)
 #
 # Usage:
-#   gen-vm-manifests.sh <vm> <namespace> [principal] > bundle.yaml     # K8s to stdout, companions to stderr
-#   gen-vm-manifests.sh <vm> <namespace> [principal] -o outdir/        # all three as files
+#   gen-vm-manifests.sh <vm> <namespace> [principal] > bundle.yaml    # K8s to stdout, route to stderr
+#   gen-vm-manifests.sh <vm> <namespace> [principal] -o outdir/       # both as files
 #
 # Inputs (env; flags/positional override):
 #   PROJECT_UUID  talu.io/project-uuid       (default: all-zero placeholder — Waldur sets the real one)
-#   VM_IMAGE      containerDisk image        (default: quay.io/containerdisks/ubuntu:24.04 — OpenSSH, validates certs)
+#   VM_IMAGE      containerDisk image        (default: quay.io/containerdisks/ubuntu:24.04 — OpenSSH)
 #   VM_MEMORY     guest memory              (default: 1536Mi)
 #   LAB_DOMAIN    external domain            (default: 203-0-113-10.sslip.io)
-#   POM_NS        Pomerium namespace         (default: pomerium)
 #   ALLOWED_USERS Pomerium route allow-list  (default: alice@talu.local)
-#   CA_PUBKEY     OpenBao SSH CA public key  (default: fetched from OpenBao via kubectl if reachable)
+#   CA_PUBKEY     Pomerium User CA public key (default: read from cm pomerium/pomerium-user-ca)
+#   GUEST_SECRET  optional content written to /etc/talu/app.env inside the guest (demo of secret injection)
 set -euo pipefail
 
 VM=${1:?usage: gen-vm-manifests.sh <vm> <namespace> [principal] [-o dir]}
@@ -39,15 +44,19 @@ PROJECT_UUID=${PROJECT_UUID:-00000000-0000-0000-0000-000000000000}
 VM_IMAGE=${VM_IMAGE:-quay.io/containerdisks/ubuntu:24.04}
 VM_MEMORY=${VM_MEMORY:-1536Mi}
 LAB_DOMAIN=${LAB_DOMAIN:-203-0-113-10.sslip.io}
-POM_NS=${POM_NS:-pomerium}
 ALLOWED_USERS=${ALLOWED_USERS:-alice@talu.local}
 
-# CA pubkey: explicit CA_PUBKEY wins; else best-effort fetch from OpenBao (stays pure output either way).
+# The VM trusts the Pomerium User CA (public key). Non-sensitive; published as a ConfigMap.
 if [ -z "${CA_PUBKEY:-}" ] && command -v kubectl >/dev/null 2>&1; then
-  CA_PUBKEY=$(kubectl -n openbao exec deploy/openbao -- sh -c \
-    'export BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN=root; bao read -field=public_key ssh/config/ca' 2>/dev/null || true)
+  CA_PUBKEY=$(kubectl -n pomerium get configmap pomerium-user-ca -o jsonpath='{.data.user_ca\.pub}' 2>/dev/null || true)
 fi
-[ -n "${CA_PUBKEY:-}" ] || { echo "ERROR: set CA_PUBKEY (OpenBao ssh/config/ca public_key)" >&2; exit 1; }
+[ -n "${CA_PUBKEY:-}" ] || { echo "ERROR: set CA_PUBKEY (Pomerium User CA public key, cm pomerium/pomerium-user-ca)" >&2; exit 1; }
+
+# Optional guest-secret write_files block (arbitrary secret delivered into the guest).
+GUEST_BLOCK=""
+if [ -n "${GUEST_SECRET:-}" ]; then
+  GUEST_BLOCK=$(printf '                - path: /etc/talu/app.env\n                  permissions: "0600"\n                  content: |\n                    %s' "$GUEST_SECRET")
+fi
 
 k8s_bundle() {
 cat <<YAML
@@ -62,6 +71,36 @@ metadata:
     pod-security.kubernetes.io/warn: privileged
     pod-security.kubernetes.io/audit: privileged
     talu.io/project-uuid: "${PROJECT_UUID}"
+---
+# Cloud-init lives in a Secret (keeps any guest secrets out of the VM manifest; Waldur writes it).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${VM}-userdata
+  namespace: ${NS}
+  labels:
+    talu.io/vm: "${VM}"
+    talu.io/project-uuid: "${PROJECT_UUID}"
+type: Opaque
+stringData:
+  userdata: |
+    #cloud-config
+    users:
+      - name: ${PRINCIPAL}
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        shell: /bin/bash
+        lock_passwd: true
+    write_files:
+      - path: /etc/ssh/talu_ca.pub
+        content: "${CA_PUBKEY}"
+        permissions: "0644"
+      - path: /etc/ssh/sshd_config.d/60-talu-ca.conf
+        content: |
+          TrustedUserCAKeys /etc/ssh/talu_ca.pub
+          PasswordAuthentication no
+${GUEST_BLOCK}
+    runcmd:
+      - systemctl restart ssh
 ---
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
@@ -92,23 +131,7 @@ spec:
           containerDisk: { image: ${VM_IMAGE} }
         - name: cloudinit
           cloudInitNoCloud:
-            userData: |
-              #cloud-config
-              users:
-                - name: ${PRINCIPAL}
-                  sudo: ALL=(ALL) NOPASSWD:ALL
-                  shell: /bin/bash
-                  lock_passwd: true
-              write_files:
-                - path: /etc/ssh/talu_ca.pub
-                  content: "${CA_PUBKEY}"
-                  permissions: "0644"
-                - path: /etc/ssh/sshd_config.d/60-talu-ca.conf
-                  content: |
-                    TrustedUserCAKeys /etc/ssh/talu_ca.pub
-                    PasswordAuthentication no
-              runcmd:
-                - systemctl restart ssh
+            secretRef: { name: ${VM}-userdata }
 ---
 apiVersion: v1
 kind: Service
@@ -135,39 +158,34 @@ spec:
   endpointSelector: { matchLabels: { kubevirt.io/vm: ${VM} } }
   ingress:
     - fromEndpoints:
-        - matchLabels: { k8s:io.kubernetes.pod.namespace: ${POM_NS} }
+        - matchLabels: { k8s:io.kubernetes.pod.namespace: pomerium }
       toPorts: [{ ports: [{ port: "22", protocol: TCP }] }]
 YAML
 }
 
 pomerium_route() {
 cat <<YAML
-# Merge into the Pomerium config 'routes:' list (or emit as an Ingress once Pomerium
-# runs the Ingress Controller). Selects the VM's Service; OIDC-gated to the tenant.
-- from: tcp+https://ssh-${VM}.${LAB_DOMAIN}:22
-  to: tcp://${VM}-ssh.${NS}.svc.cluster.local:22
-  allowed_users: [${ALLOWED_USERS}]
+# Merge into the Pomerium config 'routes:' list (the tenant-chart / expose-vm.sh emits this).
+# The route NAME (ssh://${VM}) is the middle token users type: ssh <principal>@${VM}@ssh.${LAB_DOMAIN}
+- from: ssh://${VM}
+  to: ssh://${VM}-ssh.${NS}.svc.cluster.local:22
+  policy:
+    - allow:
+        and:
+          - email:
+              is: ${ALLOWED_USERS}
 YAML
-}
-
-openbao_role() {
-cat <<JSON
-{"key_type":"ca","allow_user_certificates":true,"allowed_users":"${PRINCIPAL}","default_user":"${PRINCIPAL}","ttl":"15m","allowed_extensions":"permit-pty","default_extensions":{"permit-pty":""}}
-JSON
 }
 
 if [ -n "$OUTDIR" ]; then
   mkdir -p "$OUTDIR"
-  k8s_bundle       > "$OUTDIR/${VM}-k8s.yaml"
-  pomerium_route   > "$OUTDIR/${VM}-pomerium-route.yaml"
-  openbao_role     > "$OUTDIR/${VM}-openbao-role.json"
+  k8s_bundle     > "$OUTDIR/${VM}-k8s.yaml"
+  pomerium_route > "$OUTDIR/${VM}-pomerium-route.yaml"
   echo "wrote:" >&2
   echo "  $OUTDIR/${VM}-k8s.yaml            # kubectl apply -f" >&2
   echo "  $OUTDIR/${VM}-pomerium-route.yaml # merge into Pomerium config" >&2
-  echo "  $OUTDIR/${VM}-openbao-role.json   # bao write ssh/roles/${VM} - < this" >&2
 else
   k8s_bundle
-  { echo; echo "# ===== companion artifacts (NOT kubectl-apply — different systems) ====="; \
-    echo "# --- Pomerium route (merge into config) ---"; pomerium_route | sed 's/^/#   /'; \
-    echo "# --- OpenBao role (bao write ssh/roles/${VM} -) ---"; echo "#   $(openbao_role)"; } >&2
+  { echo; echo "# ===== companion (NOT kubectl-apply — Pomerium config) ====="; \
+    echo "# --- Pomerium ssh:// route ---"; pomerium_route | sed 's/^/#   /'; } >&2
 fi
