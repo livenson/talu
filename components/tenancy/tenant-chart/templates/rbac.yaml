@@ -1,0 +1,43 @@
+{{- if .Values.rbac.enabled }}
+# Scoped tenant-admin Role in this namespace, bound to the tenant's members. NOTE: for these
+# User subjects to actually authenticate, the kube-apiserver must be wired for OIDC against Dex
+# (username claim = email). Without that, the binding is inert — the objects are still the correct
+# shape a scoped `kubelogin` kubeconfig targets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: talu-tenant-admin
+  namespace: {{ .Values.slug }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines", "virtualmachineinstances"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources: ["virtualmachineinstances/console", "virtualmachineinstances/vnc", "virtualmachines/start", "virtualmachines/stop", "virtualmachines/restart"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "events", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+{{- if .Values.allowedUsers }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: talu-tenant-admin
+  namespace: {{ .Values.slug }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+subjects:
+  {{- range .Values.allowedUsers }}
+  - kind: User
+    name: {{ . | quote }}     # OIDC user (apiserver maps oidc-username-claim -> this email)
+    apiGroup: rbac.authorization.k8s.io
+  {{- end }}
+roleRef:
+  kind: Role
+  name: talu-tenant-admin
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}

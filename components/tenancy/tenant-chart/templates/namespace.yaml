@@ -1,0 +1,24 @@
+{{- include "talu-tenant.validate" . -}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.slug }}
+  labels:
+    # virt-launcher needs NET_ADMIN -> violates PSA baseline; VM namespaces run privileged (gotcha #5).
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+    pod-security.kubernetes.io/audit: privileged
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+{{- if .Values.resourceQuota }}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ .Values.slug }}-quota
+  namespace: {{ .Values.slug }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  hard:
+    {{- toYaml .Values.resourceQuota | nindent 4 }}
+{{- end }}

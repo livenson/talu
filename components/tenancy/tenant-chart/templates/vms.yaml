@@ -1,0 +1,106 @@
+{{- $root := . -}}
+{{- $ns := .Values.slug -}}
+{{- range $name, $vm := .Values.vms }}
+{{- $vm = $vm | default dict -}}
+{{- $principal := $vm.principal | default $root.Values.defaults.principal -}}
+{{- $image := $vm.image | default $root.Values.defaults.image -}}
+{{- $memory := $vm.memory | default $root.Values.defaults.memory -}}
+---
+# Cloud-init lives in a Secret (guest secrets stay out of the VM manifest; the manager writes it).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}-userdata
+  namespace: {{ $ns }}
+  labels:
+    talu.io/vm: {{ $name | quote }}
+    {{- include "talu-tenant.labels" $root | nindent 4 }}
+type: Opaque
+stringData:
+  userdata: |
+    #cloud-config
+    users:
+      - name: {{ $principal }}
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        shell: /bin/bash
+        lock_passwd: true
+    write_files:
+      - path: /etc/ssh/talu_ca.pub
+        content: "{{ required "sshUserCaPubKey is required (Pomerium User CA)" $root.Values.sshUserCaPubKey }}"
+        permissions: "0644"
+      - path: /etc/ssh/sshd_config.d/60-talu-ca.conf
+        content: |
+          TrustedUserCAKeys /etc/ssh/talu_ca.pub
+          PasswordAuthentication no
+    {{- if $vm.guestSecrets }}
+      - path: /etc/talu/app.env
+        permissions: "0600"
+        content: |
+          {{- $vm.guestSecrets | nindent 10 }}
+    {{- end }}
+    runcmd:
+      - systemctl restart ssh
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    talu.io/vm: {{ $name | quote }}
+    {{- include "talu-tenant.labels" $root | nindent 4 }}
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: {{ $name }}
+        talu.io/project-uuid: {{ $root.Values.projectUuid | quote }}
+    spec:
+      domain:
+        devices:
+          disks:
+            - { name: containerdisk, disk: { bus: virtio } }
+            - { name: cloudinit, disk: { bus: virtio } }
+          interfaces: [{ name: default, masquerade: {} }]
+        resources: { requests: { memory: {{ $memory }} } }
+      networks: [{ name: default, pod: {} }]
+      volumes:
+        - name: containerdisk
+          containerDisk: { image: {{ $image }} }
+        - name: cloudinit
+          cloudInitNoCloud:
+            secretRef: { name: {{ $name }}-userdata }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-ssh
+  namespace: {{ $ns }}
+  labels:
+    talu.io/ssh-expose: "true"
+    talu.io/vm: {{ $name | quote }}
+    {{- include "talu-tenant.labels" $root | nindent 4 }}
+  annotations:
+    # per-tenant SSH allow-list read by the Pomerium route renderer (annotation: emails have '@')
+    talu.io/allowed-users: {{ join "," $root.Values.allowedUsers | quote }}
+spec:
+  selector: { kubevirt.io/vm: {{ $name }} }
+  ports: [{ name: ssh, port: 22, targetPort: 22 }]
+---
+# Pin the VM's :22 so ONLY Pomerium can reach it (defense in depth behind the SSH gate).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ $name }}-ssh-pin
+  namespace: {{ $ns }}
+  labels:
+    talu.io/vm: {{ $name | quote }}
+    {{- include "talu-tenant.labels" $root | nindent 4 }}
+spec:
+  endpointSelector: { matchLabels: { kubevirt.io/vm: {{ $name }} } }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { k8s:io.kubernetes.pod.namespace: pomerium }
+      toPorts: [{ ports: [{ port: "22", protocol: TCP }] }]
+{{- end }}

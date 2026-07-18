@@ -1,0 +1,17 @@
+{{- if .Values.internalIpPool }}
+# Tier-1 stable internal IPs for this tenant — a namespace-selected CiliumLoadBalancerIPPool.
+# A VM Service requests an address with lbipam.cilium.io/ips; the IP belongs to the Service and
+# survives migration. Internal, non-announced range (routable reach needs L2/BGP — real nodes).
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: {{ .Values.slug }}-pool
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  serviceSelector:
+    matchLabels:
+      talu.io/project-uuid: {{ .Values.projectUuid | quote }}
+  blocks:
+    - cidr: {{ .Values.internalIpPool | quote }}
+{{- end }}

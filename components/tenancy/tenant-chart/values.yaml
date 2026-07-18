@@ -1,7 +1,43 @@
-# Tenant identity — the project-uuid becomes the talu.io/project-uuid label on every object.
-projectUuid: ""            # REQUIRED, e.g. 3f2a91bc-...
-slug: ""                   # frozen at creation, survives manager renames
-# VMs this tenant owns (name -> spec); consumed by templates/.
+# Talu native tenant bundle — the manager-agnostic tenant API. A tenant (and its VMs) is a
+# values file under environments/<site>/tenants/, reconciled by Flux. Every rendered object
+# carries talu.io/project-uuid — the join key any external manager (Waldur) reconciles on.
+#
+# SSH access is Pomerium Native SSH: each VM's Service is labelled talu.io/ssh-expose and
+# annotated talu.io/allowed-users, and the Pomerium config renderer turns that into an
+# ssh://<vm> route scoped to the tenant's members (see components/platform/access/).
+
+projectUuid: ""            # REQUIRED, e.g. 3f2a91bc-...  -> talu.io/project-uuid on every object
+slug: ""                   # REQUIRED, the tenant namespace name; frozen at creation (survives renames)
+
+# Tenant members — emails that may SSH into this tenant's VMs (Pomerium per-route policy) and,
+# where apiserver OIDC is wired, hold the scoped RBAC role in this namespace.
+allowedUsers: []           # e.g. [alice@talu.local]
+
+# Pomerium SSH User CA public key the VMs trust (TrustedUserCAKeys). In-cluster this comes from
+# ConfigMap pomerium/pomerium-user-ca; set it here (the manager injects it) or via HelmRelease valueFrom.
+sshUserCaPubKey: ""
+
+# Defaults applied to each VM unless the per-VM entry overrides them.
+defaults:
+  image: quay.io/containerdisks/ubuntu:24.04   # OpenSSH guest (validates certs)
+  memory: 1536Mi
+  principal: talu                              # guest OS user / cert principal
+
+# VMs this tenant owns: name -> spec. Each renders a cloud-init Secret + VirtualMachine +
+# ssh Service (labelled/annotated) + CiliumNetworkPolicy pin.
 vms: {}
-# Tier-1 stable internal IP pool (CiliumLoadBalancerIPPool), internal non-announced range.
-internalIpPool: ""         # e.g. 10.200.4.0/26  (empty = feature off)
+#   web1:
+#     principal: bob            # optional (else defaults.principal)
+#     image: quay.io/...        # optional (else defaults.image)
+#     memory: 2Gi               # optional (else defaults.memory)
+#     guestSecrets: |           # optional — written to /etc/talu/app.env in the guest
+#       DB_PASSWORD=s3cr3t
+#       API_TOKEN=tok_abc
+
+# Optional per-tenant guardrails (rendered only when set).
+resourceQuota: {}          # e.g. { requests.memory: 8Gi, requests.cpu: "4", persistentvolumeclaims: "10" }
+internalIpPool: ""         # tier-1 CiliumLoadBalancerIPPool CIDR for this tenant (empty = feature off)
+
+# Scoped RBAC: bind allowedUsers to a namespace-admin Role (needs apiserver OIDC to actually log in).
+rbac:
+  enabled: true

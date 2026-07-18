@@ -1,0 +1,26 @@
+# Tenant "acme" — a values-PR reconciled by Flux via the talu-tenant chart.
+# Creating a tenant or adding a VM is an edit to a file like this; nothing structural changes.
+projectUuid: "aaaaaaaa-1111-2222-3333-444444444444"
+slug: acme
+allowedUsers: [alice@talu.local]
+
+# The Pomerium User CA public key the VMs trust. Leave empty in Git and inject at reconcile time
+# (HelmRelease valuesFrom ConfigMap pomerium/pomerium-user-ca) so it's never duplicated/stale.
+sshUserCaPubKey: ""
+
+defaults:
+  image: quay.io/containerdisks/ubuntu:24.04
+  memory: 1536Mi
+  principal: talu
+
+vms:
+  app1:
+    principal: alice
+    guestSecrets: |
+      DB_PASSWORD=acme-db-secret
+      TENANT=acme
+
+resourceQuota:
+  requests.memory: 8Gi
+  requests.cpu: "4"
+  persistentvolumeclaims: "10"
