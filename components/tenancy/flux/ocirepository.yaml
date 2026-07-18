@@ -1,0 +1,10 @@
+# Flux source for the talu-tenant chart. helm-controller fetches the chart from here when
+# rendering a tenant HelmRelease. insecure: the lab registry is plain-http.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata: { name: talu-tenant, namespace: flux-system }
+spec:
+  interval: 5m
+  insecure: true
+  url: oci://registry.flux-system.svc:5000/charts/talu-tenant
+  ref: { tag: "0.1.0" }

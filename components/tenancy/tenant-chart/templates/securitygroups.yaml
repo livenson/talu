@@ -1,0 +1,65 @@
+{{- $root := . -}}
+{{- $ns := .Values.slug -}}
+{{- range $sgName, $sg := .Values.securityGroups }}
+{{- $sg = $sg | default dict }}
+---
+# Security group "{{ $sgName }}" — cloud-style allow-rules on the tenant's VMs.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: sg-{{ $sgName }}
+  namespace: {{ $ns }}
+  labels:
+    talu.io/security-group: {{ $sgName | quote }}
+    {{- include "talu-tenant.labels" $root | nindent 4 }}
+spec:
+  endpointSelector:
+    matchExpressions:
+      {{- if $sg.vms }}
+      - { key: kubevirt.io/vm, operator: In, values: [{{ join ", " $sg.vms }}] }
+      {{- else }}
+      - { key: kubevirt.io/vm, operator: Exists }
+      {{- end }}
+  {{- if $sg.ingress }}
+  ingress:
+    {{- range $sg.ingress }}
+    -
+      {{- if .fromCIDR }}
+      fromCIDR:
+        {{- toYaml .fromCIDR | nindent 8 }}
+      {{- end }}
+      {{- if .fromEndpoints }}
+      fromEndpoints:
+        {{- toYaml .fromEndpoints | nindent 8 }}
+      {{- end }}
+      {{- if .ports }}
+      toPorts:
+        - ports:
+          {{- range .ports }}
+            - { port: {{ .port | quote }}, protocol: {{ .protocol | default "TCP" }} }
+          {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- if $sg.egress }}
+  egress:
+    {{- range $sg.egress }}
+    -
+      {{- if .toCIDR }}
+      toCIDR:
+        {{- toYaml .toCIDR | nindent 8 }}
+      {{- end }}
+      {{- if .toEndpoints }}
+      toEndpoints:
+        {{- toYaml .toEndpoints | nindent 8 }}
+      {{- end }}
+      {{- if .ports }}
+      toPorts:
+        - ports:
+          {{- range .ports }}
+            - { port: {{ .port | quote }}, protocol: {{ .protocol | default "TCP" }} }
+          {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}

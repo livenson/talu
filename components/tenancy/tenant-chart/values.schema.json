@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Talu tenant API",
+  "description": "The typed contract for a Talu tenant. Helm/Flux validate a HelmRelease's values against this.",
+  "type": "object",
+  "required": ["projectUuid", "slug"],
+  "properties": {
+    "projectUuid": {
+      "type": "string",
+      "description": "talu.io/project-uuid stamped on every object; the manager join key.",
+      "pattern": "^[0-9a-fA-F-]{8,}$"
+    },
+    "slug": {
+      "type": "string",
+      "description": "Tenant namespace name; frozen at creation.",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "maxLength": 63
+    },
+    "allowedUsers": {
+      "type": "array",
+      "description": "Tenant members (emails) allowed to SSH and hold the scoped RBAC role.",
+      "items": { "type": "string" }
+    },
+    "sshUserCaPubKey": {
+      "type": "string",
+      "description": "Pomerium SSH User CA public key the VMs trust (injected via valuesFrom cm pomerium-user-ca)."
+    },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "image": { "type": "string" },
+        "memory": { "type": "string" },
+        "principal": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "vms": {
+      "type": "object",
+      "description": "VMs the tenant owns: name -> spec.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "principal": { "type": "string" },
+          "image": { "type": "string" },
+          "memory": { "type": "string" },
+          "guestSecrets": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "resourceQuota": {
+      "type": "object",
+      "description": "Optional ResourceQuota hard limits (e.g. requests.cpu, requests.memory).",
+      "additionalProperties": { "type": ["string", "integer"] }
+    },
+    "internalIpPool": {
+      "type": "string",
+      "description": "Tier-1 CiliumLoadBalancerIPPool CIDR (empty = off)."
+    },
+    "securityGroups": {
+      "type": "object",
+      "description": "Cloud-style allow-rules attached to VMs, rendered to CiliumNetworkPolicies.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "vms": { "type": "array", "items": { "type": "string" } },
+          "ingress": { "type": "array", "items": { "type": "object" } },
+          "egress": { "type": "array", "items": { "type": "object" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

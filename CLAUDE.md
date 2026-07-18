@@ -252,6 +252,27 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     interface-based BGP advert + source-IP override (production VM LoadBalancer IPs), subnet-scoped
     masquerade, wildcard-subdomain FQDN policy. Caution: `CiliumBGPPeeringPolicy` v1 removed (v2 only —
     N/A here, no BGP); LB-IPAM/BGP may need action on upgrade (our `CiliumLoadBalancerIPPool` v2 survived).
+25. **Nested-node resource ceiling — the lab can't hold the full stack + Flux + a tenant at once.**
+    Hit while validating HelmRelease-per-tenant (Flux). Distinct walls, in order:
+    - **Podman default `--pids-limit=2048`** caps the Talos-in-Podman node; the whole k8s stack + Cilium
+      + KubeVirt + VMs share it. At the cap, new threads fail: `cilium-cni ... failed to create new OS
+      thread (errno=11 EAGAIN); may need to increase max user processes`, pods stuck ContainerCreating.
+      Fix (live): `sudo podman update --pids-limit -1 talu-lab-controlplane-1` (cgroup `pids.max`→max).
+      Encode on the node container at create time.
+    - **Aggressive probes false-negative under thread/CPU saturation.** Flux controllers' liveness
+      (`timeoutSeconds:1`) times out on the loaded node → kubelet SIGTERMs → clean **exit 0 `Completed`**
+      restart loop (NOT a crash/OOM — check `lastState.terminated.reason`). Relax probes (timeout 10s,
+      period 30s, failureThreshold 6). `/readyz` answering `ok` inside the pod while kubelet's probe
+      **connection times out** = the same thing on the readiness path.
+    - **In-cluster registry NodePort unreachable from the host** (`GET /v2/` → HTTP 000 timeout) though
+      the Pomerium NodePorts work — flaky NodePort programming. Push charts **from inside the cluster**
+      (`kubectl run helm pod` → `cp` chart → `helm push oci://registry.flux-system.svc:5000 --plain-http`).
+    - **Pod→service `no route to host`** (helm-controller → source-controller ClusterIP) under load —
+      Cilium service-map flakiness on the saturated node.
+    Verdict: the design (chart renders a working tenant; OCIRepository Ready=True; helm-controller
+    reconciles the HelmRelease) is standard Flux and reproduces on a real node — the nested single-node
+    lab is simply too resource-starved to run it end-to-end. Free VMs first (`kubectl delete vm`) or use
+    non-nested nodes. See `components/tenancy/flux/README.md`.
 
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the

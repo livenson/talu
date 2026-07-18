@@ -1,0 +1,33 @@
+# A tenant instance — the single object a manager (Waldur) applies directly to the K8s API.
+# Flux renders it via the talu-tenant chart into the full tenant bundle; watch .status.conditions[Ready].
+# Delete this object -> Flux GC removes the whole tenant. The Pomerium User CA is injected from the
+# pomerium-user-ca ConfigMap (mirror it into this HelmRelease's namespace), never duplicated in the body.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: acme
+  namespace: tenants
+spec:
+  interval: 5m
+  chartRef: { kind: OCIRepository, name: talu-tenant, namespace: flux-system }
+  valuesFrom:
+    - kind: ConfigMap
+      name: pomerium-user-ca
+      valuesKey: user_ca.pub
+      targetPath: sshUserCaPubKey
+  values:
+    projectUuid: "aaaaaaaa-1111-2222-3333-444444444444"
+    slug: acme
+    allowedUsers: [alice@talu.local]
+    resourceQuota: { requests.memory: 8Gi, requests.cpu: "4" }
+    vms:
+      app1:
+        principal: alice
+        guestSecrets: |
+          DB_PASSWORD=acme-db-secret
+    securityGroups:
+      web:
+        vms: [app1]
+        ingress:
+          - ports: [{ port: 80, protocol: TCP }, { port: 443, protocol: TCP }]
+            fromCIDR: ["0.0.0.0/0"]

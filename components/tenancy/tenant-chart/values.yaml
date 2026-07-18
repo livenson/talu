@@ -38,6 +38,17 @@ vms: {}
 resourceQuota: {}          # e.g. { requests.memory: 8Gi, requests.cpu: "4", persistentvolumeclaims: "10" }
 internalIpPool: ""         # tier-1 CiliumLoadBalancerIPPool CIDR for this tenant (empty = feature off)
 
+# Security groups: cloud-style ingress/egress allow-rules attached to VMs -> CiliumNetworkPolicy.
+# Managed via the tenant API (edit values), alongside the always-on <vm>-ssh-pin.
+securityGroups: {}
+#   web:
+#     vms: [app1]          # VMs it applies to (kubevirt.io/vm); omitted/[] = all VMs in the tenant
+#     ingress:
+#       - ports: [{ port: 80, protocol: TCP }, { port: 443, protocol: TCP }]
+#         fromCIDR: ["0.0.0.0/0"]
+#     egress:
+#       - toCIDR: ["0.0.0.0/0"]      # allow all egress (omit to keep default)
+
 # Scoped RBAC: bind allowedUsers to a namespace-admin Role (needs apiserver OIDC to actually log in).
 rbac:
   enabled: true

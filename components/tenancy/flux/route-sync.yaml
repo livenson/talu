@@ -1,0 +1,84 @@
+# route-sync — the one cross-cutting reconcile no chart/HelmRelease can own: the Pomerium ssh:// routes
+# live in a shared config blob, so a periodic job renders them from every talu.io/ssh-expose Service
+# (base HTTP routes + SSH-server block + one ssh://<vm> route each, allow-list from the Service's
+# talu.io/allowed-users annotation). This is dev/lab/expose-vm.sh step-2, promoted in-cluster.
+# (A watch-based controller — or Pomerium Ingress mode making routes objects — is the cleaner long-term.)
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: route-sync, namespace: pomerium }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: talu-route-sync }
+rules:
+  - { apiGroups: [""], resources: [services], verbs: [get, list] }
+  - { apiGroups: [""], resources: [configmaps], verbs: [get, update, patch] }
+  - { apiGroups: [apps], resources: [deployments], verbs: [get, patch] }
+  - { apiGroups: [apps], resources: [deployments/scale], verbs: [patch] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: talu-route-sync }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: talu-route-sync }
+subjects: [{ kind: ServiceAccount, name: route-sync, namespace: pomerium }]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: route-sync, namespace: pomerium }
+spec:
+  schedule: "*/2 * * * *"       # periodic reconcile; tighten/loosen as needed
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: route-sync
+          restartPolicy: OnFailure
+          containers:
+            - name: sync
+              image: docker.io/bitnami/kubectl:latest
+              env:
+                - { name: LAB_DOMAIN, value: "203-0-113-10.sslip.io" }
+              command: ["/bin/bash", "-ceu"]
+              args:
+                - |
+                  D="$LAB_DOMAIN"
+                  CFG="
+                  autocert: true
+                  autocert_dir: /data/autocert
+                  authenticate_service_url: https://authenticate.$D
+                  idp_provider: oidc
+                  idp_provider_url: https://id.$D/dex
+                  idp_client_id: pomerium
+                  idp_client_secret: pomerium-secret-lab
+                  idp_scopes: [openid, profile, email]
+                  ssh_address: \":2222\"
+                  ssh_user_ca_key_file: /ssh/user_ca
+                  ssh_host_key_files: [/ssh/host_ed25519, /ssh/host_rsa, /ssh/host_ecdsa]
+                  routes:
+                    - from: https://id.$D
+                      to: http://dex.identity.svc:5556
+                      allow_public_unauthenticated_access: true
+                      preserve_host_header: true
+                    - from: https://vms.$D
+                      to: http://kubevirt-manager.kubevirt-manager.svc.cluster.local:8080
+                      allowed_users: [alice@talu.local]
+                      allow_websockets: true"
+                  while read -r vm svc ns au _; do
+                    [ -z "$vm" ] && continue
+                    au=${au:-alice@talu.local}
+                    CFG="${CFG}
+                    - from: ssh://${vm}
+                      to: ssh://${svc}.${ns}.svc.cluster.local:22
+                      policy: [{ allow: { and: [{ email: { in: [${au}] } }] } }]"
+                  done < <(kubectl get svc -A -l talu.io/ssh-expose=true \
+                    -o jsonpath='{range .items[*]}{.metadata.labels.talu\.io/vm}{" "}{.metadata.name}{" "}{.metadata.namespace}{" "}{.metadata.annotations.talu\.io/allowed-users}{"\n"}{end}')
+                  OLD=$(kubectl -n pomerium get cm pomerium-config -o jsonpath='{.data.config\.yaml}' 2>/dev/null || true)
+                  if [ "$CFG" != "$OLD" ]; then
+                    kubectl -n pomerium create cm pomerium-config --from-literal=config.yaml="$CFG" \
+                      --dry-run=client -o yaml | kubectl apply -f -
+                    kubectl -n pomerium rollout restart deploy/pomerium
+                    echo "pomerium routes updated"
+                  else
+                    echo "no change"
+                  fi
