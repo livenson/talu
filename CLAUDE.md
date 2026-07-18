@@ -189,6 +189,25 @@ on the same floating IP behind Pomerium. Components + gotchas:
     `to: http://kubevirt-manager.kubevirt-manager.svc:8080`, `allowed_users: [alice@talu.local]`. No extra
     ports: it rides the existing `socat :443 → NodePort → Pomerium` path; autocert mints the LE cert for
     `vms.<host>` on first hit. Verified: unauth → 302 to Dex; after alice's login the app is served.
+    **Two access planes, don't conflate them:** kubevirt-manager's **Console (noVNC/serial)** and
+    **LB list** use the app's *ServiceAccount* (behind Pomerium), NOT OpenBao. Getting a *shell* in the
+    guest is the OpenBao SSH-cert path (#21) — a **terminal flow, not a UI button**.
+    - **noVNC console needs `allow_websockets: true` on the Pomerium `vms.*` route** (the console is a
+      WebSocket to `subresources.kubevirt.io/.../vnc`); without it the browser says "failed to connect".
+      And console drops you at the OS **login prompt** — the OpenBao-hardened Ubuntu VM has no password
+      (`lock_passwd`, `PasswordAuthentication no`) so you *can't* log in there by design; console is for
+      password/debug VMs (CirrOS `cirros/gocubsgorocks`). Enter the hardened VM via the SSH cert instead.
+    - **LB list needs a `CiliumLoadBalancerIPPool`** or every `type: LoadBalancer` stays `<pending>`.
+      Added `talu-lab-pool` (blocks `192.168.99.0/24`); Cilium LB-IPAM assigns from it. BUT on this
+      NAT'd single-NIC OpenStack VM the LB IP is **not externally routable** (no L2/BGP to the floating
+      IP) — reachable in-cluster/on-node only. Practical external access stays **Pomerium routes**, not
+      raw LB IPs. (LB IPs matter on real multi-NIC/L2 nodes; here they're control-plane validation.)
+23. **`dev/lab/vm-ssh.sh` — the actual "access a VM relying on OpenBao" command.** Not the web UI:
+    generates a throwaway key, `kubectl exec`s OpenBao to sign a 15-min cert for the principal, SSHes
+    through the OIDC-gated Pomerium tunnel (`:2222`). Validated: lands as `talu@ubuntu`, temp key wiped
+    on exit. Lab signs with the dev root token; the identity-bound version is `bao login -method=oidc`
+    (Dex) → scoped policy on `ssh/sign/talu` (TODO — needs OpenBao OIDC auth + a Dex `openbao` client +
+    exposing the bao API; deferred, dev-mode wipes on restart anyway).
 
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the
