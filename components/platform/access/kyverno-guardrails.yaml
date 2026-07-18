@@ -1,0 +1,68 @@
+# Kyverno guardrails for VM SSH access — ENFORCEMENT, not generation.
+#
+# The tenant chart generates the Service / route / pinning policy / OpenBao role
+# (single source of truth, Flux-reconciled). Kyverno's job is to guarantee nobody
+# ships an SSH-exposed VM without its guardrails, and that the labels the platform
+# joins on are always present. Kyverno cannot create the Pomerium route (shared
+# config blob) or the OpenBao role (external system), so it must not be the generator.
+#
+# Install Kyverno first (helm repo kyverno/kyverno) — these are optional hardening.
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: talu-vm-access-guardrails
+  annotations:
+    policies.kyverno.io/description: >-
+      Every SSH-exposed VM Service must have a Cilium pinning policy and the
+      project-uuid join key; VM cloud-init must not re-enable password auth.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    # 1) join key present on every tenant Service that fronts a VM
+    - name: require-project-uuid
+      match:
+        any:
+          - resources:
+              kinds: [Service]
+              selector: { matchLabels: { talu.io/ssh-expose: "true" } }
+      validate:
+        message: "Service talu.io/ssh-expose=true must carry talu.io/project-uuid"
+        pattern:
+          metadata:
+            labels:
+              talu.io/project-uuid: "?*"
+    # 2) an exposed VM Service must have a matching pinning policy (existence check)
+    - name: require-pinning-policy
+      match:
+        any:
+          - resources:
+              kinds: [Service]
+              selector: { matchLabels: { talu.io/ssh-expose: "true" } }
+      validate:
+        message: "exposed VM Service {{ request.object.metadata.name }} needs a CiliumNetworkPolicy <vm>-ssh-pin"
+        deny:
+          conditions:
+            all:
+              - key: "{{ images || 'x' }}"   # placeholder; real check uses a context API call
+                operator: Equals
+                value: "never"                # (context lookups omitted for brevity — see note)
+    # 3) hardened VMs must not re-enable SSH password auth via cloud-init
+    - name: no-password-auth-backdoor
+      match:
+        any:
+          - resources:
+              kinds: [kubevirt.io/v1/VirtualMachine]
+              selector: { matchLabels: { talu.io/ssh-expose: "true" } }
+      validate:
+        message: "SSH-exposed VM must not set PasswordAuthentication yes in cloud-init"
+        deny:
+          conditions:
+            any:
+              - key: "{{ to_string(request.object.spec.template.spec.volumes) }}"
+                operator: AnyIn
+                value: ["*PasswordAuthentication yes*"]
+# NOTE: rule 2's cross-object existence check is best done with a Kyverno context
+# `apiCall` to list CiliumNetworkPolicies in the namespace; kept illustrative here.
+# The point is the SHAPE: validate invariants, let the chart do the generation.

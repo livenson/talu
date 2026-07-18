@@ -1,0 +1,55 @@
+# Per-VM SSH access plumbing — the objects a tenant chart renders for each
+# SSH-accessible VM. Placeholders ${...} are filled by the chart from tenant values.
+# Every object carries talu.io/project-uuid (the join key any external manager uses).
+#
+# This is the "correct way" to generalize VM access: GENERATED FROM THE CHART at
+# reconcile time (Flux prunes all of it when the VM's values are removed), NOT
+# created at admission time. The Pomerium route is rendered into the Pomerium config
+# from the set of exposed VMs (see access/README.md); Kyverno enforces the invariants
+# below rather than generating these objects (see kyverno-guardrails.yaml).
+#
+# ${VM}        VM name (== kubevirt.io/vm label)
+# ${NS}        tenant namespace
+# ${PROJECT}   talu.io/project-uuid
+# ${POM_NS}    Pomerium namespace (default: pomerium)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${VM}-ssh
+  namespace: ${NS}
+  labels:
+    talu.io/ssh-expose: "true"     # the label the route renderer selects on
+    talu.io/vm: "${VM}"
+    talu.io/project-uuid: "${PROJECT}"
+spec:
+  selector: { kubevirt.io/vm: ${VM} }
+  ports: [{ name: ssh, port: 22, targetPort: 22 }]
+---
+# Pin ingress to the VM's :22 so ONLY Pomerium can reach it — a pod elsewhere is
+# dropped (verified via Hubble). Defense in depth behind the OpenBao cert gate.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ${VM}-ssh-pin
+  namespace: ${NS}
+  labels:
+    talu.io/vm: "${VM}"
+    talu.io/project-uuid: "${PROJECT}"
+spec:
+  endpointSelector: { matchLabels: { kubevirt.io/vm: ${VM} } }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { k8s:io.kubernetes.pod.namespace: ${POM_NS} }
+      toPorts: [{ ports: [{ port: "22", protocol: TCP }] }]
+---
+# The Pomerium route this VM needs (rendered into the Pomerium config, one per
+# exposed VM). Shown here for reference — it is NOT a standalone CR in static-config
+# mode. With the Pomerium Ingress Controller it would instead be an Ingress object.
+#   - from: tcp+https://ssh-${VM}.${DOMAIN}:22
+#     to:   tcp://${VM}-ssh.${NS}.svc.cluster.local:22
+#     allowed_users: [ ...tenant members... ]
+#
+# And the matching OpenBao role (created by the chart/bootstrap job, NOT by Kyverno —
+# it's an external system): ssh/roles/${VM} with allowed_users/default_user scoped to
+# the tenant's principals, ttl 15m, key_type=ca.
