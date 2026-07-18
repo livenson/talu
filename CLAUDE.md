@@ -224,6 +224,25 @@ on the same floating IP behind Pomerium. Components + gotchas:
     create OpenBao roles). Lab signs with dev root token; identity-bound = `bao login -method=oidc` (Dex) →
     scoped policy on `ssh/sign/<role>` (TODO; dev-mode OpenBao wipes on restart anyway).
 
+## Component versions (audited & bumped 2026-07-18)
+All on latest stable except OpenBao (dev-mode, ephemeral — not worth bumping):
+K8s v1.36.2 · Talos v1.13.6 · **Cilium v1.19.6** · **cert-manager v1.21.0** · KubeVirt v1.8.4 ·
+CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** · kubevirt-manager 1.5.4 ·
+**local-path v0.0.36** · **external-snapshotter v8.6.0** · MicroCeph 19.2.3 (squid).
+24. **Cilium helm upgrade: DON'T use `--reuse-values` across a minor bump.** 1.18→1.19 fails with
+    `standaloneDnsProxy.enabled: nil pointer` — `--reuse-values` drops the chart's NEW default subtrees.
+    Fix: `helm get values cilium -n kube-system -o yaml > v.yaml; helm upgrade cilium cilium/cilium
+    --version <x> -n kube-system -f v.yaml` (chart defaults fill new keys; user values overlay). The
+    failed upgrade is atomic (stayed on 1.18.1, no partial state). Values that MUST survive: `MTU: 1300`,
+    `bpf.masquerade: true`, `kubeProxyReplacement: true`, `k8sServiceHost: localhost`/`Port: 7445`.
+    Post-bump validation battery (all passed): pod egress (ping 8.8.8.8), external DNS, **large-payload**
+    (577KB HTTPS + 1200B DF ping — NOT `-s 1400 -M do`, that exceeds the 1300 MTU and fails *locally*,
+    a test artifact not a blackhole), LB-IPAM still assigns, and the OIDC+SSH-cert acceptance path.
+    Cilium 1.19 value for Talu: **multi-pool IPAM went Beta→Stable** (tier-1 per-tenant IPs),
+    interface-based BGP advert + source-IP override (production VM LoadBalancer IPs), subnet-scoped
+    masquerade, wildcard-subdomain FQDN policy. Caution: `CiliumBGPPeeringPolicy` v1 removed (v2 only —
+    N/A here, no BGP); LB-IPAM/BGP may need action on upgrade (our `CiliumLoadBalancerIPPool` v2 survived).
+
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the
   controller events (the real error) immediately — far faster than polling `.status.phase` and
