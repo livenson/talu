@@ -1,0 +1,57 @@
+# rook-ceph-cluster Helm values — rocky9-sandbox (single node, loop-backed OSDs).
+# SAFETY: useAllDevices:false + explicit loop0/loop1 so Rook NEVER touches the host OS disk (sda).
+operatorNamespace: rook-ceph
+toolbox:
+  enabled: true            # ceph CLI for status/verification
+monitoring:
+  enabled: false
+
+cephClusterSpec:
+  mon:
+    count: 1               # single-node pilot compromise (reverses to 3 at scale-out)
+    allowMultiplePerNode: true
+  mgr:
+    count: 1
+    allowMultiplePerNode: true
+  dashboard:
+    enabled: false
+  crashCollector:
+    disable: true
+  storage:
+    useAllNodes: true
+    useAllDevices: false    # <-- never auto-grab disks
+    devices:
+      - name: loop0         # /dev/loop0 (20 GiB loop file) — bind-mounted into the node
+      - name: loop1         # /dev/loop1
+  cephConfig:
+    global:
+      osd_pool_default_size: "2"
+      mon_warn_on_pool_no_redundancy: "false"
+      # NOTE: osd_crush_chooseleaf_type is a CRUSH bootstrap-only setting, NOT a runtime
+      # `ceph config` key — setting it here aborts the operator reconcile. Single-host
+      # OSD-level redundancy comes from the pool's failureDomain: osd below.
+  resources: {}             # single-node: no per-daemon limits
+  healthCheck:
+    daemonHealth:
+      mon: {interval: 45s}
+
+cephBlockPools:
+  - name: ceph-blockpool
+    spec:
+      failureDomain: osd    # disk-level redundancy on one host (size 2)
+      replicated:
+        size: 2
+        requireSafeReplicaSize: false
+    storageClass:
+      enabled: true
+      name: ceph-block
+      isDefault: true
+      reclaimPolicy: Delete
+      allowVolumeExpansion: true
+      parameters:
+        imageFormat: "2"
+        imageFeatures: layering
+        csi.storage.k8s.io/fstype: ext4
+
+cephFileSystems: []
+cephObjectStores: []
