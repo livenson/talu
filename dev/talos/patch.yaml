@@ -24,6 +24,12 @@ machine:
         options: [bind, rshared, rw]
 cluster:
   allowSchedulingOnControlPlanes: true
+  # Cilium is the CNI and replaces kube-proxy — disable Talos' defaults so Cilium owns the datapath.
+  network:
+    cni:
+      name: none
+  proxy:
+    disabled: true
   # OIDC for kubectl (kubelogin) — issuer/clientID are overlay values, filled at Stage 6.
   # apiServer:
   #   extraArgs:

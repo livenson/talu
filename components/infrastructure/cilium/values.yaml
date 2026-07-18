@@ -1,0 +1,54 @@
+# Cilium base Helm values — common to every Talu environment.
+# Environment-specific knobs (MTU, IP pools) live in environments/<env>/cilium-values.yaml
+# and are layered on top (values, not structure).
+#
+# Talos-specific requirements per https://docs.siderolabs.com/kubernetes-guides/cni/deploying-cilium
+# (paired with `cluster.network.cni.name: none` + `cluster.proxy.disabled: true` in the machine config).
+
+ipam:
+  mode: kubernetes
+
+# Cilium replaces kube-proxy. KubePrism gives every Talos node a local API endpoint.
+kubeProxyReplacement: true
+k8sServiceHost: localhost
+k8sServicePort: 7445
+
+# Talos provides the cgroup mounts; Cilium must not try to mount them itself.
+cgroup:
+  autoMount:
+    enabled: false
+  hostRoot: /sys/fs/cgroup
+
+# Talos restricts capabilities; Cilium needs these explicit sets.
+securityContext:
+  capabilities:
+    ciliumAgent:
+      [CHOWN, KILL, NET_ADMIN, NET_RAW, IPC_LOCK, SYS_ADMIN, SYS_RESOURCE, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    cleanCiliumState:
+      [NET_ADMIN, SYS_ADMIN, SYS_RESOURCE]
+
+# Node-to-node encryption (no-op on one node, correct at 3+; kept on for parity).
+encryption:
+  enabled: false            # sandbox: off (single node); example turns this on (wireguard)
+  type: wireguard
+
+# LB-IPAM + L2 announcements: external IPs and tier-1 stable internal IPs without MetalLB.
+# Pools are per-environment / per-tenant (CiliumLoadBalancerIPPool) — not set here.
+l2announcements:
+  enabled: true
+externalIPs:
+  enabled: true
+
+# Flow visibility — the allow/deny audit narrative (security acceptance test, Stage 6).
+hubble:
+  enabled: true
+  relay:
+    enabled: true
+  ui:
+    enabled: true
+
+operator:
+  replicas: 1               # environment value; example bumps to 2
+
+# MTU is intentionally omitted here — it is an environment value. The sandbox pins it
+# under the host's mandated 1400 (see environments/rocky9-sandbox/cilium-values.yaml).

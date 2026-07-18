@@ -64,6 +64,14 @@ lab-logs: ## stream logs for a workload:  make lab-logs C='-n rook-ceph deploy/r
 lab-shell: ## ssh into the lab host
 	@$(LABENV); $(SSH)
 
+## ---- stage 1: CNI ---------------------------------------------------------
+
+cilium: ## bootstrap Cilium as CNI on the lab (helm, layered base+env values)
+	@$(LABENV); bash dev/lab/cilium-install.sh
+
+mtu-test: ## Stage 1 exit gate: large-payload pod-to-pod test under the host MTU
+	@$(LABENV); bash dev/lab/mtu-test.sh
+
 ## ---- convenience ---------------------------------------------------------
 
 try: lab-push up lab-tunnel lab-sync ## one-shot: bring the lab up and sync from scratch

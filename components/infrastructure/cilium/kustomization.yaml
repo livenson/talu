@@ -1,5 +1,14 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# Skeleton — real manifests (HelmRelease / CRs) land here per the pilot plan.
-# Intentionally empty so `kustomize build` succeeds during scaffolding.
-resources: []
+# Flux-managed Cilium (pilot/example). The rocky9-sandbox bootstraps Cilium via Helm
+# instead (dev/lab/cilium-install.sh), because the CNI must exist before Flux schedules.
+namespace: kube-system
+resources:
+  - helmrepository.yaml
+  - helmrelease.yaml
+configMapGenerator:
+  - name: cilium-values
+    files:
+      - values.yaml
+generatorOptions:
+  disableNameSuffixHash: true

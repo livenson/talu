@@ -13,6 +13,28 @@ set -euo pipefail
 
 log() { printf '\033[1m[bootstrap]\033[0m %s\n' "$1"; }
 
+# --- 0. Base tools (this image ships stripped: no tar/rsync) -----------------
+log "ensuring base tools (tar, rsync, curl)"
+dnf -y install tar rsync curl >/dev/null 2>&1 || true
+
+# --- 0.5 Host MTU 1400 (CRITICAL on this hosting) ---------------------------
+# The network path to these VMs only carries ~1400-byte packets, but the interface
+# defaults to MTU 1500. Once Docker starts and touches forwarding/iptables, Path-MTU
+# discovery breaks and any host-originated large packet (e.g. the SSH key exchange)
+# is silently blackholed — locking EVERYONE out while ping/TCP-connect still work.
+# Align the host interface to the path *before* Docker starts. Live change does not
+# disrupt the current SSH session; nmcli makes it persist across reboots.
+IFACE="$(ip route show default 2>/dev/null | awk '{print $5; exit}')"
+if [ -n "${IFACE:-}" ]; then
+  log "setting $IFACE MTU to 1400 (live + persistent) to match the hosting network path"
+  ip link set "$IFACE" mtu 1400 || true
+  CON="$(nmcli -t -f NAME connection show --active 2>/dev/null | head -1 || true)"
+  if [ -n "${CON:-}" ]; then
+    nmcli con mod "$CON" 802-3-ethernet.mtu 1400 2>/dev/null \
+      || nmcli con mod "$CON" ethernet.mtu 1400 2>/dev/null || true
+  fi
+fi
+
 # --- 1. Docker daemon.json (BEFORE first start) -----------------------------
 # Ref: https://docs.hpc.ut.ee/public/cloud/docker/
 log "writing /etc/docker/daemon.json (mandated hosting config)"

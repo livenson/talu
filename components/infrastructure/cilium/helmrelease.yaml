@@ -1,0 +1,21 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cilium
+  namespace: kube-system
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: cilium
+      version: "1.18.1"
+      sourceRef:
+        kind: HelmRepository
+        name: cilium
+        namespace: kube-system
+  # Same values file the sandbox bootstrap (dev/lab/cilium-install.sh) uses — one source of
+  # truth. Environment overlays add cilium-values.yaml on top via their own configMapGenerator.
+  valuesFrom:
+    - kind: ConfigMap
+      name: cilium-values
+      valuesKey: values.yaml

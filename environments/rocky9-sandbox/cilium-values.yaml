@@ -1,0 +1,23 @@
+# rocky9-sandbox Cilium overlay values — layered ON TOP of components/infrastructure/cilium/values.yaml.
+# The one thing that MUST be right on this host: MTU under the mandated Docker 1400.
+
+# Routing MTU. Host ens3 is 1500 but Docker on this hosting is pinned to 1400; keep pod
+# traffic safely under it. The Stage 1 large-payload test validates this value.
+MTU: 1350
+
+# Single Docker node: no real node-to-node path, so encryption stays off (parity kept in base).
+encryption:
+  enabled: false
+
+# Talos-in-Docker nodes share the host kernel; disable bpf masquerade quirks that need
+# a real netns boundary. Standard datapath is fine for correctness validation.
+bpf:
+  masquerade: false
+
+operator:
+  replicas: 1
+
+# Hubble UI reachable via the tunnel for the Stage 6 audit narrative.
+hubble:
+  ui:
+    enabled: true
