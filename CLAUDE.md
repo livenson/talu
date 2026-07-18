@@ -202,12 +202,21 @@ on the same floating IP behind Pomerium. Components + gotchas:
       NAT'd single-NIC OpenStack VM the LB IP is **not externally routable** (no L2/BGP to the floating
       IP) — reachable in-cluster/on-node only. Practical external access stays **Pomerium routes**, not
       raw LB IPs. (LB IPs matter on real multi-NIC/L2 nodes; here they're control-plane validation.)
-23. **`dev/lab/vm-ssh.sh` — the actual "access a VM relying on OpenBao" command.** Not the web UI:
-    generates a throwaway key, `kubectl exec`s OpenBao to sign a 15-min cert for the principal, SSHes
-    through the OIDC-gated Pomerium tunnel (`:2222`). Validated: lands as `talu@ubuntu`, temp key wiped
-    on exit. Lab signs with the dev root token; the identity-bound version is `bao login -method=oidc`
-    (Dex) → scoped policy on `ssh/sign/talu` (TODO — needs OpenBao OIDC auth + a Dex `openbao` client +
-    exposing the bao API; deferred, dev-mode wipes on restart anyway).
+23. **`dev/lab/{expose-vm,vm-ssh}.sh` — the actual "access a VM relying on OpenBao" commands.** Not the
+    web UI. The target VM is NOT chosen by the SSH command — it's fixed by the **Pomerium route → Service
+    selector**; the script arg is the *principal*, not the VM. Generalized to per-VM, label-driven:
+    - `expose-vm.sh <vm> <ns>` creates `<vm>-ssh` Service + a `<vm>-ssh-pin` CiliumNetworkPolicy, then
+      **re-renders the Pomerium routes from every Service labelled `talu.io/ssh-expose=true`** (one
+      `tcp+https://ssh-<vm>.<host>:22` route each — add a VM = add a label), and opens the OIDC-gated
+      tunnel on a per-VM port (`2200 + cksum(vm)%300`) via `systemd-run --user`.
+    - `vm-ssh.sh <vm> [principal]` derives that host/port, `kubectl exec`s OpenBao to sign a 15-min cert,
+      SSHes in; temp key wiped on exit. Validated: `expose-vm.sh ubuntu vmfs` → `vm-ssh.sh ubuntu talu`
+      lands as `talu@ubuntu` (first hit resets while autocert mints the new SNI's LE cert; retry wins).
+    **Correct productionization** (see `components/platform/access/`): the tenant chart generates all four
+    per-VM objects (Service, pinning policy, Pomerium route, OpenBao role), stamped `talu.io/project-uuid`,
+    Flux-reconciled. **Kyverno = enforce invariants, NOT generate** (can't edit the Pomerium config blob or
+    create OpenBao roles). Lab signs with dev root token; identity-bound = `bao login -method=oidc` (Dex) →
+    scoped policy on `ssh/sign/<role>` (TODO; dev-mode OpenBao wipes on restart anyway).
 
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the
