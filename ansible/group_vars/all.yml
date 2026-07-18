@@ -17,3 +17,24 @@ enable_host_dev_nbd: false        # partial fix only; CephFS is the reliable pat
 
 kubevirt_use_emulation: true      # no /dev/kvm
 cdi_scratch_storageclass: local-path
+
+# --- Stage 6: identity & access plane (Dex + Pomerium + OpenBao + kubevirt-manager) ---
+lab_floating_ip: "203.0.113.10"                          # OpenStack cloud floating IP (changes on VM reinstall)
+lab_domain: "{{ lab_floating_ip | replace('.', '-') }}.sslip.io"
+talos_node_ip: "10.5.0.2"                                 # Talos-in-podman controlplane IP (docker provisioner default)
+
+dex_version: "v2.45.1"
+dex_user_email: "alice@talu.local"
+dex_user_name: "alice"
+# bcrypt of the demo password (regenerate: htpasswd -nbBC 10 x <pw> | cut -d: -f2 | sed 's/^$2y/$2a/')
+dex_user_bcrypt: "$2a$10$Yq.nLkSyi65yz/8AdmXpW.FEgnh6qXPfmuJDKLDDz67UoJJJKlpea"
+
+pomerium_version: "v0.33.0"
+pomerium_idp_client_secret: "pomerium-secret-lab"
+pomerium_nodeport_https: 30443
+pomerium_nodeport_http: 30080
+
+openbao_version: "2.1.1"                                   # dev-mode (ephemeral); prod = Raft + unseal (plan §6)
+openbao_ssh_principal: "talu"
+
+kubevirt_manager_version: "v1.5.4"

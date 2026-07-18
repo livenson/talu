@@ -1,0 +1,16 @@
+---
+# Stage 6d: kubevirt-manager web UI (gotcha #22). ns kubevirt-manager, ClusterRole to drive
+# KubeVirt/CDI, ClusterIP :8080. Exposed on the floating IP as the Pomerium 'vms.<domain>' route
+# (defined in the identity_pomerium role — no extra ports).
+- name: Apply kubevirt-manager bundle ({{ kubevirt_manager_version }})
+  ansible.builtin.command: >
+    kubectl apply -f
+    https://github.com/kubevirt-manager/kubevirt-manager/releases/download/{{ kubevirt_manager_version }}/bundled-{{ kubevirt_manager_version }}.yaml
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: kvm_apply
+  changed_when: "'configured' in kvm_apply.stdout or 'created' in kvm_apply.stdout"
+
+- name: Wait for kubevirt-manager ready
+  ansible.builtin.command: "kubectl -n kubevirt-manager rollout status deploy/kubevirt-manager --timeout=120s"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false

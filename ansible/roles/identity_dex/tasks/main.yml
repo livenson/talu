@@ -1,0 +1,81 @@
+---
+# Stage 6a: Dex — the lab's tiny OIDC IdP (gotcha #16). Issuer https://id.<domain>/dex,
+# static users/groups via ConfigMap, no DB. Platform swaps in Keycloak/ZITADEL (generic OIDC).
+- name: Namespace identity
+  ansible.builtin.command: "kubectl create ns identity --dry-run=client -o yaml"
+  register: ns_identity
+  changed_when: false
+
+- name: Apply identity namespace
+  ansible.builtin.shell: "echo '{{ ns_identity.stdout }}' | kubectl apply -f -"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+- name: Dex ConfigMap (issuer / pomerium client / static password)
+  # <<'EOF' quoted so the bcrypt '$' chars survive the shell; Ansible templates {{ }} first.
+  ansible.builtin.shell: |
+    cat <<'EOF' | kubectl apply -f -
+    apiVersion: v1
+    kind: ConfigMap
+    metadata: { name: dex-config, namespace: identity }
+    data:
+      config.yaml: |
+        issuer: https://id.{{ lab_domain }}/dex
+        storage: {type: memory}
+        web: {http: 0.0.0.0:5556}
+        oauth2: {skipApprovalScreen: true}
+        staticClients:
+          - id: pomerium
+            name: Pomerium
+            secret: {{ pomerium_idp_client_secret }}
+            redirectURIs: [https://authenticate.{{ lab_domain }}/oauth2/callback]
+        enablePasswordDB: true
+        staticPasswords:
+          - email: {{ dex_user_email }}
+            hash: "{{ dex_user_bcrypt }}"
+            username: {{ dex_user_name }}
+            userID: 08a8684b-db88-4b73-90a9-3cd1661f5466
+    EOF
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: dex_cm
+  changed_when: "'configured' in dex_cm.stdout or 'created' in dex_cm.stdout"
+
+- name: Dex Deployment + Service
+  ansible.builtin.shell: |
+    cat <<EOF | kubectl apply -f -
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata: { name: dex, namespace: identity }
+    spec:
+      replicas: 1
+      selector: { matchLabels: { app: dex } }
+      template:
+        metadata: { labels: { app: dex } }
+        spec:
+          containers:
+            - name: dex
+              image: ghcr.io/dexidp/dex:{{ dex_version }}
+              command: ["/usr/local/bin/dex", "serve", "/etc/dex/config.yaml"]
+              ports: [{ containerPort: 5556 }]
+              volumeMounts: [{ name: config, mountPath: /etc/dex }]
+          volumes: [{ name: config, configMap: { name: dex-config } }]
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata: { name: dex, namespace: identity }
+    spec: { selector: { app: dex }, ports: [{ port: 5556, targetPort: 5556 }] }
+    EOF
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: dex_deploy
+  changed_when: "'configured' in dex_deploy.stdout or 'created' in dex_deploy.stdout"
+
+- name: Restart Dex when its config changed (memory storage — needs reload)
+  ansible.builtin.command: "kubectl -n identity rollout restart deploy/dex"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  when: dex_cm.changed
+  changed_when: true
+
+- name: Wait for Dex ready
+  ansible.builtin.command: "kubectl -n identity rollout status deploy/dex --timeout=120s"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false

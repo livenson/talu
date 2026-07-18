@@ -1,0 +1,185 @@
+---
+# Stage 6c: Pomerium IAP (gotchas #17, #18, #18b). OIDC->Dex, autocert Let's Encrypt on :443,
+# pod hostAlias for the OIDC hairpin, NodePort + host `socat` to expose the floating IP :443/:80.
+# Ships the BASE routes (id/whoami/vms); per-VM tcp SSH routes are layered by dev/lab/expose-vm.sh
+# (or the tenant chart), not this role.
+- name: Namespace pomerium
+  ansible.builtin.command: "kubectl create ns pomerium --dry-run=client -o yaml"
+  register: ns_pomerium
+  changed_when: false
+
+- name: Apply pomerium namespace
+  ansible.builtin.shell: "echo '{{ ns_pomerium.stdout }}' | kubectl apply -f -"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+- name: socat present on the host (:443/:80 -> NodePort)
+  become: true
+  ansible.builtin.dnf: { name: socat, state: present }
+
+- name: pomerium-secrets already present?
+  ansible.builtin.command: "kubectl -n pomerium get secret pomerium-secrets"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: pom_sec
+  changed_when: false
+  failed_when: false
+
+- name: Create pomerium-secrets (shared + cookie) only if absent (idempotent — never rotates)
+  ansible.builtin.shell: |
+    kubectl -n pomerium create secret generic pomerium-secrets \
+      --from-literal=shared_secret=$(head -c32 /dev/urandom | base64 -w0) \
+      --from-literal=cookie_secret=$(head -c32 /dev/urandom | base64 -w0)
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  when: pom_sec.rc != 0
+  changed_when: true
+
+- name: Pomerium ConfigMap (base routes id/whoami/vms)
+  ansible.builtin.shell: |
+    cat <<EOF | kubectl apply -f -
+    apiVersion: v1
+    kind: ConfigMap
+    metadata: { name: pomerium-config, namespace: pomerium }
+    data:
+      config.yaml: |
+        autocert: true
+        autocert_dir: /data/autocert
+        authenticate_service_url: https://authenticate.{{ lab_domain }}
+        idp_provider: oidc
+        idp_provider_url: https://id.{{ lab_domain }}/dex
+        idp_client_id: pomerium
+        idp_client_secret: {{ pomerium_idp_client_secret }}
+        idp_scopes: [openid, profile, email]
+        routes:
+          - from: https://id.{{ lab_domain }}
+            to: http://dex.identity.svc:5556
+            allow_public_unauthenticated_access: true
+            preserve_host_header: true
+          - from: https://whoami.{{ lab_domain }}
+            to: http://whoami.pomerium.svc:80
+            allowed_users: [{{ dex_user_email }}]
+          - from: https://vms.{{ lab_domain }}
+            to: http://kubevirt-manager.kubevirt-manager.svc.cluster.local:8080
+            allowed_users: [{{ dex_user_email }}]
+            allow_websockets: true
+    EOF
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: pom_cm
+  changed_when: "'configured' in pom_cm.stdout or 'created' in pom_cm.stdout"
+
+- name: Render Pomerium bundle (PVC + whoami + Deployment + NodePort Service)
+  # A file (not an inline heredoc) so we can `kubectl diff` it for ACCURATE change detection —
+  # client-side `apply` false-reports Deployments as "configured" every run (kubectl diff shows none).
+  ansible.builtin.copy:
+    dest: /tmp/talu-pomerium-bundle.yaml
+    content: |
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata: { name: pomerium-data, namespace: pomerium }
+      spec: { accessModes: [ReadWriteOnce], storageClassName: local-path, resources: { requests: { storage: 1Gi } } }
+      ---
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: whoami, namespace: pomerium }
+      spec:
+        replicas: 1
+        selector: { matchLabels: { app: whoami } }
+        template:
+          metadata: { labels: { app: whoami } }
+          spec: { containers: [{ name: whoami, image: traefik/whoami, ports: [{ containerPort: 80 }] }] }
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata: { name: whoami, namespace: pomerium }
+      spec: { selector: { app: whoami }, ports: [{ port: 80, targetPort: 80 }] }
+      ---
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: pomerium, namespace: pomerium }
+      spec:
+        replicas: 1
+        selector: { matchLabels: { app: pomerium } }
+        template:
+          metadata: { labels: { app: pomerium } }
+          spec:
+            hostAliases:
+              - ip: 127.0.0.1
+                hostnames: [id.{{ lab_domain }}, authenticate.{{ lab_domain }}]
+            containers:
+              - name: pomerium
+                image: pomerium/pomerium:{{ pomerium_version }}
+                env:
+                  - { name: SHARED_SECRET, valueFrom: { secretKeyRef: { name: pomerium-secrets, key: shared_secret } } }
+                  - { name: COOKIE_SECRET, valueFrom: { secretKeyRef: { name: pomerium-secrets, key: cookie_secret } } }
+                  - { name: CONFIG_FILE, value: /pomerium/config.yaml }
+                ports: [{ containerPort: 443 }, { containerPort: 80 }]
+                volumeMounts:
+                  - { name: config, mountPath: /pomerium }
+                  - { name: data, mountPath: /data }
+            volumes:
+              - { name: config, configMap: { name: pomerium-config } }
+              - { name: data, persistentVolumeClaim: { claimName: pomerium-data } }
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata: { name: pomerium, namespace: pomerium }
+      spec:
+        type: NodePort
+        selector: { app: pomerium }
+        ports:
+          - { name: https, port: 443, targetPort: 443, nodePort: {{ pomerium_nodeport_https }} }
+          - { name: http, port: 80, targetPort: 80, nodePort: {{ pomerium_nodeport_http }} }
+  changed_when: false
+
+- name: Diff the Pomerium bundle (accurate drift signal; rc 1 == real change)
+  ansible.builtin.command: "kubectl diff -f /tmp/talu-pomerium-bundle.yaml"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: pom_diff
+  changed_when: false
+  failed_when: pom_diff.rc not in [0, 1]
+
+- name: Apply the Pomerium bundle
+  ansible.builtin.command: "kubectl apply -f /tmp/talu-pomerium-bundle.yaml"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: pom_diff.rc == 1
+
+- name: Restart Pomerium when its config changed
+  ansible.builtin.command: "kubectl -n pomerium rollout restart deploy/pomerium"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  when: pom_cm.changed
+  changed_when: true
+
+- name: Wait for Pomerium ready
+  ansible.builtin.command: "kubectl -n pomerium rollout status deploy/pomerium --timeout=150s"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+- name: Host socat units (:443/:80 -> {{ talos_node_ip }}:NodePort) — systemd, survives reboot (gotcha #18)
+  become: true
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/talu-socat-{{ item.port }}.service"
+    content: |
+      [Unit]
+      Description=Talu socat :{{ item.port }} -> {{ talos_node_ip }}:{{ item.np }}
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/bin/socat TCP-LISTEN:{{ item.port }},fork,reuseaddr TCP:{{ talos_node_ip }}:{{ item.np }}
+      Restart=always
+      RestartSec=2
+      [Install]
+      WantedBy=multi-user.target
+  loop:
+    - { port: 443, np: "{{ pomerium_nodeport_https }}" }
+    - { port: 80, np: "{{ pomerium_nodeport_http }}" }
+  register: socat_units
+
+- name: Enable + (re)start socat units
+  become: true
+  ansible.builtin.systemd:
+    name: "talu-socat-{{ item.port }}"
+    enabled: true
+    state: "{{ 'restarted' if socat_units.changed else 'started' }}"
+    daemon_reload: true
+  loop:
+    - { port: 443 }
+    - { port: 80 }

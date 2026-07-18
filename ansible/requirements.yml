@@ -1,0 +1,6 @@
+---
+# Ansible collections this playbook needs. Install on the control node with:
+#   ansible-galaxy collection install -r requirements.yml
+collections:
+  - name: kubernetes.core        # cilium role uses kubernetes.core.helm_repository
+    version: ">=3.0.0"
