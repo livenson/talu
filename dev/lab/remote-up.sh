@@ -25,6 +25,15 @@ mapfile -t LOOPS < <(sudo losetup -a | awk -F: '/talu\/ceph-loop/{print $1}' | s
 echo "[remote-up] OSD loop devices: ${LOOPS[*]}"
 MOUNTS=(); for d in "${LOOPS[@]}"; do MOUNTS+=(--mount "type=bind,source=$d,target=$d"); done
 
+# Optional: share host /dev (rshared) into the node so ceph-csi rbd/nbd devices reach kubelet.
+# Talos curates its own /dev (no /dev/nbd*), so kubelet can't complete rbd-nbd bind-mounts and
+# CDI-to-Ceph / Ceph-backed VM disks are unreliable. The documented Talos workaround is a
+# bind mount of /dev with rshared propagation (kubelet-extraMounts pattern; Ceph tracker #22012).
+# EXPERIMENTAL: overlaying host /dev on Talos may interfere with Talos device management — validate.
+if [ "${LAB_SHARE_HOST_DEV:-0}" = 1 ]; then
+  MOUNTS+=(--mount "type=bind,source=/dev,target=/dev,bind-propagation=rshared")
+fi
+
 echo "[remote-up] (re)creating Talos/Podman cluster '$CLUSTER'"
 sudo DOCKER_HOST="$DOCKER_HOST" "$TALOSCTL" cluster destroy --name "$CLUSTER" >/dev/null 2>&1 || true
 sudo rm -rf "/root/.talos/clusters/$CLUSTER" 2>/dev/null || true

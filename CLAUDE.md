@@ -100,6 +100,13 @@ whenever you burn time on a non-obvious issue.
     → Ceph **control-plane** semantics (provision/snapshot/clone objects) are real and validated;
     reliable Ceph **data-path** (mounting into VMs/pods) needs non-nested nodes (nested KVM / real
     hardware, krbd). The reliable VM path on this lab is **containerDisk**.
+    **FIX TO VALIDATE (not yet done):** fresh single rbd-nbd mounts actually succeed; the reliability
+    collapse is stale RBD watchers from killed pods + the nbd-device gap. The documented Talos
+    workaround (Ceph tracker #22012; Sidero disc. #8557) is a **bind mount of `/dev` with `rshared`
+    propagation** into the node so host/dynamic devices reach kubelet. Encoded behind
+    `LAB_SHARE_HOST_DEV=1` in `dev/lab/remote-up.sh` (adds `--mount type=bind,source=/dev,target=/dev,bind-propagation=rshared`).
+    EXPERIMENTAL — overlaying host `/dev` on Talos may disturb its device mgmt; needs a rebuild to test.
+    If it works, krbd (not just rbd-nbd) may start working too, and CDI-to-Ceph becomes reliable.
 
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the
