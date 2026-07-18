@@ -29,6 +29,8 @@ metadata:
   name: ${VM}-ssh
   namespace: ${NS}
   labels: { talu.io/ssh-expose: "true", talu.io/vm: "${VM}" }
+  # per-VM allow-list (annotation, not label: emails contain '@' which labels reject)
+  annotations: { talu.io/allowed-users: "${ALLOWED_USERS}" }
 spec:
   selector: { kubevirt.io/vm: ${VM} }
   ports: [{ name: ssh, port: 22, targetPort: 22 }]
@@ -69,9 +71,11 @@ routes:
     to: http://kubevirt-manager.kubevirt-manager.svc.cluster.local:8080
     allowed_users: [${ALLOWED_USERS}]
     allow_websockets: true"
-# one ssh:// route per exposed VM (declarative from labels)
-while read -r vm svc ns _; do
+# one ssh:// route per exposed VM (declarative). Each route's allow-list comes from the
+# Service's talu.io/allowed-users annotation (per-tenant policy), not a global default.
+while read -r vm svc ns au _; do
   [ -z "$vm" ] && continue
+  au=${au:-$ALLOWED_USERS}
   CFG="${CFG}
   - from: ssh://${vm}
     to: ssh://${svc}.${ns}.svc.cluster.local:22
@@ -79,9 +83,9 @@ while read -r vm svc ns _; do
       - allow:
           and:
             - email:
-                is: ${ALLOWED_USERS}"
+                in: [${au}]"
 done < <(kubectl get svc -A -l talu.io/ssh-expose=true \
-           -o jsonpath='{range .items[*]}{.metadata.labels.talu\.io/vm}{" "}{.metadata.name}{" "}{.metadata.namespace}{"\n"}{end}')
+           -o jsonpath='{range .items[*]}{.metadata.labels.talu\.io/vm}{" "}{.metadata.name}{" "}{.metadata.namespace}{" "}{.metadata.annotations.talu\.io/allowed-users}{"\n"}{end}')
 
 kubectl -n "$POM_NS" create configmap pomerium-config --from-literal=config.yaml="$CFG" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null

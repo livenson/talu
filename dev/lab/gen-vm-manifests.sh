@@ -142,6 +142,8 @@ metadata:
     talu.io/ssh-expose: "true"
     talu.io/vm: "${VM}"
     talu.io/project-uuid: "${PROJECT_UUID}"
+  annotations:
+    talu.io/allowed-users: "${ALLOWED_USERS}"   # per-tenant SSH-route allow-list (read by the route renderer)
 spec:
   selector: { kubevirt.io/vm: ${VM} }
   ports: [{ name: ssh, port: 22, targetPort: 22 }]
@@ -173,7 +175,7 @@ cat <<YAML
     - allow:
         and:
           - email:
-              is: ${ALLOWED_USERS}
+              in: [${ALLOWED_USERS}]
 YAML
 }
 

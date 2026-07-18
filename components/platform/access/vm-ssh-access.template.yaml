@@ -48,6 +48,11 @@ metadata:
     talu.io/ssh-expose: "true"     # the label the route renderer selects on
     talu.io/vm: "${VM}"
     talu.io/project-uuid: "${PROJECT}"
+  annotations:
+    # Per-tenant SSH-route allow-list (comma-separated). An ANNOTATION, not a label —
+    # emails contain '@', which label values reject. The route renderer reads it per-Service
+    # so each VM's ssh:// route gets its OWN tenant policy (email: in: [...]).
+    talu.io/allowed-users: "${ALLOWED_USERS}"
 spec:
   selector: { kubevirt.io/vm: ${VM} }
   ports: [{ name: ssh, port: 22, targetPort: 22 }]

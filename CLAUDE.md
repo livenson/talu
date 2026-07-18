@@ -222,6 +222,10 @@ Components + gotchas:
     - `expose-vm.sh <vm> <ns>` creates `<vm>-ssh` Service + `<vm>-ssh-pin` CiliumNetworkPolicy, then
       **re-renders the Pomerium config from every Service labelled `talu.io/ssh-expose=true`** (base HTTP
       routes + the SSH-server block + one `ssh://<vm>` route each — add a VM = add a label). No tunnel.
+      **Per-tenant policy:** each route's allow-list comes from the Service's `talu.io/allowed-users`
+      **annotation** (emails have `@`, invalid in label values) → `email: in: [...]`. Multi-tenancy
+      validated: alice→ubuntu, bob→web1; the PPL engine denies the wrong user both ways (403/200), and
+      a `tenant-b` pod is Cilium-DROPPED from `vmfs`'s VM :22.
     - `vm-ssh.sh <vm> [principal]` is a thin wrapper over `ssh <principal>@<vm>@ssh.<domain> -p 23`.
     - `gen-vm-manifests.sh <vm> <ns>` (pure, for Waldur) emits the K8s bundle — cloud-init **Secret**
       (CA trust + guest secrets), VM (`secretRef`), Service, pinning — + the `ssh://` route companion.
