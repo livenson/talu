@@ -1,0 +1,54 @@
+---
+# Stage 3: KubeVirt (useEmulation — no /dev/kvm) + CDI. VM namespaces need PSA privileged.
+- name: Resolve latest stable versions
+  ansible.builtin.shell: |
+    echo "kv=$(curl -fsSL https://storage.googleapis.com/kubevirt-prow/release/kubevirt/kubevirt/stable.txt)"
+    echo "cdi=$(basename $(curl -sL -o /dev/null -w '%{url_effective}' https://github.com/kubevirt/containerized-data-importer/releases/latest))"
+  register: vers
+  changed_when: false
+
+- name: Set version facts
+  ansible.builtin.set_fact:
+    kubevirt_version: "{{ vers.stdout | regex_search('kv=(\\S+)','\\1') | first }}"
+    cdi_version: "{{ vers.stdout | regex_search('cdi=(\\S+)','\\1') | first }}"
+
+- name: Install KubeVirt operator
+  ansible.builtin.command: "kubectl apply -f https://github.com/kubevirt/kubevirt/releases/download/{{ kubevirt_version }}/kubevirt-operator.yaml"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: KubeVirt CR (useEmulation + feature gates)
+  ansible.builtin.shell: |
+    cat <<EOF | kubectl apply -f -
+    apiVersion: kubevirt.io/v1
+    kind: KubeVirt
+    metadata: {name: kubevirt, namespace: kubevirt}
+    spec:
+      configuration:
+        developerConfiguration:
+          useEmulation: {{ kubevirt_use_emulation | lower }}
+          featureGates: [Snapshot, HotplugVolumes]
+    EOF
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Install CDI operator + CR
+  ansible.builtin.command: "kubectl apply -f https://github.com/kubevirt/containerized-data-importer/releases/download/{{ cdi_version }}/{{ item }}"
+  loop: [cdi-operator.yaml, cdi-cr.yaml]
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Wait for KubeVirt + CDI Deployed
+  ansible.builtin.command: "kubectl -n {{ item.ns }} wait {{ item.kind }}/{{ item.name }} --for=jsonpath='{.status.phase}'=Deployed --timeout=300s"
+  loop:
+    - { ns: kubevirt, kind: kubevirt, name: kubevirt }
+    - { ns: cdi, kind: cdi, name: cdi }
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+- name: Point CDI scratch space at local-path (avoids 2 concurrent rbd-nbd volumes)
+  ansible.builtin.command: >
+    kubectl patch cdiconfig config --type merge
+    -p '{"spec":{"scratchSpaceStorageClass":"{{ cdi_scratch_storageclass }}"}}'
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false

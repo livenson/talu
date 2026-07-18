@@ -1,0 +1,19 @@
+# Talu no-KVM lab install variables. See CLAUDE.md for why each value matters.
+primary_iface_mtu: 1400          # host path carries ~1400B; must set BEFORE the container engine (gotcha #1)
+cluster_name: talu-lab
+cp_memory_mib: 16384             # Talos node RAM (Ceph/KubeVirt need headroom; default 2G too small)
+cp_cpus: "6.0"
+podman_socket: "unix:///run/podman/podman.sock"   # talosctl docker provisioner -> podman API (gotcha: Rocky 10 nftables)
+lab_home: /home/rocky
+kubeconfig_path: /home/rocky/.talu/kubeconfig
+
+cilium_version: "1.18.1"
+cilium_mtu: 1300                 # 1300 + VXLAN 50 < host 1400
+dns_forwarders: "8.8.8.8 1.1.1.1"   # CoreDNS default upstream is unusable here (gotcha #12)
+
+ceph_rbd_pool: kubernetes
+cephfs_name: talufs
+enable_host_dev_nbd: false        # partial fix only; CephFS is the reliable path (gotcha #14/#15)
+
+kubevirt_use_emulation: true      # no /dev/kvm
+cdi_scratch_storageclass: local-path

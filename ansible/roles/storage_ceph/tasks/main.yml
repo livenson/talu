@@ -1,0 +1,84 @@
+---
+# Stage 5: external MicroCeph (host, real udev) + CephFS RWX via ceph-csi.
+# CephFS (network fs mount) is reliable on the nested node; RBD block is not (CLAUDE.md #14/#15).
+- name: Install snapd + MicroCeph
+  become: true
+  block:
+    - ansible.builtin.dnf: { name: epel-release, state: present }
+    - ansible.builtin.dnf: { name: snapd, state: present }
+    - ansible.builtin.systemd: { name: snapd.socket, enabled: true, state: started }
+    - ansible.builtin.file: { src: /var/lib/snapd/snap, dest: /snap, state: link }
+    - ansible.builtin.shell: "snap wait system seed.loaded && snap install microceph"
+      args: { creates: /snap/bin/microceph }
+
+- name: Bootstrap MicroCeph + loop OSDs (idempotent)
+  become: true
+  ansible.builtin.shell: |
+    /snap/bin/microceph.ceph -s >/dev/null 2>&1 && exit 0
+    /snap/bin/microceph cluster bootstrap
+    sleep 5
+    /snap/bin/microceph disk add loop,4G,3
+  register: mc_boot
+  changed_when: "'already' not in mc_boot.stdout"
+
+- name: Enable CephFS (talufs) + CSI subvolumegroup
+  become: true
+  ansible.builtin.shell: |
+    /snap/bin/microceph enable mds >/dev/null 2>&1 || true
+    /snap/bin/microceph.ceph fs volume create {{ cephfs_name }} >/dev/null 2>&1 || true
+    /snap/bin/microceph.ceph fs subvolumegroup create {{ cephfs_name }} csi >/dev/null 2>&1 || true
+  changed_when: false
+
+- name: Gather Ceph connection facts
+  become: true
+  ansible.builtin.shell: |
+    echo "fsid=$(/snap/bin/microceph.ceph fsid)"
+    echo "mon=$(ip -4 addr show | grep -oE 'inet 192\.168\.[0-9]+\.[0-9]+' | awk '{print $2}' | head -1):6789"
+    echo "key=$(/snap/bin/microceph.ceph auth get-or-create-key client.cephfs mon 'allow r' mgr 'allow rw' osd 'allow rw tag cephfs *=*' mds 'allow rw')"
+  register: cephfacts
+  changed_when: false
+
+- name: Parse Ceph facts
+  ansible.builtin.set_fact:
+    ceph_fsid: "{{ cephfacts.stdout | regex_search('fsid=(\\S+)','\\1') | first }}"
+    ceph_mon: "{{ cephfacts.stdout | regex_search('mon=(\\S+)','\\1') | first }}"
+    cephfs_key: "{{ cephfacts.stdout | regex_search('key=(\\S+)','\\1') | first }}"
+
+- name: Install external-snapshotter CRDs + controller
+  ansible.builtin.shell: |
+    S=https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/release-8.2
+    kubectl apply -f $S/client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml \
+                  -f $S/client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml \
+                  -f $S/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml
+    kubectl apply -f $S/deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml \
+                  -f $S/deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Install ceph-csi-cephfs (external MicroCeph) + cephfs StorageClass
+  ansible.builtin.shell: |
+    kubectl create ns cephfs-csi --dry-run=client -o yaml | kubectl apply -f -
+    kubectl label ns cephfs-csi pod-security.kubernetes.io/enforce=privileged --overwrite
+    helm repo add ceph-csi https://ceph.github.io/csi-charts >/dev/null 2>&1 || true
+    helm repo update ceph-csi >/dev/null
+    cat > /tmp/cephfs-values.yaml <<EOF
+    csiConfig:
+      - clusterID: "{{ ceph_fsid }}"
+        monitors: ["{{ ceph_mon }}"]
+        cephFS: {subvolumeGroup: "csi"}
+    provisioner: {replicaCount: 1}
+    storageClass: {create: true, name: cephfs, clusterID: "{{ ceph_fsid }}", fsName: {{ cephfs_name }}, reclaimPolicy: Delete, allowVolumeExpansion: true}
+    secret: {create: true, name: csi-cephfs-secret, adminID: cephfs, adminKey: "{{ cephfs_key }}"}
+    EOF
+    helm upgrade --install ceph-csi-cephfs ceph-csi/ceph-csi-cephfs -n cephfs-csi -f /tmp/cephfs-values.yaml
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Fix cephfs secret (driver needs adminID/adminKey, chart writes userID/userKey — gotcha #15)
+  ansible.builtin.shell: |
+    kubectl -n cephfs-csi delete secret csi-cephfs-secret >/dev/null 2>&1 || true
+    kubectl -n cephfs-csi create secret generic csi-cephfs-secret \
+      --from-literal=adminID=cephfs --from-literal=adminKey="{{ cephfs_key }}"
+    kubectl -n cephfs-csi rollout restart deploy/ceph-csi-cephfs-provisioner
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true

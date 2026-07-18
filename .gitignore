@@ -9,3 +9,6 @@ secrets.yaml
 # Editor / OS noise
 .DS_Store
 *.swp
+
+# Ansible retry files
+*.retry

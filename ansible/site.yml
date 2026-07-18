@@ -1,0 +1,15 @@
+---
+# Talu no-KVM lab — full install, idempotent. Encodes the validated procedure (see CLAUDE.md).
+#   ansible-playbook site.yml
+# Tags let you run a slice, e.g.: ansible-playbook site.yml --tags storage
+- name: Talu no-KVM lab install
+  hosts: lab
+  gather_facts: true
+  roles:
+    - { role: host_bootstrap, tags: [bootstrap] }   # MTU-first, podman, modules, sysctls, tooling
+    - { role: talos_cluster,  tags: [cluster] }      # talosctl cluster create docker (podman), cni=none
+    - { role: cilium,         tags: [cilium] }       # CNI: kube-proxy replacement, bpf.masquerade, MTU
+    - { role: cluster_dns,    tags: [dns] }          # CoreDNS -> public forwarders (pods need external DNS)
+    - { role: core_services,  tags: [core] }         # local-path (default SC) + cert-manager internal CA
+    - { role: storage_ceph,   tags: [storage] }      # MicroCeph + CephFS (RWX) + ceph-csi
+    - { role: kubevirt,       tags: [kubevirt] }     # KubeVirt (useEmulation) + CDI

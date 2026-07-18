@@ -26,6 +26,11 @@ help: ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
+## ---- install (Ansible) ---------------------------------------------------
+
+install: ## full no-KVM lab install via Ansible (idempotent); TAGS=storage to slice
+	@cd ansible && ansible-playbook site.yml $(if $(TAGS),--tags $(TAGS),)
+
 ## ---- lab lifecycle -------------------------------------------------------
 
 lab-push: ## rsync repo to the lab and run host bootstrap (Stage 0)

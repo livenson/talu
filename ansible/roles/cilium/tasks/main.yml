@@ -1,0 +1,27 @@
+---
+# Stage 1b: Cilium CNI (kube-proxy replacement, KubePrism, bpf.masquerade REQUIRED — gotcha #11).
+- name: Copy Cilium values from the repo to the lab
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../{{ item.src }}"
+    dest: "/tmp/{{ item.dest }}"
+  loop:
+    - { src: "components/infrastructure/cilium/values.yaml", dest: "cilium-base.yaml" }
+    - { src: "environments/rocky9-sandbox/cilium-values.yaml", dest: "cilium-env.yaml" }
+
+- name: Add Cilium helm repo
+  kubernetes.core.helm_repository: { name: cilium, repo_url: "https://helm.cilium.io" }
+  failed_when: false   # fall back to CLI if the collection isn't installed
+
+- name: Install/upgrade Cilium
+  ansible.builtin.shell: |
+    helm repo add cilium https://helm.cilium.io >/dev/null 2>&1 || true
+    helm repo update cilium >/dev/null
+    helm upgrade --install cilium cilium/cilium --version {{ cilium_version }} --namespace kube-system \
+      -f /tmp/cilium-base.yaml -f /tmp/cilium-env.yaml
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Wait for the node to become Ready
+  ansible.builtin.command: "kubectl wait --for=condition=Ready node --all --timeout=180s"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false

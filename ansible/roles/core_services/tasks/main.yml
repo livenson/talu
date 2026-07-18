@@ -1,0 +1,41 @@
+---
+# Stage 4: local-path (sandbox default SC) + cert-manager internal CA.
+- name: Install local-path-provisioner
+  ansible.builtin.command: >
+    kubectl apply -f
+    https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: local-path namespace privileged + set as default StorageClass
+  ansible.builtin.shell: |
+    kubectl label ns local-path-storage pod-security.kubernetes.io/enforce=privileged --overwrite
+    kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+- name: Install cert-manager
+  ansible.builtin.command: >
+    kubectl apply -f
+    https://github.com/cert-manager/cert-manager/releases/download/v1.16.2/cert-manager.yaml
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Wait for cert-manager webhook
+  ansible.builtin.command: "kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=180s"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+- name: Copy internal-CA issuers from the repo
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../components/infrastructure/cert-manager/issuers.yaml"
+    dest: /tmp/talu-issuers.yaml
+
+- name: Apply internal-CA issuer chain
+  ansible.builtin.command: "kubectl apply -f /tmp/talu-issuers.yaml"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: iss
+  retries: 5
+  delay: 10
+  until: iss.rc == 0     # webhook may need a moment to admit CRs
+  changed_when: true

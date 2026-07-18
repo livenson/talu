@@ -1,0 +1,60 @@
+---
+# Stage 1a: Talos cluster as Podman containers via talosctl docker provisioner.
+- name: Check if cluster already exists
+  ansible.builtin.command: "talosctl config info"
+  environment: { TALOSCONFIG: "{{ lab_home }}/.talos/config" }
+  register: cluster_exists
+  changed_when: false
+  failed_when: false
+
+- name: Write Talos config-patch (Cilium owns CNI + kube-proxy)
+  ansible.builtin.copy:
+    dest: /tmp/talu-talos-patch.yaml
+    content: |
+      cluster:
+        allowSchedulingOnControlPlanes: true
+        network:
+          cni:
+            name: none
+        proxy:
+          disabled: true
+
+- name: Optional nbd device binds (partial rbd-nbd help; CephFS is the reliable path)
+  become: true
+  ansible.builtin.set_fact:
+    nbd_mounts: "{{ range(0,16) | map('regex_replace','^(.*)$','--mount type=bind,source=/dev/nbd\\1,target=/dev/nbd\\1') | join(' ') }}"
+  when: enable_host_dev_nbd | bool
+
+- name: Create the Talos/Podman cluster (backgrounded; blocks on node-Ready until Cilium)
+  become: true
+  ansible.builtin.shell: |
+    talosctl cluster destroy --name {{ cluster_name }} 2>/dev/null || true
+    rm -rf /root/.talos/clusters/{{ cluster_name }}
+    setsid env DOCKER_HOST={{ podman_socket }} talosctl cluster create docker \
+      --name {{ cluster_name }} --workers 0 \
+      --memory-controlplanes {{ cp_memory_mib }} --cpus-controlplanes {{ cp_cpus }} \
+      --config-patch @/tmp/talu-talos-patch.yaml {{ nbd_mounts | default('') }} \
+      >/root/talos-create.log 2>&1 </dev/null &
+  environment: { DOCKER_HOST: "{{ podman_socket }}" }
+  when: "'talu-lab' not in (cluster_exists.stdout | default(''))"
+  changed_when: true
+
+- name: Wait for the Kubernetes API to come healthy
+  become: true
+  ansible.builtin.shell: |
+    for i in $(seq 1 40); do
+      [ -f /root/.kube/config ] && grep -q 'server:' /root/.kube/config && break
+      sleep 6
+    done
+    install -D -m600 /root/.kube/config {{ kubeconfig_path }}
+    chown {{ ansible_user }}:{{ ansible_user }} {{ kubeconfig_path }}
+  args: { creates: "{{ kubeconfig_path }}" }
+
+- name: Verify API reachable
+  ansible.builtin.command: "kubectl get --raw /healthz"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: healthz
+  retries: 20
+  delay: 6
+  until: healthz.rc == 0
+  changed_when: false

@@ -1,0 +1,14 @@
+---
+# Pods have no external DNS by default (CoreDNS upstream unusable — gotcha #12).
+- name: Point CoreDNS at public forwarders
+  ansible.builtin.shell: |
+    set -e
+    cur=$(kubectl -n kube-system get cm coredns -o jsonpath="{.data.Corefile}")
+    echo "$cur" | grep -q "forward . {{ dns_forwarders }}" && exit 0
+    new=$(echo "$cur" | sed -E "s|forward \. [^ ]+.*|forward . {{ dns_forwarders }} \{|")
+    kubectl -n kube-system create cm coredns --from-literal=Corefile="$new" --dry-run=client -o yaml | kubectl apply -f -
+    kubectl -n kube-system rollout restart deploy/coredns
+    echo CHANGED
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: dns
+  changed_when: "'CHANGED' in dns.stdout"

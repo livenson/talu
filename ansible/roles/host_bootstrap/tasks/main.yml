@@ -1,0 +1,95 @@
+---
+# Stage 0: host prep on Rocky 9/10 (OpenStack cloud, no KVM). Order matters (CLAUDE.md #1-#4).
+- name: Discover primary interface
+  ansible.builtin.set_fact:
+    primary_iface: "{{ ansible_default_ipv4.interface }}"
+
+- name: Set host MTU 1400 live (BEFORE container engine — avoids the SSH lockout)
+  become: true
+  ansible.builtin.command: "ip link set {{ primary_iface }} mtu {{ primary_iface_mtu }}"
+  changed_when: false
+
+- name: Persist MTU on the NetworkManager connection
+  become: true
+  ansible.builtin.shell: |
+    con=$(nmcli -t -f NAME connection show --active | head -1)
+    nmcli con mod "$con" 802-3-ethernet.mtu {{ primary_iface_mtu }} || nmcli con mod "$con" ethernet.mtu {{ primary_iface_mtu }}
+  changed_when: false
+
+- name: Base tools (this minimal image lacks tar/rsync)
+  become: true
+  ansible.builtin.dnf:
+    name: [tar, rsync, curl]
+    state: present
+
+- name: Install kernel-modules for the running kernel (repo, else Rocky vault — gotcha #3)
+  become: true
+  ansible.builtin.shell: |
+    set -e
+    rpm -q "kernel-modules-$(uname -r)" && exit 0
+    dnf -y install "kernel-modules-$(uname -r)" && exit 0
+    . /etc/os-release
+    K="$(uname -r)"; K="${K%.x86_64}"
+    dnf -y install "https://dl.rockylinux.org/vault/rocky/${VERSION_ID}/BaseOS/x86_64/os/Packages/k/kernel-modules-${K}.x86_64.rpm"
+    depmod -a "$(uname -r)"
+  register: km
+  changed_when: "'already installed' not in km.stdout"
+  failed_when: false
+
+- name: Persist + load kernel modules (br_netfilter may be absent — best effort)
+  become: true
+  block:
+    - ansible.builtin.copy:
+        dest: /etc/modules-load.d/talu.conf
+        content: "overlay\nnf_nat\nnf_conntrack\nbr_netfilter\nrbd\nnbd\nloop\n"
+    - ansible.builtin.command: "modprobe {{ item }}"
+      loop: [overlay, nf_nat, nf_conntrack, br_netfilter, rbd, nbd, loop]
+      changed_when: false
+      failed_when: false
+
+- name: Sysctls (ip_forward REQUIRED before the engine starts — gotcha #4)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-talu.conf
+    content: |
+      net.ipv4.ip_forward = 1
+      fs.inotify.max_user_instances = 8192
+      fs.inotify.max_user_watches = 1048576
+      fs.file-max = 2097152
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+
+- name: Apply sysctls now
+  become: true
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+
+- name: Install Podman + docker-API shim (Rocky-native; talosctl uses its socket)
+  become: true
+  ansible.builtin.dnf:
+    name: [podman, podman-docker]
+    state: present
+
+- name: Enable rootful Podman API socket
+  become: true
+  ansible.builtin.systemd:
+    name: podman.socket
+    enabled: true
+    state: started
+
+- name: Install CLI tooling
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "/usr/local/bin/{{ item.name }}"
+    mode: "0755"
+  loop:
+    - { name: kubectl,  url: "https://dl.k8s.io/release/{{ lookup('url','https://dl.k8s.io/release/stable.txt') }}/bin/linux/amd64/kubectl" }
+    - { name: talosctl, url: "https://github.com/siderolabs/talos/releases/latest/download/talosctl-linux-amd64" }
+    - { name: cosign,   url: "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64" }
+    - { name: virtctl,  url: "https://github.com/kubevirt/kubevirt/releases/download/v1.8.4/virtctl-v1.8.4-linux-amd64" }
+
+- name: Install helm
+  become: true
+  ansible.builtin.shell: "command -v helm || (curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash)"
+  changed_when: false
