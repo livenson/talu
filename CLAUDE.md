@@ -133,8 +133,9 @@ whenever you burn time on a non-obvious issue.
     on real nodes (KVM) in production.
 
 ## Stage 6 — identity & access plane (validated on the lab)
-Achieved end-to-end: **`pomerium-cli tcp` → OIDC login → Pomerium → Cilium-pinned VM sshd** (logged
-into the CirrOS VM as `cirros` after alice's OIDC auth). Components + gotchas:
+Achieved end-to-end: **OIDC login → Pomerium tunnel → OpenBao-signed 15-min SSH cert → cert-auth into
+a Cilium-pinned VM sshd** (lands as `talu@ubuntu`, no static password). Also: **kubevirt-manager** VM UI
+on the same floating IP behind Pomerium. Components + gotchas:
 16. **IdP = Dex** (not Keycloak, for the lab). Keycloak 26 fought us: JVM weight, **ephemeral H2 wiped
     on every restart** (needs a PVC or realm-import), user-profile requires firstName/lastName ("Account
     is not fully set up"), and a data-dir permission crash. Dex is a tiny Go OIDC provider, static
@@ -165,7 +166,29 @@ into the CirrOS VM as `cirros` after alice's OIDC auth). Components + gotchas:
 20. **`pomerium-cli tcp` headless:** `--service-account` OR `--browser-cmd <script>` (script curls the
     Dex login for the user) + `--disable-tls-verification`. Run it via `systemd-run` (ssh-backgrounding
     drops); a binary dropped into `/usr/local/bin` needs **`restorecon`** or SELinux denies systemd exec
-    (`Permission denied`). Still TODO: OpenBao SSH CA for short-lived certs (replaces the VM password).
+    (`Permission denied`).
+21. **OpenBao SSH CA — short-lived certs replace the VM password (§3 chain complete).** OpenBao dev mode
+    (`ghcr.io/openbao/openbao`, `server -dev -dev-root-token-id=root -dev-listen-address=0.0.0.0:8200`),
+    `bao secrets enable -path=ssh ssh` + `bao write ssh/config/ca generate_signing_key=true`. Role via
+    **JSON** (`kubectl exec -i ... bao write ssh/roles/talu -` fed a file), NOT `bao write k=v` — the
+    `default_extensions` map field rejects `permit-pty=` as a string (`expected a map, got 'string'`);
+    payload `{"key_type":"ca","allow_user_certificates":true,"allowed_users":"talu,alice",
+    "default_user":"talu","ttl":"15m","allowed_extensions":"permit-pty","default_extensions":{"permit-pty":""}}`.
+    Sign: `bao write -field=signed_key ssh/sign/talu public_key=@k.pub valid_principals=talu` → 15-min cert.
+    **CirrOS/dropbear CANNOT validate SSH certificates** — booted an **Ubuntu 24.04 containerDisk VM**
+    (`quay.io/containerdisks/ubuntu:24.04`) whose cloud-init `write_files` the CA pubkey + a
+    `sshd_config.d` drop-in (`TrustedUserCAKeys /etc/ssh/talu_ca.pub`, `PasswordAuthentication no`) and
+    creates user `talu`. Full chain proven: OIDC-gated Pomerium tunnel (`:2222`) → OpenBao-signed cert →
+    `ssh -o CertificateFile=... talu@localhost -p 2222` → lands as `talu@ubuntu`, no password anywhere.
+    **Caveat: dev-mode OpenBao is in-memory** — a pod restart wipes the mount/role (the *root CA key*
+    survived our restart but the *role* didn't); production needs Raft storage + unseal (see plan §6).
+22. **kubevirt-manager on the floating IP.** Web UI for VM lifecycle. Install:
+    `kubectl apply -f .../releases/download/<latest>/bundled-<latest>.yaml` (namespace `kubevirt-manager`,
+    ClusterRole to drive KubeVirt/CDI, **ClusterIP Service :8080**; PSA warns "restricted" but it runs).
+    Exposed on the SAME floating IP as another Pomerium route — `from: https://vms.<host>` →
+    `to: http://kubevirt-manager.kubevirt-manager.svc:8080`, `allowed_users: [alice@talu.local]`. No extra
+    ports: it rides the existing `socat :443 → NodePort → Pomerium` path; autocert mints the LE cert for
+    `vms.<host>` on first hit. Verified: unauth → 302 to Dex; after alice's login the app is served.
 
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the
