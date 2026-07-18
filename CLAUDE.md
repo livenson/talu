@@ -58,6 +58,10 @@ whenever you burn time on a non-obvious issue.
    no-KVM lab DOES get real storage semantics (snapshot/clone/RWX, migration-shaped volumes) —
    only representative migration *performance* still wants nested KVM. Rook-managed OSDs remain
    the thing that doesn't work here; ceph-csi against external Ceph is the vehicle.
+   **CAVEAT (see #14):** the Ceph **control-plane** (provision/snapshot/clone objects) is real and
+   reliable, but rbd-nbd **data-path mounting** into pods/VMs is INTERMITTENT on the nested node
+   (Talos `/dev` has no nbd devices) — so CDI-to-Ceph and Ceph-backed VM disks are not reliable here.
+   The COW-clone verification was genuine but relied on a mount that happens to work only sometimes.
 11. **Cilium needs `bpf.masquerade: true` on this host — pods have ZERO egress otherwise.** Rocky 10
     is nftables-only, so Cilium's default iptables masquerade silently installs nothing and pods
     can't reach the LAN/internet/host (only the node itself). eBPF masquerade fixes it (and is what
@@ -73,7 +77,34 @@ whenever you burn time on a non-obvious issue.
 10. **Container engine NOT enabled on boot** during validation (a reboot re-running the engine was
     part of the original lockout). Enable deliberately only once the stack is trusted.
 
+12. **Pod external DNS is broken by default here — CoreDNS forwards to an unusable upstream.**
+    Pods reach `8.8.8.8` by IP but name resolution SERVFAILs (`server misbehaving on 10.96.0.10:53`),
+    because CoreDNS `forward . /etc/resolv.conf` points at a resolver pods can't use. Fix: patch the
+    coredns ConfigMap to `forward . 8.8.8.8 1.1.1.1` and restart. Breaks any pod pulling external
+    URLs (CDI HTTP imports, etc.) while node-level image pulls still work — hides easily.
+13. **KubeVirt under emulation works; use it right.** Set `spec.configuration.developerConfiguration.useEmulation: true`
+    (no `/dev/kvm`). Label VM namespaces `pod-security.kubernetes.io/enforce=privileged` (virt-launcher
+    needs NET_ADMIN → violates PSA baseline). **containerDisk VMs boot reliably** (image pulled at node
+    level; CirrOS reaches the login prompt under TCG in ~1-2 min) — the dependable VM path here.
+    `virtctl console -n <ns> <vm>` needs the namespace flag.
+14. **rbd-nbd data-path mounting is INTERMITTENTLY broken on the nested node (Talos `/dev` isolation).**
+    Definitive root cause: `/dev/nbd*` exists on the host (16) and inside the ceph-csi nodeplugin (16)
+    but the **Talos node's curated `/dev` has ZERO nbd devices** — so rbd-nbd maps the image (nodeplugin
+    has nbd devices; a Ceph watcher is taken) but **kubelet, running in the Talos node, can't complete
+    the bind-mount** (`failed to find device`), and the orphaned watcher then blocks every retry
+    (`rbd image ... is still being used`). A single mount sometimes succeeds (early COW-clone test was
+    real but lucky); under sustained use (CDI's prime+scratch, VM disks) it fails. NOTE: an earlier
+    guess blamed "two concurrent rbd-nbd volumes" — that was WRONG; even one rbd-nbd volume fails.
+    Consequence: **CDI-import-to-Ceph and Ceph-backed VM disks are not reliable on this nested lab.**
+    Block volumeMode is separately unusable (kubelet `AttachFileDevice`/losetup fails the same way).
+    → Ceph **control-plane** semantics (provision/snapshot/clone objects) are real and validated;
+    reliable Ceph **data-path** (mounting into VMs/pods) needs non-nested nodes (nested KVM / real
+    hardware, krbd). The reliable VM path on this lab is **containerDisk**.
+
 ## Debugging discipline (learned the hard way)
+- **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the
+  controller events (the real error) immediately — far faster than polling `.status.phase` and
+  grepping logs separately. Reach for describe on the failing object before anything else.
 
 - **Don't poll with long dumb sleeps.** A `for i in $(seq 1 20); do ...; sleep 15; done` that prints
   "0 0 0" hides the real error for minutes. Instead: read the **controller/operator logs** on the
