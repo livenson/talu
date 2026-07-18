@@ -14,3 +14,40 @@
   ansible.builtin.command: "kubectl -n kubevirt-manager rollout status deploy/kubevirt-manager --timeout=120s"
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: false
+
+# Stage 5 seed: image catalog (images.kubevirt-manager.io) so /imagelist is non-empty. Our VMs boot
+# from containerDisk directly (bypassing CDI); these registry entries let the UI offer them. The fuller
+# platform pipeline (CDI DataImportCron -> DataSource for clone-from-snapshot) layers on top later.
+- name: Seed the kubevirt-manager image catalog
+  ansible.builtin.shell: |
+    cat <<'EOF' | kubectl apply -f -
+    apiVersion: kubevirt-manager.io/v1
+    kind: Image
+    metadata: { name: ubuntu-2404, namespace: kubevirt-manager }
+    spec:
+      type: registry
+      readableName: "Ubuntu 24.04 LTS"
+      readableDescription: "Ubuntu 24.04 OpenSSH containerDisk (validates SSH certs)"
+      registry: { url: "quay.io/containerdisks/ubuntu:24.04" }
+    ---
+    apiVersion: kubevirt-manager.io/v1
+    kind: Image
+    metadata: { name: cirros-06, namespace: kubevirt-manager }
+    spec:
+      type: registry
+      readableName: "CirrOS 0.6"
+      readableDescription: "Tiny CirrOS demo image (console/debug VMs)"
+      registry: { url: "quay.io/kubevirt/cirros-container-disk-demo:latest" }
+    ---
+    apiVersion: kubevirt-manager.io/v1
+    kind: Image
+    metadata: { name: fedora-40, namespace: kubevirt-manager }
+    spec:
+      type: registry
+      readableName: "Fedora 40"
+      readableDescription: "Fedora 40 cloud containerDisk"
+      registry: { url: "quay.io/containerdisks/fedora:40" }
+    EOF
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: kvm_images
+  changed_when: "'configured' in kvm_images.stdout or 'created' in kvm_images.stdout"
