@@ -1,9 +1,11 @@
 # rocky9-sandbox Cilium overlay values — layered ON TOP of components/infrastructure/cilium/values.yaml.
 # The one thing that MUST be right on this host: MTU under the mandated Docker 1400.
 
-# Routing MTU. Host ens3 is 1500 but Docker on this hosting is pinned to 1400; keep pod
-# traffic safely under it. The Stage 1 large-payload test validates this value.
-MTU: 1350
+# Routing MTU. The host path carries ~1400-byte packets, and Cilium runs VXLAN tunnel mode
+# (+50 bytes). Pod MTU must leave room for that encap under 1400: 1300 + 50 = 1350, comfortably
+# under 1400. (1350 leaves zero margin and makes max-size DF packets marginal.) The Stage 1
+# large-payload test validates this value.
+MTU: 1300
 
 # Single Docker node: no real node-to-node path, so encryption stays off (parity kept in base).
 encryption:

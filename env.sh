@@ -21,6 +21,10 @@ export LAB_REMOTE_DIR="${LAB_REMOTE_DIR:-talu}"
 # Talos-in-Docker cluster name on the lab.
 export LAB_CLUSTER="${LAB_CLUSTER:-talu-lab}"
 
+# Container engine on the lab is Podman (Rocky-native, daemonless). talosctl's docker
+# provisioner drives its Docker-compatible API socket via DOCKER_HOST (set on the lab side).
+export LAB_DOCKER_HOST="${LAB_DOCKER_HOST:-unix:///run/podman/podman.sock}"
+
 # kubeconfig / talosconfig fetched from the lab live here (gitignored).
 export LAB_KUBECONFIG="${LAB_KUBECONFIG:-$PWD/.lab/kubeconfig}"
 export LAB_TALOSCONFIG="${LAB_TALOSCONFIG:-$PWD/.lab/talosconfig}"
