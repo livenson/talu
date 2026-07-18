@@ -149,9 +149,15 @@ into the CirrOS VM as `cirros` after alice's OIDC auth). Components + gotchas:
     still resolve the real floating IP via public sslip.io.
 18. **Exposing a cluster :443/:80 on the lab floating IP:** the SG allows only 22/80/443. NodePort the
     service (30443/30080) and `systemd-run socat TCP-LISTEN:443 → 10.5.0.2:30443` (kubectl port-forward
-    is too fragile; plain `&`-backgrounding over ssh drops the session — **use `systemd-run`**). LE
-    autocert failed (no reachable :443 during issuance) — used the cert-manager talu-ca cert instead
-    (self-signed; `--disable-tls-verification` / accept once).
+    is too fragile; plain `&`-backgrounding over ssh drops the session — **use `systemd-run`**).
+    **Real Let's Encrypt certs DO work once :443 is stably exposed** — set Pomerium `autocert: true` +
+    `autocert_dir: /data/autocert` (persist on a PVC to survive restarts / avoid re-issuance). LE
+    TLS-ALPN-01 validates via the sslip.io name → floating IP → socat → Pomerium. Issued for
+    `id/whoami/ssh.203-0-113-10.sslip.io` (issuer Let's Encrypt), so the browser trusts it and
+    `--disable-tls-verification` is NOT needed. (The earlier self-signed talu-ca fallback was only
+    because :443 wasn't stably exposed yet — and sslip.io shares LE's per-domain rate limit, so it can
+    occasionally fail with "too many certs".) With a real cert, drop `certificate_authority` from the
+    Pomerium config; the internal OIDC loop trusts LE via system roots (keep the `hostAlias`).
 19. **Per-VM SSH exposure + pinning:** a Service (`selector: kubevirt.io/vm: <vm>`, port 22) fronts the
     VM's dropbear; a Pomerium **`tcp+https://ssh.<host>:22`** route tunnels to it; a `CiliumNetworkPolicy`
     on the VM namespace allows ingress only from the pomerium namespace — validated: a pod elsewhere is
