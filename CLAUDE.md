@@ -105,8 +105,17 @@ whenever you burn time on a non-obvious issue.
     workaround (Ceph tracker #22012; Sidero disc. #8557) is a **bind mount of `/dev` with `rshared`
     propagation** into the node so host/dynamic devices reach kubelet. Encoded behind
     `LAB_SHARE_HOST_DEV=1` in `dev/lab/remote-up.sh` (adds `--mount type=bind,source=/dev,target=/dev,bind-propagation=rshared`).
-    EXPERIMENTAL — overlaying host `/dev` on Talos may disturb its device mgmt; needs a rebuild to test.
-    If it works, krbd (not just rbd-nbd) may start working too, and CDI-to-Ceph becomes reliable.
+    **VALIDATED (two rebuilds), verdict = partial, not a clean fix:**
+    - Whole-`/dev` bind is **shadowed by Talos's own `/dev` remount** — node still sees 0 nbd devices.
+    - **Individual `/dev/nbd0..15` binds** get further: rbd-nbd progresses from "failed to *find* device"
+      to "failed to *open* device", and **3/3 simple rbd-nbd mounts passed** on a clean cluster.
+    - BUT ceph-csi runs rbd-nbd with `--try-netlink`, which **dynamically allocates higher-numbered
+      nbd devices (nbd22-24) beyond the bound 0-15** → "failed to open device: /dev/nbd22" → CDI still
+      fails. Static binds are defeated by dynamic allocation.
+    - A fuller attempt would bind a large nbd range (0-63) AND cap rbd-nbd's allocation to it, or drop
+      `--try-netlink` — untested. Bottom line: **reliable Ceph data-path still effectively needs
+      non-nested Talos** (real VMs / nested KVM where Talos udevd manages real devices). Talos never
+      exposes the dynamic device nodes to kubelet on the docker provisioner.
 
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the
