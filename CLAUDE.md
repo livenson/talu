@@ -132,6 +132,35 @@ whenever you burn time on a non-obvious issue.
     against MicroCeph would work but is redundant vs plain ceph-csi-cephfs. Use CephFS here; RBD/Rook
     on real nodes (KVM) in production.
 
+## Stage 6 — identity & access plane (validated on the lab)
+Achieved end-to-end: **`pomerium-cli tcp` → OIDC login → Pomerium → Cilium-pinned VM sshd** (logged
+into the CirrOS VM as `cirros` after alice's OIDC auth). Components + gotchas:
+16. **IdP = Dex** (not Keycloak, for the lab). Keycloak 26 fought us: JVM weight, **ephemeral H2 wiped
+    on every restart** (needs a PVC or realm-import), user-profile requires firstName/lastName ("Account
+    is not fully set up"), and a data-dir permission crash. Dex is a tiny Go OIDC provider, static
+    users/groups via ConfigMap, no DB — issuer `https://id.<host>/dex`, `staticPasswords` need a real
+    bcrypt hash (`htpasswd -nbBC 10 x <pw>`, then `$2y`→`$2a`). Platform keeps Keycloak/ZITADEL as the
+    real-IdP swap (generic OIDC); lab uses Dex. `oidc-group-membership-mapper` gives group claims where
+    the IdP supports it (Dex static users don't — gate on email/`allowed_users` for the lab).
+17. **Pomerium OIDC loop fix.** Pomerium fetches the IdP discovery from `idp_provider_url` (the EXTERNAL
+    url), which it can't reach (floating-IP hairpin) and doesn't trust (self-signed talu-ca). Fix:
+    `certificate_authority: <base64 talu-ca>` in config + a **pod `hostAlias`** mapping `id.<host>` and
+    `authenticate.<host>` → `127.0.0.1` so Pomerium loops through its own `:443` internally. Browsers
+    still resolve the real floating IP via public sslip.io.
+18. **Exposing a cluster :443/:80 on the lab floating IP:** the SG allows only 22/80/443. NodePort the
+    service (30443/30080) and `systemd-run socat TCP-LISTEN:443 → 10.5.0.2:30443` (kubectl port-forward
+    is too fragile; plain `&`-backgrounding over ssh drops the session — **use `systemd-run`**). LE
+    autocert failed (no reachable :443 during issuance) — used the cert-manager talu-ca cert instead
+    (self-signed; `--disable-tls-verification` / accept once).
+19. **Per-VM SSH exposure + pinning:** a Service (`selector: kubevirt.io/vm: <vm>`, port 22) fronts the
+    VM's dropbear; a Pomerium **`tcp+https://ssh.<host>:22`** route tunnels to it; a `CiliumNetworkPolicy`
+    on the VM namespace allows ingress only from the pomerium namespace — validated: a pod elsewhere is
+    DROPPED (Hubble: `Policy denied DROPPED`), Pomerium is allowed.
+20. **`pomerium-cli tcp` headless:** `--service-account` OR `--browser-cmd <script>` (script curls the
+    Dex login for the user) + `--disable-tls-verification`. Run it via `systemd-run` (ssh-backgrounding
+    drops); a binary dropped into `/usr/local/bin` needs **`restorecon`** or SELinux denies systemd exec
+    (`Permission denied`). Still TODO: OpenBao SSH CA for short-lived certs (replaces the VM password).
+
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the
   controller events (the real error) immediately — far faster than polling `.status.phase` and

@@ -13,4 +13,6 @@
     - { role: core_services,  tags: [core] }         # local-path (default SC) + cert-manager internal CA
     - { role: storage_ceph,   tags: [storage] }      # MicroCeph + CephFS (RWX) + ceph-csi
     - { role: kubevirt,       tags: [kubevirt] }     # KubeVirt (useEmulation) + CDI
-    - { role: identity_keycloak, tags: [identity] }  # Stage 6a: Keycloak OIDC IdP (realm/client/groups)
+    # Stage 6 identity/access plane (Dex + Pomerium + Cilium pinning) validated manually on the lab
+    # (see CLAUDE.md #16-#20); Ansible roles identity_dex/identity_pomerium are TODO. The
+    # identity_keycloak role remains as reference but is disabled (Keycloak was too heavy for the lab).
