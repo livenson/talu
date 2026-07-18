@@ -49,10 +49,20 @@ whenever you burn time on a non-obvious issue.
    not satisfy pyudev inside the nested container. This is a **documented Rook limitation**, not a
    config error: rook#11353, rook#16958 (same failure on Docker-Desktop/Minikube loop devices);
    Sidero's Rook-on-Talos guide requires **real raw disks** ("osd-prepare will not use loop devices").
-   → Storage (Rook) and anything needing snapshot/clone/RWX must be validated on **nested KVM
-   (QEMU provisioner, real virtio disks)** or real hardware — exactly the fidelity split the plan
-   always called out for the no-KVM tier. For KubeVirt CRD/API validation without Ceph, use
-   local-path (RWO Filesystem) — enough to exercise the API surface, not migration/snapshots.
+   **RESOLVED via external Ceph** (see `dev/lab/microceph-setup.sh`): the udev/`/dev` walls live
+   only in *node-side* OSD prep and krbd mapping. Run Ceph OUTSIDE the containers — **MicroCeph on
+   the host** (`microceph disk add loop,4G,3`; loop OSDs are first-class there, real udev) — and
+   connect via **ceph-csi with the `rbd-nbd` mounter** (userspace; krbd fails because host-created
+   `/dev/rbdN` is invisible inside the Talos node — same `/dev` isolation). Validated end-to-end:
+   RBD provisioning, VolumeSnapshotClass, **data-verified COW clones**, and **RWX-block**. So the
+   no-KVM lab DOES get real storage semantics (snapshot/clone/RWX, migration-shaped volumes) —
+   only representative migration *performance* still wants nested KVM. Rook-managed OSDs remain
+   the thing that doesn't work here; ceph-csi against external Ceph is the vehicle.
+11. **Cilium needs `bpf.masquerade: true` on this host — pods have ZERO egress otherwise.** Rocky 10
+    is nftables-only, so Cilium's default iptables masquerade silently installs nothing and pods
+    can't reach the LAN/internet/host (only the node itself). eBPF masquerade fixes it (and is what
+    makes the external Ceph mon reachable from CSI pods). Symptom: `ping 8.8.8.8` from a pod fails
+    while image pulls (node-level) still work, so it hides easily.
 7. **Rook + loop devices needs `allowLoopDevices: true`** on the operator chart (renders
    `ROOK_CEPH_ALLOW_LOOP_DEVICES=true`). Verify it landed: `helm get manifest rook-ceph | grep ALLOW_LOOP`.
 8. **Invalid `cephConfig` keys abort the whole reconcile.** `osd_crush_chooseleaf_type` is a CRUSH

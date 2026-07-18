@@ -11,10 +11,12 @@ MTU: 1300
 encryption:
   enabled: false
 
-# Talos-in-Docker nodes share the host kernel; disable bpf masquerade quirks that need
-# a real netns boundary. Standard datapath is fine for correctness validation.
+# eBPF masquerade is REQUIRED here: this Rocky 10 host is nftables-only, and Cilium's
+# iptables masquerade silently fails (no legacy iptables modules) -> pods get NO egress.
+# bpf.masquerade uses eBPF and gives pods proper egress (internet + host/LAN, so an
+# external Ceph mon becomes reachable).
 bpf:
-  masquerade: false
+  masquerade: true
 
 operator:
   replicas: 1
