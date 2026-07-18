@@ -1,5 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# Skeleton — real manifests (HelmRelease / CRs) land here per the pilot plan.
-# Intentionally empty so `kustomize build` succeeds during scaffolding.
-resources: []
+# The cert-manager operator is installed from its release manifest (README); this overlay
+# adds the internal-CA issuer chain. Validated on the lab: talu-ca ClusterIssuer issues leaf certs.
+resources:
+  - issuers.yaml
