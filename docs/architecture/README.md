@@ -8,6 +8,7 @@ fully standalone (Git-first, no orchestrator at all).
 
 - **Runtime flows with sequence diagrams:** [`flows.md`](flows.md).
 - **Network architecture** (Cilium, VM security, L2/L3, IPv4/IPv6, IPAM, LB): [`networking.md`](networking.md).
+- **How Talu compares** (Cozystack, Harvester, OpenShift Virt, OpenStack, Proxmox…): [`comparison.md`](comparison.md).
 - Driving Talu from an external system: [`../integrations/`](../integrations/).
 - Operational notes & validated gotchas (the hard-won lab lessons): [`../../CLAUDE.md`](../../CLAUDE.md).
 
