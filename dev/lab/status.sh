@@ -20,9 +20,11 @@ hr "flux reconciliation"
 kubectl get kustomizations,helmreleases,ocirepositories -A 2>/dev/null \
   | grep -Ev 'True .*True' || echo "(flux not installed, or all Ready)"
 
-hr "storage — ceph"
-kubectl -n rook-ceph get cephcluster -o jsonpath='{range .items[*]}{.metadata.name}{"  health="}{.status.ceph.health}{"  phase="}{.status.phase}{"\n"}{end}' 2>/dev/null \
-  || echo "(rook-ceph not installed yet)"
+hr "storage — classes & PVCs"
+# Lab storage is external MicroCeph CephFS via ceph-csi (see dev/lab/microceph-setup.sh)
+# plus local-path for platform PVCs — not in-cluster Rook. Show classes + any unbound PVC.
+kubectl get storageclass 2>/dev/null || echo "(no storageclasses yet)"
+kubectl get pvc -A 2>/dev/null | grep -Ev 'Bound' || echo "(all PVCs Bound)"
 
 hr "virtual machines"
 kubectl get vm,vmi -A 2>/dev/null || echo "(kubevirt not installed yet)"

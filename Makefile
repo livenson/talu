@@ -64,7 +64,7 @@ lab-oci: ## push the working tree as an OCI artifact to the lab zot (reconcile-s
 lab-status: ## read lab reconcile/health back, rendered locally
 	@$(LABENV); bash dev/lab/status.sh
 
-lab-logs: ## stream logs for a workload:  make lab-logs C='-n rook-ceph deploy/rook-ceph-operator'
+lab-logs: ## stream logs for a workload:  make lab-logs C='-n kubevirt deploy/virt-operator'
 	@$(LABENV); KUBECONFIG="$$LAB_KUBECONFIG" kubectl logs -f $(C)
 
 lab-shell: ## ssh into the lab host
