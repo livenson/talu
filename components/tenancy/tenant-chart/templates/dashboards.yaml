@@ -1,0 +1,198 @@
+{{- if .Values.dashboards.enabled }}
+{{- $root := . }}
+{{- $ns := .Values.slug }}
+# Per-tenant dashboards — a self-contained, namespace-scoped Perses stack the tenant reaches only
+# through Pomerium. Data isolation is enforced by prom-label-proxy hardcoding namespace=<slug>
+# (`--label-value`), so no PromQL the tenant writes can escape their namespace. Everything carries
+# resource requests (the tenant ResourceQuota rejects request-less pods) and is GC'd with the tenant.
+#
+# 1) prom-label-proxy — always enforces namespace=<slug> on every query to the shared Prometheus.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: perses-plp
+  namespace: {{ $ns }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: perses-plp } }
+  template:
+    metadata:
+      labels:
+        app: perses-plp
+        {{- include "talu-tenant.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: plp
+          image: {{ .Values.dashboards.proxyImage | quote }}
+          args:
+            - --label=namespace
+            - --label-value={{ $ns }}
+            - --upstream={{ .Values.dashboards.prometheusUrl }}
+            - --insecure-listen-address=0.0.0.0:8080
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: perses-plp
+  namespace: {{ $ns }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  selector: { app: perses-plp }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+# 2) Per-tenant Perses server (its own instance = UI isolation; only this tenant's dashboard).
+apiVersion: perses.dev/v1alpha2
+kind: Perses
+metadata:
+  name: perses
+  namespace: {{ $ns }}
+  labels:
+    talu.io/perses: {{ $ns }}
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  image: {{ .Values.dashboards.persesImage | quote }}
+  containerPort: 8080
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  config:
+    database:
+      file:
+        folder: /perses
+        extension: yaml
+---
+# 2b) Dashboard-expose Service — label-driven, exactly like the ssh Service. The Pomerium route
+# renderer (route-sync / expose-vm.sh) turns every talu.io/dashboard-expose Service into an
+# `https://<ns>-dashboard.<domain>` route scoped to talu.io/allowed-users. Selects the Perses pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+  namespace: {{ $ns }}
+  labels:
+    talu.io/dashboard-expose: "true"
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+  annotations:
+    talu.io/allowed-users: {{ .Values.allowedUsers | join "," | quote }}
+spec:
+  selector:
+    app.kubernetes.io/name: perses
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+# 3) Datasource: Perses backend proxies to the tenant's prom-label-proxy (never directUrl).
+apiVersion: perses.dev/v1alpha2
+kind: PersesDatasource
+metadata:
+  name: tenant-prometheus
+  namespace: {{ $ns }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: {{ $ns }}
+  config:
+    default: true
+    display: { name: {{ printf "%s metrics" $ns | quote }} }
+    plugin:
+      kind: PrometheusDatasource
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: http://perses-plp.{{ $ns }}.svc.cluster.local:8080
+---
+# 4) The tenant dashboard — the SAME talu:tenant_* rules, scoped to this namespace by plp.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: overview
+  namespace: {{ $ns }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: {{ $ns }}
+  config:
+    display: { name: {{ printf "%s — Overview" $ns | quote }} }
+    duration: 1h
+    panels:
+      vms:
+        kind: Panel
+        spec:
+          display: { name: VMs }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec: { plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:tenant_vmi_count" } } }
+      vcpu:
+        kind: Panel
+        spec:
+          display: { name: Allocated vCPU }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec: { plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:tenant_vcpu_cores:allocated" } } }
+      mem:
+        kind: Panel
+        spec:
+          display: { name: Memory — allocated vs resident (bytes) }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec: { plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:tenant_memory_bytes:allocated" } } }
+            - kind: TimeSeriesQuery
+              spec: { plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:tenant_memory_bytes:resident" } } }
+      egress:
+        kind: Panel
+        spec:
+          display: { name: Egress rate (B/s) }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec: { plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:tenant_network_transmit_bytes:rate5m" } } }
+      quota:
+        kind: Panel
+        spec:
+          display: { name: Quota used vs hard }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec: { plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:tenant_quota_used" } } }
+            - kind: TimeSeriesQuery
+              spec: { plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:tenant_quota_hard" } } }
+    layouts:
+      - kind: Grid
+        spec:
+          items:
+            - { x: 0,  y: 0, width: 8,  height: 8, content: { $ref: "#/spec/panels/vms" } }
+            - { x: 8,  y: 0, width: 8,  height: 8, content: { $ref: "#/spec/panels/vcpu" } }
+            - { x: 16, y: 0, width: 8,  height: 8, content: { $ref: "#/spec/panels/mem" } }
+            - { x: 0,  y: 8, width: 12, height: 8, content: { $ref: "#/spec/panels/egress" } }
+            - { x: 12, y: 8, width: 12, height: 8, content: { $ref: "#/spec/panels/quota" } }
+---
+# 5) Defense in depth: only this tenant's Perses may reach its prom-label-proxy.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: perses-plp-pin
+  namespace: {{ $ns }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels: { app: perses-plp }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: perses }
+      toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]
+{{- end }}

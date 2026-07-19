@@ -74,6 +74,17 @@
       "type": "object",
       "properties": { "enabled": { "type": "boolean" } },
       "additionalProperties": false
+    },
+    "dashboards": {
+      "type": "object",
+      "description": "Per-tenant Perses dashboard + prom-label-proxy (reachable only via Pomerium); off by default.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "persesImage": { "type": "string" },
+        "proxyImage": { "type": "string" },
+        "prometheusUrl": { "type": "string" }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

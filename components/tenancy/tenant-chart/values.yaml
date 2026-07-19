@@ -34,8 +34,24 @@ vms: {}
 #       DB_PASSWORD=s3cr3t
 #       API_TOKEN=tok_abc
 
-# Optional per-tenant guardrails (rendered only when set).
-resourceQuota: {}          # e.g. { requests.memory: 8Gi, requests.cpu: "4", persistentvolumeclaims: "10" }
+# Per-tenant guardrails. resourceQuota is a DEFAULT (always rendered) so every tenant has a metering
+# envelope — `kube_resourcequota` then yields per-namespace utilisation for dashboards/accounting.
+# Override the numbers per tenant, or set `resourceQuota: {}` to opt out entirely.
+resourceQuota:
+  requests.cpu: "8"
+  requests.memory: 16Gi
+  requests.storage: 200Gi
+  persistentvolumeclaims: "10"
+  count/virtualmachines.kubevirt.io: "10"
+
+# Per-tenant dashboards: a namespace-scoped Perses + prom-label-proxy stack, reachable only via
+# Pomerium. Off by default (each enabled tenant adds ~2 small pods). Data isolation is enforced by
+# prom-label-proxy hardcoding namespace=<slug>, so the tenant can only ever see their own metrics.
+dashboards:
+  enabled: false
+  persesImage: docker.io/persesdev/perses:v0.53.0
+  proxyImage: quay.io/prometheuscommunity/prom-label-proxy:v0.11.1
+  prometheusUrl: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
 internalIpPool: ""         # tier-1 CiliumLoadBalancerIPPool CIDR for this tenant (empty = feature off)
 
 # Security groups: cloud-style ingress/egress allow-rules attached to VMs -> CiliumNetworkPolicy.

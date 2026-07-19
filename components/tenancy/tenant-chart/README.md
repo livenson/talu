@@ -9,10 +9,12 @@ join key any external orchestrator reconciles on.
 
 | Template | Objects | Purpose |
 |---|---|---|
-| `namespace.yaml` | `Namespace` (PSA privileged), optional `ResourceQuota` | the tenant boundary + caps |
+| `namespace.yaml` | `Namespace` (PSA privileged) + default `ResourceQuota` | the tenant boundary + metering envelope |
 | `vms.yaml` | per VM: cloud-init `Secret` (`secretRef`), `VirtualMachine`, ssh `Service`, `CiliumNetworkPolicy` | the VMs + their SSH plumbing |
 | `rbac.yaml` | `Role` + `RoleBinding` (tenant members) | scoped namespace access (needs apiserver OIDC to log in) |
 | `ippool.yaml` | `CiliumLoadBalancerIPPool` (when `internalIpPool` set) | tier-1 stable internal IPs |
+| `securitygroups.yaml` | `CiliumNetworkPolicy` per `securityGroups` entry | cloud-style ingress/egress rules |
+| `dashboards.yaml` | `prom-label-proxy` + per-tenant `Perses` + datasource + `PersesDashboard` + CNP (when `dashboards.enabled`) | a namespace-scoped metrics dashboard, Pomerium-fronted |
 
 The VM Service is labelled `talu.io/ssh-expose: "true"` and annotated `talu.io/allowed-users`, which
 the Pomerium route renderer (`components/platform/access/`, `dev/lab/expose-vm.sh`) turns into an
