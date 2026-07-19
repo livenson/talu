@@ -195,7 +195,7 @@ Components + gotchas:
     `cloudInitNoCloud.secretRef: {name: <vm>-userdata}` (the field is `secretRef`, NOT `userDataSecretRef` —
     strict decoding rejects the latter on v1.8.4) sources the whole cloud-init (CA trust + app secrets like
     `/etc/talu/app.env`) from a Secret whose key is `userdata`. Secrets stay out of the VM manifest; the
-    manager (Waldur) writes the labelled Secret. Static/boot-time; dynamic rotation would need a guest agent
+    orchestrator writes the labelled Secret. Static/boot-time; dynamic rotation would need a guest agent
     (KubeVirt `accessCredentials`, SSH-keys/passwords only) — out of scope here.
 22. **kubevirt-manager on the floating IP.** Web UI for VM lifecycle. Install:
     `kubectl apply -f .../releases/download/<latest>/bundled-<latest>.yaml` (namespace `kubevirt-manager`,
@@ -227,7 +227,7 @@ Components + gotchas:
       validated: alice→ubuntu, bob→web1; the PPL engine denies the wrong user both ways (403/200), and
       a `tenant-b` pod is Cilium-DROPPED from `vmfs`'s VM :22.
     - `vm-ssh.sh <vm> [principal]` is a thin wrapper over `ssh <principal>@<vm>@ssh.<domain> -p 23`.
-    - `gen-vm-manifests.sh <vm> <ns>` (pure, for Waldur) emits the K8s bundle — cloud-init **Secret**
+    - `gen-vm-manifests.sh <vm> <ns>` (pure, for an orchestrator) emits the K8s bundle — cloud-init **Secret**
       (CA trust + guest secrets), VM (`secretRef`), Service, pinning — + the `ssh://` route companion.
       `CA_PUBKEY` reads cm `pomerium/pomerium-user-ca`; `GUEST_SECRET` env injects `/etc/talu/app.env`.
     **Productionization** (see `components/platform/access/`): the tenant chart generates the per-VM
@@ -294,5 +294,5 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
 ## Repo conventions
 
 - `components/` = the product (don't edit to adopt). `environments/<env>/` = values only.
-- Manager-agnostic: nothing assumes Waldur (see `docs/integrations/`).
+- Orchestrator-agnostic: nothing assumes a specific orchestrator (see `docs/integrations/`).
 - `make kbuild` must pass (every overlay `kustomize build`s).

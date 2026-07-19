@@ -97,13 +97,13 @@ chain** (OIDC `bao login` → `ssh/sign/member` cert → `pomerium-cli tcp` tunn
 within session TTL; SSH works **only** via short-lived cert through the tunnel; cross-namespace
 reach to a VM port denied, through-Pomerium allowed; Hubble shows the denied attempts.
 
-### Stage 7 — Talu-native tenancy + **§10 integration-contract proof** (Waldur-free)
+### Stage 7 — Talu-native tenancy + **§10 integration-contract proof** (orchestrator-free)
 Prometheus + recording rules for the billing PromQL set; tuppr CRs for API-surface + CEL-gate
 validation only (real A/B upgrade deferred). The tenant chart is the tenant API: a tenant/VM
 is a values-PR under `environments/rocky9-sandbox/tenants/`, every object carrying
 `talu.io/project-uuid`; Headlamp + KubeVirt plugin behind a Pomerium admin route; kubelogin
 OIDC + group-scoped RBAC.
-**Integration proof (the Waldur-independence test):** with **no manager present**, exercise all
+**Integration proof (the orchestrator-independence test):** with **no orchestrator present**, exercise all
 four §10 verbs — write a labelled tenant+VM, watch DataVolume/VMI status to readiness, read
 usage from the Prometheus HTTP API, open a console via the virt-api subresource under the
 per-tenant SA.

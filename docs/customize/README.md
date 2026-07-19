@@ -57,6 +57,6 @@ If a component needs to behave differently per environment, the thing it branche
 - **IdP**: Keycloak is the default, but every consumer speaks generic OIDC; the
   manager→IdP group-sync sits behind an interface, so authentik/Kanidm/ZITADEL is a values
   swap, not a rewrite.
-- **External manager**: Talu runs Git-first with no manager. Waldur or any portal is an
-  external consumer of the contract in `docs/integrations/` — not something you configure
-  inside `components/`.
+- **External orchestrator**: Talu runs Git-first with no orchestrator. Any external system
+  (e.g. Waldur, a self-service portal, a CI pipeline) is an external consumer of the contract in
+  `docs/integrations/` — not something you configure inside `components/`.

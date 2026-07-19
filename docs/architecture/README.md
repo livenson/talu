@@ -6,11 +6,9 @@ there is no proprietary control plane. That makes it **API-first and orchestrato
 external billing/portal/automation system drives Talu through a stable contract, and Talu also runs
 fully standalone (Git-first, no orchestrator at all).
 
-- Design corpus (rationale, decisions): [`platform-context.md`](platform-context.md),
-  [`integrations.md`](integrations.md) (the component seams + orchestrator contract),
-  [`single-node-pilot-plan.md`](single-node-pilot-plan.md) (build order).
 - **Runtime flows with sequence diagrams:** [`flows.md`](flows.md).
-- Integrator's summary of the contract: [`../integrations/`](../integrations/).
+- Driving Talu from an external system: [`../integrations/`](../integrations/).
+- Operational notes & validated gotchas (the hard-won lab lessons): [`../../CLAUDE.md`](../../CLAUDE.md).
 
 ## The layers
 

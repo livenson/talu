@@ -7,9 +7,8 @@ platform such as **[Waldur](https://waldur.com)**, an internal self-service port
 pipeline. Nothing in Talu assumes any specific one.
 
 The runtime picture with a sequence diagram is in
-[`../architecture/flows.md`](../architecture/flows.md#the-integration-contract); the detailed seam
-spec is [`../architecture/integrations.md`](../architecture/integrations.md). This page is the
-integrator's summary.
+[`../architecture/flows.md`](../architecture/flows.md#the-integration-contract), and the component
+architecture in [`../architecture/`](../architecture/). This page is the integrator's summary.
 
 ## The contract — four verbs
 
