@@ -1,7 +1,8 @@
-# route-sync — the one cross-cutting reconcile no chart/HelmRelease can own: the Pomerium ssh:// routes
-# live in a shared config blob, so a periodic job renders them from every talu.io/ssh-expose Service
-# (base HTTP routes + SSH-server block + one ssh://<vm> route each, allow-list from the Service's
-# talu.io/allowed-users annotation). This is dev/lab/expose-vm.sh step-2, promoted in-cluster.
+# route-sync — the one cross-cutting reconcile no chart/HelmRelease can own: the Pomerium routes live
+# in a shared config blob, so a periodic job renders them from labelled Services — one ssh://<vm> route
+# per talu.io/ssh-expose Service and one https://<ns>-dashboard route per talu.io/dashboard-expose
+# Service (allow-list from each Service's talu.io/allowed-users annotation), on top of the base HTTP
+# routes + SSH-server block. This is dev/lab/expose-vm.sh step-2, promoted in-cluster.
 # (A watch-based controller — or Pomerium Ingress mode making routes objects — is the cleaner long-term.)
 apiVersion: v1
 kind: ServiceAccount
@@ -60,10 +61,18 @@ spec:
                       to: http://dex.identity.svc:5556
                       allow_public_unauthenticated_access: true
                       preserve_host_header: true
+                    - from: https://whoami.$D
+                      to: http://whoami.pomerium.svc:80
+                      allowed_users: [alice@talu.local]
                     - from: https://vms.$D
                       to: http://kubevirt-manager.kubevirt-manager.svc.cluster.local:8080
                       allowed_users: [alice@talu.local]
+                      allow_websockets: true
+                    - from: https://perses.$D
+                      to: http://talu.monitoring.svc.cluster.local:8080
+                      allowed_users: [alice@talu.local]
                       allow_websockets: true"
+                  # ssh://<vm> routes from talu.io/ssh-expose Services
                   while read -r vm svc ns au _; do
                     [ -z "$vm" ] && continue
                     au=${au:-alice@talu.local}
@@ -73,6 +82,17 @@ spec:
                       policy: [{ allow: { and: [{ email: { in: [${au}] } }] } }]"
                   done < <(kubectl get svc -A -l talu.io/ssh-expose=true \
                     -o jsonpath='{range .items[*]}{.metadata.labels.talu\.io/vm}{" "}{.metadata.name}{" "}{.metadata.namespace}{" "}{.metadata.annotations.talu\.io/allowed-users}{"\n"}{end}')
+                  # https://<ns>-dashboard.<domain> routes from talu.io/dashboard-expose Services
+                  while read -r svc ns au _; do
+                    [ -z "$svc" ] && continue
+                    au=${au:-alice@talu.local}
+                    CFG="${CFG}
+                    - from: https://${ns}-dashboard.${D}
+                      to: http://${svc}.${ns}.svc.cluster.local:8080
+                      allowed_users: [${au}]
+                      allow_websockets: true"
+                  done < <(kubectl get svc -A -l talu.io/dashboard-expose=true \
+                    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.namespace}{" "}{.metadata.annotations.talu\.io/allowed-users}{"\n"}{end}')
                   OLD=$(kubectl -n pomerium get cm pomerium-config -o jsonpath='{.data.config\.yaml}' 2>/dev/null || true)
                   if [ "$CFG" != "$OLD" ]; then
                     kubectl -n pomerium create cm pomerium-config --from-literal=config.yaml="$CFG" \

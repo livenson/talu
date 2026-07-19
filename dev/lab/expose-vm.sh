@@ -70,6 +70,10 @@ routes:
   - from: https://vms.${DOMAIN}
     to: http://kubevirt-manager.kubevirt-manager.svc.cluster.local:8080
     allowed_users: [${ALLOWED_USERS}]
+    allow_websockets: true
+  - from: https://perses.${DOMAIN}
+    to: http://talu.monitoring.svc.cluster.local:8080
+    allowed_users: [${ALLOWED_USERS}]
     allow_websockets: true"
 # one ssh:// route per exposed VM (declarative). Each route's allow-list comes from the
 # Service's talu.io/allowed-users annotation (per-tenant policy), not a global default.
@@ -86,6 +90,18 @@ while read -r vm svc ns au _; do
                 in: [${au}]"
 done < <(kubectl get svc -A -l talu.io/ssh-expose=true \
            -o jsonpath='{range .items[*]}{.metadata.labels.talu\.io/vm}{" "}{.metadata.name}{" "}{.metadata.namespace}{" "}{.metadata.annotations.talu\.io/allowed-users}{"\n"}{end}')
+
+# one https://<ns>-dashboard route per talu.io/dashboard-expose Service (the tenant's Perses).
+while read -r svc ns au _; do
+  [ -z "$svc" ] && continue
+  au=${au:-$ALLOWED_USERS}
+  CFG="${CFG}
+  - from: https://${ns}-dashboard.${DOMAIN}
+    to: http://${svc}.${ns}.svc.cluster.local:8080
+    allowed_users: [${au}]
+    allow_websockets: true"
+done < <(kubectl get svc -A -l talu.io/dashboard-expose=true \
+           -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.namespace}{" "}{.metadata.annotations.talu\.io/allowed-users}{"\n"}{end}')
 
 kubectl -n "$POM_NS" create configmap pomerium-config --from-literal=config.yaml="$CFG" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
