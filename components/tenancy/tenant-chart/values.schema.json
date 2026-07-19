@@ -28,6 +28,10 @@
     "defaults": {
       "type": "object",
       "properties": {
+        "source": { "type": "string", "enum": ["dataSource", "containerDisk"] },
+        "dataSource": { "type": "string" },
+        "dataSourceNamespace": { "type": "string" },
+        "rootDiskSize": { "type": "string" },
         "image": { "type": "string" },
         "memory": { "type": "string" },
         "principal": { "type": "string" }
@@ -41,6 +45,10 @@
         "type": "object",
         "properties": {
           "principal": { "type": "string" },
+          "source": { "type": "string", "enum": ["dataSource", "containerDisk"] },
+          "dataSource": { "type": "string" },
+          "dataSourceNamespace": { "type": "string" },
+          "rootDiskSize": { "type": "string" },
           "image": { "type": "string" },
           "memory": { "type": "string" },
           "guestSecrets": { "type": "string" }

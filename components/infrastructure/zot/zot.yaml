@@ -1,0 +1,57 @@
+# zot — the in-cluster OCI registry that holds Talu golden-image containerDisks. CI pushes signed
+# images here (in-cluster over the ClusterIP; from the lab host over a NodePort — the host reaches the
+# talos-docker node's eth0 across the podman bridge and Cilium's eBPF NodePort forwards it). CDI
+# DataImportCrons (components/infrastructure/cdi/) pull from it. Add a NodePort to the Service below
+# (or front it with cert-manager TLS) if you need to push from off-cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zot-config
+data:
+  config.json: |
+    { "storage": { "rootDirectory": "/var/lib/zot" },
+      "http": { "address": "0.0.0.0", "port": "5000" },
+      "log": { "level": "warn" } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zot-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 50Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zot
+  labels: { app: zot }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: zot } }
+  template:
+    metadata: { labels: { app: zot } }
+    spec:
+      containers:
+        - name: zot
+          image: ghcr.io/project-zot/zot-linux-amd64:v2.1.2
+          args: ["serve", "/etc/zot/config.json"]
+          ports: [{ containerPort: 5000 }]
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          volumeMounts:
+            - { name: config, mountPath: /etc/zot }
+            - { name: data, mountPath: /var/lib/zot }
+      volumes:
+        - { name: config, configMap: { name: zot-config } }
+        - { name: data, persistentVolumeClaim: { claimName: zot-data } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zot
+  labels: { app: zot }
+spec:
+  selector: { app: zot }
+  ports: [{ name: http, port: 5000, targetPort: 5000 }]

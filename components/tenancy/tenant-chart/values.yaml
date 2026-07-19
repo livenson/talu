@@ -19,7 +19,18 @@ sshUserCaPubKey: ""
 
 # Defaults applied to each VM unless the per-VM entry overrides them.
 defaults:
-  image: quay.io/containerdisks/ubuntu:24.04   # OpenSSH guest (validates certs)
+  # Root disk source (standalone-first: default is containerDisk, which needs no catalog):
+  #   containerDisk -> ephemeral, boots straight from a registry image; reset on restart. Works out of
+  #                    the box (a bare install has no golden-image catalog). Patched by bumping the tag.
+  #   dataSource    -> OPT-IN. Persistent DataVolume cloned from a golden-image DataSource. New VMs get
+  #                    the latest patched image automatically (a CDI DataImportCron rolls the DataSource),
+  #                    and the disk survives reboot so bootc self-update sticks. Requires the golden-image
+  #                    catalog (components/infrastructure/cdi/ + zot). Set at the site or per VM.
+  source: containerDisk
+  image: quay.io/containerdisks/ubuntu:24.04   # used when source=containerDisk (OpenSSH guest)
+  dataSource: ubuntu                           # DataSource name (used when source=dataSource)
+  dataSourceNamespace: golden-images
+  rootDiskSize: 10Gi                           # persistent root PVC size (source=dataSource)
   memory: 1536Mi
   principal: talu                              # guest OS user / cert principal
 

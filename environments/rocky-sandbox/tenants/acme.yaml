@@ -8,8 +8,10 @@ allowedUsers: [alice@talu.local]
 # (HelmRelease valuesFrom ConfigMap pomerium/pomerium-user-ca) so it's never duplicated/stale.
 sshUserCaPubKey: ""
 
+# Simplest tenant: ephemeral containerDisk VMs (the chart default — no golden-image catalog needed).
+# For persistent, auto-patching, bootc-self-updating disks + per-tenant dashboards, see beta.yaml.
 defaults:
-  image: quay.io/containerdisks/ubuntu:24.04
+  image: quay.io/containerdisks/ubuntu:24.04   # source defaults to containerDisk
   memory: 1536Mi
   principal: talu
 

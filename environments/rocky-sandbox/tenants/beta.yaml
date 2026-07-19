@@ -1,0 +1,34 @@
+# Tenant "beta" — the full-featured example: persistent auto-patching golden-image disks + per-tenant
+# dashboards. Requires the golden-image catalog (components/infrastructure/cdi/ + zot) and the monitoring
+# stack. Contrast with acme.yaml (the minimal, catalog-free, ephemeral-containerDisk tenant).
+projectUuid: "bbbbbbbb-2222-3333-4444-555555555555"
+slug: beta
+allowedUsers: [bob@talu.local]
+sshUserCaPubKey: ""            # injected at reconcile time from cm pomerium/pomerium-user-ca
+
+defaults:
+  # Persistent root disk cloned from a golden-image DataSource: new VMs always get the latest patched
+  # image (the DataImportCron rolls the DataSource), and the disk persists so bootc self-update sticks.
+  source: dataSource
+  dataSource: centos-bootc     # a Talu-built bootc image (or "ubuntu" for the upstream base)
+  dataSourceNamespace: golden-images
+  rootDiskSize: 15Gi
+  memory: 2Gi
+  principal: talu
+
+vms:
+  web1: {}
+  # A per-VM override can pin a different source/image, e.g. an ephemeral scratch box:
+  # scratch1:
+  #   source: containerDisk
+  #   image: quay.io/containerdisks/fedora:40
+
+resourceQuota:
+  requests.cpu: "8"
+  requests.memory: 16Gi
+  requests.storage: 200Gi
+
+# Per-tenant Perses dashboards (overview + per-VM detail), reachable only via Pomerium at
+# https://beta-dashboard.<domain>, data hard-scoped to this namespace by prom-label-proxy.
+dashboards:
+  enabled: true

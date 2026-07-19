@@ -1,8 +1,28 @@
-# images — golden image pipeline
+# images — golden image pipeline (bootc / image mode)
 
-Containerfile-shaped builds (bootc-shaped): base cloud image + qemu-guest-agent +
-cloud-init + serial console + (baked, disabled) bao-agent + platform CA root +
-sshd `TrustedUserCAKeys`. **Bake capabilities, inject identity** — never bake a
-secret. CI runs `virt-sparsify` + `cosign` and pushes a containerDisk to zot; a
-`DataImportCron` imports on digest change and rolls the DataSource pointer.
-Base image + registry URL are build inputs, not baked constants.
+Golden images are **bootc** (image-mode) OCI images: the OS *is* a container. **Bake capabilities,
+inject identity** — the image carries qemu-guest-agent, cloud-init, OpenSSH, and the sshd
+`TrustedUserCAKeys` directive; per-tenant identity (the Pomerium CA pubkey, guest secrets) is injected
+at **boot** via cloud-init from a Secret, never baked. Because the OS is a container, a running VM
+built from the image **self-updates from the registry** (bootc: pull new tag → stage → (soft-)reboot →
+activate, with rollback).
+
+- **`<os>/Containerfile`** — the bake (`FROM` an upstream bootc base; `centos-bootc/` is the reference).
+  Base image is a build `ARG`, not a baked constant.
+- **`build-bootc.sh <dir> <containerdisk-ref>`** — builds the bootc app image, runs `bootc-image-builder`
+  → qcow2 (**rootful `--privileged`, no `/dev/kvm` needed** — loopback only), `virt-sparsify`s, and wraps
+  it into a KubeVirt **containerDisk**. Runs on any podman host (CI or the lab host), not inside the cluster.
+
+## Delivery (how a build reaches VMs)
+
+CI pushes the signed containerDisk to **zot** (`components/infrastructure/zot/`); a CDI
+**`DataImportCron`** (`components/infrastructure/cdi/catalog.yaml`) polls it, imports each new digest, and
+rolls a **`managedDataSource`**. Tenant VMs clone from that DataSource (tenant chart `source: dataSource`,
+`dataVolumeTemplate → sourceRef`), so **a new VM always boots the latest patched image** with no spec
+change; **running VMs self-update via bootc**. Freshness is on the operator dashboard
+(`talu:image_outdated` ← `kubevirt_cdi_dataimportcron_outdated`). Full design + phasing:
+[`../image-automation-plan.md`](../image-automation-plan.md).
+
+> Validated on the no-KVM lab: `centos-bootc` built on the host (no nested virt) → containerDisk → zot →
+> `DataImportCron` → `DataSource` → a VM boots the self-built image (same- and cross-namespace clone).
+> Deferred (Phase 2+): CI pipeline (schedule/CVE trigger, Trivy scan, cosign sign, `testing`→`stable`).

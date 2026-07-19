@@ -10,7 +10,7 @@ join key any external orchestrator reconciles on.
 | Template | Objects | Purpose |
 |---|---|---|
 | `namespace.yaml` | `Namespace` (PSA privileged) + default `ResourceQuota` | the tenant boundary + metering envelope |
-| `vms.yaml` | per VM: cloud-init `Secret` (`secretRef`), `VirtualMachine`, ssh `Service`, `CiliumNetworkPolicy` | the VMs + their SSH plumbing |
+| `vms.yaml` | per VM: cloud-init `Secret` (`secretRef`), `VirtualMachine` (+ `DataVolume` when `source: dataSource`), ssh `Service`, `CiliumNetworkPolicy` | the VMs + their disk + SSH plumbing |
 | `rbac.yaml` | `Role` + `RoleBinding` (tenant members) | scoped namespace access (needs apiserver OIDC to log in) |
 | `ippool.yaml` | `CiliumLoadBalancerIPPool` (when `internalIpPool` set) | tier-1 stable internal IPs |
 | `securitygroups.yaml` | `CiliumNetworkPolicy` per `securityGroups` entry | cloud-style ingress/egress rules |
@@ -19,6 +19,18 @@ join key any external orchestrator reconciles on.
 The VM Service is labelled `talu.io/ssh-expose: "true"` and annotated `talu.io/allowed-users`, which
 the Pomerium route renderer (`components/platform/access/`, `dev/lab/expose-vm.sh`) turns into an
 `ssh://<vm>` route scoped to the tenant's members. **SSH is Pomerium Native SSH** — no OpenBao.
+
+## Root disk source (`defaults.source`, per-VM overridable)
+
+- **`containerDisk`** (default) — ephemeral, boots straight from a registry image (`image:`); reset on
+  restart. Works with **no golden-image catalog** (standalone-first). See `tenants/acme.yaml`.
+- **`dataSource`** — opt-in. Persistent `DataVolume` cloned from a golden-image **`DataSource`**
+  (`dataSource`/`dataSourceNamespace`, size `rootDiskSize`). New VMs get the latest patched image
+  automatically (a CDI `DataImportCron` rolls the DataSource), and the disk persists so **bootc
+  self-update** sticks. Requires `components/infrastructure/cdi/` + `zot`. See `tenants/beta.yaml`.
+
+Set `dashboards.enabled: true` to render a per-tenant Perses + prom-label-proxy stack (overview + per-VM
+detail), reachable only via Pomerium — see the `dashboards.yaml` row above and `tenants/beta.yaml`.
 
 ## Render / apply
 

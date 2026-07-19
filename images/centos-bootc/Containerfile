@@ -1,0 +1,19 @@
+# Talu golden image — bootc / image mode. Bake capabilities, never identity.
+# Base is an upstream bootc image (CentOS Stream 9 bootc, the bootc-image-builder reference base —
+# an OpenSSH guest, so Pomerium cert-auth works). Per-tenant identity (SSH User CA pubkey, guest
+# secrets) is injected at BOOT via cloud-init from a Kubernetes Secret — never baked here.
+#
+# Because the OS is a container, a running VM built from this image self-updates from the registry
+# (bootc): pull new tag -> stage -> (soft-)reboot -> activate, with rollback.
+ARG BASE=quay.io/centos-bootc/centos-bootc:stream9
+FROM ${BASE}
+
+# Capabilities: guest agent (KubeVirt integration), cloud-init (identity injection), OpenSSH.
+RUN dnf -y install qemu-guest-agent cloud-init openssh-server && dnf clean all && \
+    systemctl enable qemu-guest-agent sshd cloud-init
+
+# Trust the Pomerium SSH User CA. The CA *public key itself* is written to /etc/ssh/talu_ca.pub at
+# boot by cloud-init (from the tenant's userdata Secret) — this only bakes the sshd directive.
+RUN install -d -m0755 /etc/ssh/sshd_config.d && \
+    printf 'TrustedUserCAKeys /etc/ssh/talu_ca.pub\nPasswordAuthentication no\n' \
+      > /etc/ssh/sshd_config.d/60-talu-ca.conf

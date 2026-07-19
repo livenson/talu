@@ -5,6 +5,10 @@
 {{- $principal := $vm.principal | default $root.Values.defaults.principal -}}
 {{- $image := $vm.image | default $root.Values.defaults.image -}}
 {{- $memory := $vm.memory | default $root.Values.defaults.memory -}}
+{{- $source := $vm.source | default $root.Values.defaults.source -}}
+{{- $ds := $vm.dataSource | default $root.Values.defaults.dataSource -}}
+{{- $dsNs := $vm.dataSourceNamespace | default $root.Values.defaults.dataSourceNamespace -}}
+{{- $rootSize := $vm.rootDiskSize | default $root.Values.defaults.rootDiskSize -}}
 ---
 # Cloud-init lives in a Secret (guest secrets stay out of the VM manifest; the manager writes it).
 apiVersion: v1
@@ -51,6 +55,22 @@ metadata:
     {{- include "talu-tenant.labels" $root | nindent 4 }}
 spec:
   runStrategy: Always
+  {{- if eq $source "dataSource" }}
+  # Persistent root disk cloned from the golden-image DataSource (CDI). New VMs get the latest patched
+  # image automatically (the DataImportCron rolls the DataSource); the disk persists → bootc self-update.
+  dataVolumeTemplates:
+    - metadata:
+        name: {{ $name }}-root
+        labels:
+          {{- include "talu-tenant.labels" $root | nindent 10 }}
+      spec:
+        sourceRef:
+          kind: DataSource
+          name: {{ $ds | quote }}
+          namespace: {{ $dsNs | quote }}
+        storage:
+          resources: { requests: { storage: {{ $rootSize }} } }
+  {{- end }}
   template:
     metadata:
       labels:
@@ -60,14 +80,19 @@ spec:
       domain:
         devices:
           disks:
-            - { name: containerdisk, disk: { bus: virtio } }
+            - { name: rootdisk, disk: { bus: virtio } }
             - { name: cloudinit, disk: { bus: virtio } }
           interfaces: [{ name: default, masquerade: {} }]
         resources: { requests: { memory: {{ $memory }} } }
       networks: [{ name: default, pod: {} }]
       volumes:
-        - name: containerdisk
+        {{- if eq $source "dataSource" }}
+        - name: rootdisk
+          dataVolume: { name: {{ $name }}-root }
+        {{- else }}
+        - name: rootdisk
           containerDisk: { image: {{ $image }} }
+        {{- end }}
         - name: cloudinit
           cloudInitNoCloud:
             secretRef: { name: {{ $name }}-userdata }

@@ -1,0 +1,65 @@
+# The golden-image catalog — the set of CDI DataImportCrons + the DataSources they roll. Each cron
+# polls a registry, imports new versions (importsToKeep for rollback, GC Outdated), and points a
+# managedDataSource at the newest. Tenant VMs clone from these DataSources (chart sourceRef), so a new
+# VM always gets the latest patched image with no spec change. (The CDI *operator* is installed by the
+# kubevirt ansible role; this component is the catalog on top.)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: golden-images
+  labels:
+    app.kubernetes.io/part-of: talu
+    pod-security.kubernetes.io/enforce: privileged   # CDI importer/clone pods
+---
+# Let any tenant namespace clone the shared, read-only golden images (cross-namespace DataVolume clone).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: talu-golden-clone }
+rules:
+  - apiGroups: [cdi.kubevirt.io]
+    resources: [datavolumes/source]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: allow-clone-golden, namespace: golden-images }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: talu-golden-clone }
+subjects:
+  - { kind: Group, name: "system:serviceaccounts", apiGroup: rbac.authorization.k8s.io }
+---
+# Upstream base — auto-maintained cloud image; patches ride the upstream release cadence.
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataImportCron
+metadata: { name: ubuntu, namespace: golden-images }
+spec:
+  schedule: "0 */6 * * *"
+  managedDataSource: ubuntu
+  importsToKeep: 2
+  garbageCollect: Outdated
+  template:
+    spec:
+      source: { registry: { url: "docker://quay.io/containerdisks/ubuntu:24.04", pullMethod: pod } }
+      storage:
+        accessModes: [ReadWriteOnce]
+        volumeMode: Filesystem
+        resources: { requests: { storage: 10Gi } }
+---
+# Talu-built bootc golden image — CI pushes the signed containerDisk to zot; this rolls the DataSource
+# on each new digest, and running VMs built from it also self-update via bootc from the same registry.
+# NOTE: zot is HTTP on the lab → CDIConfig.spec.config.insecureRegistries must list it (or front zot
+# with cert-manager TLS in production).
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataImportCron
+metadata: { name: centos-bootc, namespace: golden-images }
+spec:
+  schedule: "0 */6 * * *"
+  managedDataSource: centos-bootc
+  importsToKeep: 2
+  garbageCollect: Outdated
+  template:
+    spec:
+      source: { registry: { url: "docker://zot.golden-images.svc:5000/golden/centos-bootc:stable", pullMethod: pod } }
+      storage:
+        accessModes: [ReadWriteOnce]
+        volumeMode: Filesystem
+        resources: { requests: { storage: 10Gi } }
