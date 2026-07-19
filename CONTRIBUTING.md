@@ -41,4 +41,4 @@ with SOPS/age or come from OpenBao at runtime.
 
 ## License
 
-By contributing you agree your contributions are licensed under Apache-2.0.
+By contributing you agree your contributions are licensed under MIT.

@@ -39,7 +39,7 @@ composable ↔ turnkey/batteries-included**. Talu deliberately occupies "K8s-nat
 
 | Solution | Substrate | Control API | Multi-tenancy | Bundled portal/UI | GitOps-native | Footprint | Model / license |
 |---|---|---|---|---|---|---|---|
-| **Talu** | KubeVirt on Talos + Cilium + CephFS | **K8s API + Prometheus** (no proprietary API) | namespace + `HelmRelease` tenant, per-tenant Cilium policy | **none** (orchestrator-agnostic; optional kubevirt-manager) | **yes** (Flux) | **lean** | OSS clone-and-adjust (Apache-2.0) |
+| **Talu** | KubeVirt on Talos + Cilium + CephFS | **K8s API + Prometheus** (no proprietary API) | namespace + `HelmRelease` tenant, per-tenant Cilium policy | **none** (orchestrator-agnostic; optional kubevirt-manager) | **yes** (Flux) | **lean** | OSS clone-and-adjust (MIT) |
 | **Cozystack** | KubeVirt on K8s | K8s **aggregation apiserver** (high-level kinds) + dashboard | `Tenant` CRD (nestable), HelmRelease-backed | yes (dashboard) | yes (Flux) | medium — full PaaS | OSS (Apache-2.0) |
 | **Harvester** | KubeVirt on its own OS (RKE2) + Longhorn | K8s API + Harvester UI / Rancher | Rancher projects/namespaces | yes (built-in UI) | partial | turnkey **HCI appliance** (bare metal) | OSS (Apache-2.0) |
 | **OpenShift Virtualization** | KubeVirt on OpenShift | OpenShift API + web console | OpenShift projects | yes (console) | via OpenShift GitOps (Argo) | large — enterprise distro | commercial (OKD community) |

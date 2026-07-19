@@ -63,4 +63,4 @@ The cluster lives on the lab VM; you edit locally and sync:
 
 ## License
 
-[Apache-2.0](LICENSE).
+[MIT](LICENSE) © Ilja Livenson.
