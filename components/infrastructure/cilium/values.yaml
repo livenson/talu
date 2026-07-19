@@ -51,4 +51,4 @@ operator:
   replicas: 1               # environment value; example bumps to 2
 
 # MTU is intentionally omitted here — it is an environment value. The sandbox pins it
-# under the host's mandated 1400 (see environments/rocky9-sandbox/cilium-values.yaml).
+# under the host's mandated 1400 (see environments/rocky-sandbox/cilium-values.yaml).

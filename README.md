@@ -15,17 +15,17 @@ self-service portal, or a CI pipeline — **not** as a dependency.
 
 > Status: **early scaffold.** The architecture is settled (see `docs/architecture/`); the
 > component manifests are being implemented per the single-node pilot plan. The
-> remote-lab dev loop and the Rocky9 validation path are runnable today.
+> remote-lab dev loop and the Rocky 10 validation path are runnable today.
 
 ## Repository layout
 
 | Path | What it is |
 |---|---|
 | `components/` | **The product.** Reusable, parameterized bases (infrastructure, platform, tenancy). *You don't edit these to adopt.* |
-| `environments/` | **Your config.** Values-only overlays. Copy `example/` to your own site; `rocky9-sandbox/` is the no-KVM validation overlay. |
+| `environments/` | **Your config.** Values-only overlays. Copy `example/` to your own site; `rocky-sandbox/` is the no-KVM validation overlay. |
 | `docs/` | `architecture/` (what & why), `install/`, `customize/` (the boundary + fork-and-track), `integrations/`, `operations/`, `development/`. |
 | `images/` | Golden image pipeline (bake capabilities, inject identity). |
-| `bootstrap/` | Host installers a newcomer runs (`rocky9/`). |
+| `bootstrap/` | Host installers a newcomer runs (`rocky/`). |
 | `dev/` | Contributor tooling: `talos/` patches, `loopdev/`, `lab/` (the remote-lab dev loop). |
 | `ci/`, `examples/` | Forge-agnostic pipeline templates; example tenant/VM values. |
 
@@ -36,12 +36,13 @@ a new Talu release is a clean `git merge`. See [`docs/customize/`](docs/customiz
 ## Try it on one cloud VM (no KVM required)
 
 Talu's quick-mode runs the whole stack on a single Linux VM with **no nested
-virtualization** — Talos-in-Docker + KubeVirt software emulation + Rook Ceph on loop
-devices. It validates correctness (GitOps, identity, storage, the tenant API), not
-performance. You drive the remote lab from your laptop over an SSH tunnel:
+virtualization** — Talos-in-container + KubeVirt software emulation + external CephFS storage.
+It validates correctness (GitOps, identity, storage, the tenant API), not performance
+(validated on **Rocky Linux 10.1**, OpenStack). You drive the remote lab from your laptop over
+an SSH tunnel:
 
 ```sh
-# 1. point env.sh at your VM (defaults to the project's Rocky9 lab)
+# 1. point env.sh at your VM (defaults to the project's Rocky 10 lab)
 #    LAB_SSH=you@your-vm  ...
 # 2. prep the host + create the cluster + open the tunnel + sync
 make try
@@ -50,7 +51,7 @@ make lab-status
 ```
 
 `make help` lists every target. The full walk-through and exit criteria are in
-[`docs/development/rocky9-validation-plan.md`](docs/development/rocky9-validation-plan.md).
+[`docs/development/validation-plan.md`](docs/development/validation-plan.md).
 
 ## The remote-lab dev loop
 

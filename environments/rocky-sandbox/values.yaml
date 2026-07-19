@@ -1,10 +1,10 @@
-# rocky9-sandbox — the no-KVM quick-mode overlay (throwaway validation on one cloud VM).
-# See docs/development/rocky9-validation-plan.md.
+# rocky-sandbox — the no-KVM quick-mode overlay (throwaway validation on one cloud VM).
+# See docs/development/validation-plan.md.
 kubevirt:
   useEmulation: true          # no /dev/kvm on the lab VM -> TCG software emulation
   guestArch: amd64
 cilium:
-  mtu: 1350                   # must stay under the host's mandated 1400 (OpenStack cloud daemon.json)
+  mtu: 1350                   # must stay under the host's mandated 1400 (the mandated host daemon.json)
   ipamMode: kubernetes        # PINNED at bootstrap — immutable on a live cluster
 rook:
   osdCount: 2                 # loop devices (dev/loopdev)

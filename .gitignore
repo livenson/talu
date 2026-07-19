@@ -1,6 +1,10 @@
 # Local lab state — kubeconfig, talosconfig, SSH control socket (fetched per developer).
 /.lab/
 
+# Real lab target (site-specific IP/host). Copy the .example and fill in — never commit.
+/env.sh
+/ansible/inventory.ini
+
 # Decrypted secrets must never be committed. Only *.example stubs live in the repo.
 secrets.yaml
 *.secret.yaml

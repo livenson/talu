@@ -1,6 +1,6 @@
 # Installing Talu on your own hardware
 
-> The zero-hardware way to try Talu is the [Rocky9 quick-mode](../development/rocky9-validation-plan.md).
+> The zero-hardware way to try Talu is the [Rocky 10 quick-mode](../development/validation-plan.md).
 > This page is the outline for a real (KVM-capable) deployment; it fills in as components land.
 
 Decide-once items (Phase 2 of the pilot plan — annoying to change later):

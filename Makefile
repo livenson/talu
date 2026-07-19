@@ -1,6 +1,6 @@
 # Talu — developer entrypoints.
 #
-# Local development runs against a REMOTE lab (the Rocky9 sandbox). The cluster lives
+# Local development runs against a REMOTE lab (the Rocky 10 sandbox). The cluster lives
 # on the lab host; you drive it from your laptop over an SSH tunnel.
 #
 #   make lab-push     rsync repo to the lab + run host bootstrap (Stage 0)
@@ -11,10 +11,11 @@
 #   make try          one-shot: push + up + tunnel + sync
 #   make down         destroy the lab cluster;  make lab-down  closes the tunnel
 #
-# Config lives in env.sh (LAB_SSH, ports, overlay). Override in your shell to retarget.
+# Config lives in env.sh (gitignored, site-specific). Copy env.sh.example -> env.sh and edit,
+# or override any LAB_* var in your shell. Falls back to env.sh.example (generic defaults).
 
 SHELL := /usr/bin/env bash
-LABENV := set -a && source ./env.sh && set +a
+LABENV := set -a && source ./$$([ -f env.sh ] && echo env.sh || echo env.sh.example) && set +a
 SSH     = ssh -S "$$LAB_SSH_SOCKET" "$$LAB_SSH"
 # Prefer standalone kustomize; fall back to the one built into kubectl.
 KUSTOMIZE := $(shell command -v kustomize >/dev/null 2>&1 && echo kustomize || echo 'kubectl kustomize')
@@ -36,7 +37,7 @@ install: ## full no-KVM lab install via Ansible (idempotent); TAGS=storage to sl
 lab-push: ## rsync repo to the lab and run host bootstrap (Stage 0)
 	@$(LABENV); \
 	  rsync -az --delete --exclude '.git' --exclude '.lab' ./ "$$LAB_SSH:$$LAB_REMOTE_DIR/"; \
-	  $(SSH) "cd $$LAB_REMOTE_DIR && sudo -E bash bootstrap/rocky9/bootstrap.sh"
+	  $(SSH) "cd $$LAB_REMOTE_DIR && sudo -E bash bootstrap/rocky/bootstrap.sh"
 
 up: ## create the Talos-in-Docker cluster on the lab
 	@$(LABENV); \
@@ -44,7 +45,7 @@ up: ## create the Talos-in-Docker cluster on the lab
 
 down: ## destroy the lab cluster (and loop devices); keeps Docker/daemon.json
 	@$(LABENV); \
-	  $(SSH) "cd $$LAB_REMOTE_DIR && bash bootstrap/rocky9/teardown.sh" || true
+	  $(SSH) "cd $$LAB_REMOTE_DIR && bash bootstrap/rocky/teardown.sh" || true
 
 ## ---- remote dev loop -----------------------------------------------------
 

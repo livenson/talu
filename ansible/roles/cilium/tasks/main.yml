@@ -6,7 +6,7 @@
     dest: "/tmp/{{ item.dest }}"
   loop:
     - { src: "components/infrastructure/cilium/values.yaml", dest: "cilium-base.yaml" }
-    - { src: "environments/rocky9-sandbox/cilium-values.yaml", dest: "cilium-env.yaml" }
+    - { src: "environments/rocky-sandbox/cilium-values.yaml", dest: "cilium-env.yaml" }
 
 - name: Add Cilium helm repo
   kubernetes.core.helm_repository: { name: cilium, repo_url: "https://helm.cilium.io" }

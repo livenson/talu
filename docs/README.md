@@ -6,7 +6,7 @@
 | [install/](install/) | deploying Talu on your own (KVM) hardware |
 | [customize/](customize/) | the customization boundary + tracking upstream |
 | [integrations/](integrations/) | driving Talu from an external orchestrator (e.g. Waldur, a portal, or CI) |
-| [development/](development/) | the Rocky9 quick-mode validation path + dev loop |
+| [development/](development/) | the Rocky 10 quick-mode validation path + dev loop |
 | [operations/](operations/) | runbooks |
 
 **Start here:** [architecture/](architecture/) for the component diagram, then

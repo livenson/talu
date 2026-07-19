@@ -1,4 +1,4 @@
-# rook-ceph-cluster Helm values — rocky9-sandbox (single node, loop-backed OSDs).
+# rook-ceph-cluster Helm values — rocky-sandbox (single node, loop-backed OSDs).
 # SAFETY: useAllDevices:false + explicit loop0/loop1 so Rook NEVER touches the host OS disk (sda).
 operatorNamespace: rook-ceph
 toolbox:

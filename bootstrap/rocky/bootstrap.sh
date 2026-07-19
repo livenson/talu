@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Talu lab host prep — Rocky 9/10 on OpenStack, no /dev/kvm (quick-mode path).
+# Talu lab host prep — Rocky 10 on OpenStack, no /dev/kvm (quick-mode path).
 # Idempotent. Run ON the lab host (via `make lab-push`, or scp + ssh).
 #
-# STAGE 0 of docs/development/rocky9-validation-plan.md. Container engine is PODMAN
+# STAGE 0 of docs/development/validation-plan.md. Container engine is PODMAN
 # (Rocky-native, daemonless, no third-party repo). talosctl's docker provisioner drives
 # Podman's Docker-compatible API socket via DOCKER_HOST — validated on Linux.
 #

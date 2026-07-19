@@ -19,7 +19,7 @@ kubevirt_use_emulation: true      # no /dev/kvm
 cdi_scratch_storageclass: local-path
 
 # --- Stage 6: identity & access plane (Dex + Pomerium + OpenBao + kubevirt-manager) ---
-lab_floating_ip: "203.0.113.10"                          # OpenStack cloud floating IP (changes on VM reinstall)
+lab_floating_ip: "203.0.113.10"                          # OpenStack floating IP (changes on VM reinstall)
 lab_domain: "{{ lab_floating_ip | replace('.', '-') }}.sslip.io"
 talos_node_ip: "10.5.0.2"                                 # Talos-in-podman controlplane IP (docker provisioner default)
 

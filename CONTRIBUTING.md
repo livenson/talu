@@ -21,7 +21,7 @@ conventions that keep the codebase coherent.
 
 ## Development loop
 
-Talu develops against a remote lab (see `docs/development/rocky9-validation-plan.md`).
+Talu develops against a remote lab (see `docs/development/validation-plan.md`).
 The fast loop is: edit → `make lab-sync` → `make lab-status`. Before opening a PR:
 
 ```sh
@@ -32,7 +32,7 @@ make kbuild        # every overlay must `kustomize build` cleanly (structure-int
 
 - Keep commits focused; write imperative subject lines.
 - CI runs the committed state only (local `lab-sync` accelerates the loop, never forks reality).
-- The forge stays the source of truth; `environments/rocky9-sandbox` is the e2e gate.
+- The forge stays the source of truth; `environments/rocky-sandbox` is the e2e gate.
 
 ## Secrets
 

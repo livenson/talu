@@ -16,10 +16,10 @@ whenever you burn time on a non-obvious issue.
 
 ## Workflow
 
-- `make lab-push` → rsync repo + run `bootstrap/rocky9/bootstrap.sh` (Stage 0).
+- `make lab-push` → rsync repo + run `bootstrap/rocky/bootstrap.sh` (Stage 0).
 - `make up` → `dev/lab/remote-up.sh`: creates the Talos/Podman cluster (cni=none, loop OSDs,
   16 GiB node), writes `~/.talu/kubeconfig`.
-- Then Cilium (helm), then the stack. See `docs/development/rocky9-validation-plan.md`.
+- Then Cilium (helm), then the stack. See `docs/development/validation-plan.md`.
 
 ## Gotchas & fixes (each cost real time — don't rediscover)
 
@@ -27,7 +27,7 @@ whenever you burn time on a non-obvious issue.
    packets; the NIC defaults to 1500. When Docker/Podman touches forwarding, PMTU discovery
    breaks and large host packets (the SSH key exchange!) blackhole — **locking out all SSH**
    while ping/TCP-connect still work. Symptom = SSH resets during kex for everyone. Recover via
-   OpenStack cloud console: `sudo ip link set <iface> mtu 1400`. Bootstrap sets it first, live+persistent.
+   the cloud console: `sudo ip link set <iface> mtu 1400`. Bootstrap sets it first, live+persistent.
 2. **Rocky 10 is nftables-only** — no legacy `ip_tables`/`xt_addrtype`. (Docker CE needed
    `firewall-backend: nftables`; Podman handles it natively.)
 3. **Minimal image ships only `kernel-modules-core`.** The full `kernel-modules` (for the

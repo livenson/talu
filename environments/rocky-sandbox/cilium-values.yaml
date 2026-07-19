@@ -1,4 +1,4 @@
-# rocky9-sandbox Cilium overlay values — layered ON TOP of components/infrastructure/cilium/values.yaml.
+# rocky-sandbox Cilium overlay values — layered ON TOP of components/infrastructure/cilium/values.yaml.
 # The one thing that MUST be right on this host: MTU under the mandated Docker 1400.
 
 # Routing MTU. The host path carries ~1400-byte packets, and Cilium runs VXLAN tunnel mode

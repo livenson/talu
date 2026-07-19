@@ -1,0 +1,4 @@
+# Talu lab inventory — COPY to inventory.ini (gitignored) and set your host.
+# Mirrors env.sh. The example uses the RFC 5737 documentation IP; replace with your VM.
+[lab]
+talu-lab ansible_host=203.0.113.10 ansible_user=rocky

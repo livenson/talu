@@ -1,8 +1,8 @@
-# Rocky9 validation plan (no-KVM quick-mode)
+# Rocky 10 validation plan (no-KVM quick-mode)
 
 How Talu is implemented and validated end-to-end on a single remote Rocky 9 cloud VM with
 **no hardware virtualization**. This is the plan's documented *quick-mode / no-KVM fallback*
-instantiated as the `rocky9-sandbox` overlay — a **throwaway, rebuildable** environment that
+instantiated as the `rocky-sandbox` overlay — a **throwaway, rebuildable** environment that
 proves **correctness**, and doubles as the project's "try it on one VM" quickstart and CI
 e2e gate.
 
@@ -25,7 +25,7 @@ KubeVirt-bump migration-compatibility gate. Moving to that hardware is a **value
 | Single 100 GB disk, no spare block device | Rook Ceph OSDs on **loop devices** (`dev/loopdev`) — real block semantics, not real spindles |
 | OpenStack hosting Docker rule | `/etc/docker/daemon.json` (bridge `192.168.67.1/24`, **MTU 1400**, overlay2) **before first start**, or network lockout → whole CNI stack pinned under MTU 1400 |
 | Behind NAT / floating IP, single NIC | Reach services via the **SSH tunnel** (`make lab-tunnel`), not routable LB IPs |
-| `ulimit -n` 1024, modules not loaded | Raised via `bootstrap/rocky9/bootstrap.sh` |
+| `ulimit -n` 1024, modules not loaded | Raised via `bootstrap/rocky/bootstrap.sh` |
 
 ## Working loop
 
@@ -35,7 +35,7 @@ You edit on your laptop and drive the remote lab:
 make lab-push     # Stage 0: rsync repo + run host bootstrap on the lab
 make up           # create the Talos-in-Docker cluster on the lab
 make lab-tunnel   # open the persistent SSH tunnel + fetch kubeconfig
-make lab-sync     # kustomize build environments/rocky9-sandbox | kubectl apply --server-side
+make lab-sync     # kustomize build environments/rocky-sandbox | kubectl apply --server-side
 make lab-status   # read reconcile/health back, rendered locally
 ```
 
@@ -47,7 +47,7 @@ De-risk the three VM-specific unknowns as cheap spikes first, then build the ove
 top-to-bottom, culminating in the security acceptance test and the integration-contract
 proof.
 
-### Stage 0 — Host bootstrap · `bootstrap/rocky9/bootstrap.sh` (`make lab-push`)
+### Stage 0 — Host bootstrap · `bootstrap/rocky/bootstrap.sh` (`make lab-push`)
 Docker with the mandated `daemon.json` **before first start** (lockout checkpoint: the script
 pauses for you to confirm SSH from a second session), kernel modules
 (`overlay br_netfilter rbd nbd loop`), raised inotify/file limits, tooling
@@ -100,7 +100,7 @@ reach to a VM port denied, through-Pomerium allowed; Hubble shows the denied att
 ### Stage 7 — Talu-native tenancy + **§10 integration-contract proof** (orchestrator-free)
 Prometheus + recording rules for the billing PromQL set; tuppr CRs for API-surface + CEL-gate
 validation only (real A/B upgrade deferred). The tenant chart is the tenant API: a tenant/VM
-is a values-PR under `environments/rocky9-sandbox/tenants/`, every object carrying
+is a values-PR under `environments/rocky-sandbox/tenants/`, every object carrying
 `talu.io/project-uuid`; Headlamp + KubeVirt plugin behind a Pomerium admin route; kubelogin
 OIDC + group-scoped RBAC.
 **Integration proof (the orchestrator-independence test):** with **no orchestrator present**, exercise all

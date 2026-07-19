@@ -4,7 +4,7 @@
 
 Install the operator + CR from the KubeVirt release; the CR carries environment values.
 
-**rocky9-sandbox (validated):** no `/dev/kvm`, so the KubeVirt CR sets
+**rocky-sandbox (validated):** no `/dev/kvm`, so the KubeVirt CR sets
 `spec.configuration.developerConfiguration.useEmulation: true` (QEMU TCG). VM namespaces must be
 labeled `pod-security.kubernetes.io/enforce=privileged` (virt-launcher needs NET_ADMIN → violates
 PSA baseline). Validated: a CirrOS **containerDisk** VM boots under TCG and reaches the serial-console
@@ -19,6 +19,6 @@ metadata: {name: kubevirt, namespace: kubevirt}
 spec:
   configuration:
     developerConfiguration:
-      useEmulation: true                 # rocky9-sandbox only; real hardware uses KVM
+      useEmulation: true                 # rocky-sandbox only; real hardware uses KVM
       featureGates: [Snapshot, HotplugVolumes]
 ```

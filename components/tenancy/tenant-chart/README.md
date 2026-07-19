@@ -47,9 +47,9 @@ spec:
   values: { }                            # + the tenant's acme.yaml values
 ```
 
-## Validated (rocky9-sandbox)
+## Validated (rocky-sandbox)
 
-`environments/rocky9-sandbox/tenants/acme.yaml` renders 8 kinds (project-uuid on all), applies clean,
+`environments/rocky-sandbox/tenants/acme.yaml` renders 8 kinds (project-uuid on all), applies clean,
 the `app1` VM reaches Running, the `ResourceQuota` tracks usage, and the chart's `allowed-users`
 annotation drives a per-tenant `ssh://app1` Pomerium route (`in: [alice@talu.local]`) — alongside two
 other tenants, each isolated. This is the same bundle `dev/lab/gen-vm-manifests.sh` emits, now

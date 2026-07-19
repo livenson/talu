@@ -7,4 +7,4 @@ kit) and for single-node compromises. To be filled in as components land:
 - `etcd-restore.md` — restore from snapshot into a scratch node (test it — an untested backup
   is a hypothesis).
 - `ceph-recovery.md` — MON/OSD loss, `size 2` single-node caveats, re-add and rebalance.
-- `rocky9-recovery.md` — recovering the lab VM after a Docker/network lockout (OpenStack cloud console).
+- `recovery.md` — recovering the lab VM after a Docker/network lockout (the cloud console).
