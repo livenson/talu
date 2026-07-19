@@ -1,4 +1,4 @@
-# A tenant instance — the single object a manager (Waldur) applies directly to the K8s API.
+# A tenant instance — the single object an orchestrator applies directly to the K8s API.
 # Flux renders it via the talu-tenant chart into the full tenant bundle; watch .status.conditions[Ready].
 # Delete this object -> Flux GC removes the whole tenant. The Pomerium User CA is injected from the
 # pomerium-user-ca ConfigMap (mirror it into this HelmRelease's namespace), never duplicated in the body.

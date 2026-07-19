@@ -3,7 +3,7 @@
 The **manager-agnostic tenant API**. A tenant — and every VM it owns — is a **values file**
 (`environments/<site>/tenants/<slug>.yaml`), reconciled by Flux. Nothing structural changes when a
 tenant or VM is added; it's a values-PR. Every rendered object carries `talu.io/project-uuid`, the
-join key any external manager (Waldur) reconciles on.
+join key any external orchestrator reconciles on.
 
 ## What it renders (from `values.yaml`)
 

@@ -3,12 +3,15 @@
 **Talu** (Estonian: *farmstead* — "own your ground") is a sovereign, multitenant VM
 platform: fast tenant provisioning, HA, zero-downtime updates, with a deliberately small
 operational footprint. It runs on a Kubernetes + KubeVirt substrate (Talos Linux, Cilium,
-Rook Ceph, OpenBao, Keycloak, Pomerium) and is **API-first and manager-agnostic** — the
-whole management surface is the Kubernetes declarative API plus the Prometheus HTTP API.
+CephFS, KubeVirt/CDI, Pomerium, a generic OIDC IdP) and is **API-first and
+orchestrator-agnostic** — the whole management surface is the Kubernetes declarative API plus
+the Prometheus HTTP API. See [`docs/architecture/`](docs/architecture/) for the component
+diagram and [runtime flows](docs/architecture/flows.md).
 
-Talu runs **Git-first with no external manager**. Billing/portal platforms integrate as
-*external consumers* of a stable contract (see [`docs/integrations/`](docs/integrations/));
-[Waldur](https://waldur.com) is the reference integration, **not** a dependency.
+Talu runs **Git-first with no external orchestrator**. Billing/portal/automation systems
+integrate as *external consumers* of a stable contract (see
+[`docs/integrations/`](docs/integrations/)) — for example [Waldur](https://waldur.com), a
+self-service portal, or a CI pipeline — **not** as a dependency.
 
 > Status: **early scaffold.** The architecture is settled (see `docs/architecture/`); the
 > component manifests are being implemented per the single-node pilot plan. The

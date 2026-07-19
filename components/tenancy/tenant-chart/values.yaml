@@ -1,6 +1,6 @@
 # Talu native tenant bundle — the manager-agnostic tenant API. A tenant (and its VMs) is a
 # values file under environments/<site>/tenants/, reconciled by Flux. Every rendered object
-# carries talu.io/project-uuid — the join key any external manager (Waldur) reconciles on.
+# carries talu.io/project-uuid — the join key any external orchestrator reconciles on.
 #
 # SSH access is Pomerium Native SSH: each VM's Service is labelled talu.io/ssh-expose and
 # annotated talu.io/allowed-users, and the Pomerium config renderer turns that into an

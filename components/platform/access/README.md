@@ -51,5 +51,5 @@ must not also emit them; don't double-own.)
 Service + pinning policy and re-renders the Pomerium config (base HTTP routes + SSH-server block +
 one `ssh://<vm>` route per `talu.io/ssh-expose` label). `dev/lab/vm-ssh.sh <vm> [principal]` is a
 thin wrapper over `ssh <principal>@<vm>@ssh.<domain> -p <port>`. `dev/lab/gen-vm-manifests.sh`
-emits the full per-VM bundle (cloud-init Secret + VM + Service + pinning) for an external manager
-(Waldur) to apply.
+emits the full per-VM bundle (cloud-init Secret + VM + Service + pinning) for an external
+orchestrator to apply.

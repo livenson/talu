@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Generate the manifest bundle for one SSH-accessible Talu VM — PURE OUTPUT, no cluster mutation.
 #
-# Intended to be driven by an external orchestrator (Waldur): Talu's stable surface is
+# Intended to be driven by an external orchestrator: Talu's stable surface is
 # "write labelled Kubernetes objects" (integration contract §10). Every object carries
-# talu.io/project-uuid — the join key Waldur reconciles on.
+# talu.io/project-uuid — the join key an orchestrator reconciles on.
 #
 # Access model: Pomerium Native SSH. The VM trusts Pomerium's SSH **User CA** (public key,
 # baked via cloud-init); users run `ssh <principal>@<vm>@ssh.<domain> -p <port>` and Pomerium
@@ -20,7 +20,7 @@
 #   gen-vm-manifests.sh <vm> <namespace> [principal] -o outdir/       # both as files
 #
 # Inputs (env; flags/positional override):
-#   PROJECT_UUID  talu.io/project-uuid       (default: all-zero placeholder — Waldur sets the real one)
+#   PROJECT_UUID  talu.io/project-uuid       (default: all-zero placeholder — the orchestrator sets the real one)
 #   VM_IMAGE      containerDisk image        (default: quay.io/containerdisks/ubuntu:24.04 — OpenSSH)
 #   VM_MEMORY     guest memory              (default: 1536Mi)
 #   LAB_DOMAIN    external domain            (default: 203-0-113-10.sslip.io)
@@ -72,7 +72,7 @@ metadata:
     pod-security.kubernetes.io/audit: privileged
     talu.io/project-uuid: "${PROJECT_UUID}"
 ---
-# Cloud-init lives in a Secret (keeps any guest secrets out of the VM manifest; Waldur writes it).
+# Cloud-init lives in a Secret (keeps any guest secrets out of the VM manifest; the orchestrator writes it).
 apiVersion: v1
 kind: Secret
 metadata:
