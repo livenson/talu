@@ -27,11 +27,14 @@ kubectl -n flux-system exec helmpush -- helm push /tmp/c.tgz oci://registry.flux
 delete it → Flux GC removes the whole tenant bundle. The Pomerium User CA is injected via
 `valuesFrom` (ConfigMap `pomerium-user-ca`, mirrored into the HelmRelease's namespace).
 
-## Lab status (2026-07-18)
-Validated: the `talu-tenant` chart renders/applies a working tenant (namespace, quota, RBAC, VM,
-Service, pinning, securityGroup CNP — `helm template | kubectl apply` brought `app1` to Running);
-Flux installs; the `OCIRepository` source goes **Ready=True**; helm-controller **picks up and
-reconciles** the tenant `HelmRelease`. NOT completed on the lab: the final chart-artifact fetch —
-blocked by the nested single-node's **resource/networking ceiling** (see CLAUDE.md #25: pids-limit,
-probe timeouts, pod→service `no route to host` under thread saturation). The design is standard Flux
-and reproduces on a non-nested node; the lab simply can't hold the full stack + Flux + a tenant at once.
+## Lab status — VALIDATED end-to-end (2026-07-19)
+`kubectl apply` of the acme `HelmRelease` → **`HelmRelease Ready=True` ("Helm install succeeded")** →
+Flux rendered the full tenant bundle (cloud-init Secret, VirtualMachine **app1 Running**, ssh Service,
+`app1-ssh-pin` + `sg-web` CiliumNetworkPolicies, ResourceQuota, Role) with the CA pubkey injected via
+`valuesFrom`. The Waldur flow proven: one object applied directly to the API, one `.status` to watch.
+
+Two real bugs were fixed getting here (NEITHER was "the node is too small" — see CLAUDE.md #25):
+(1) a chart bug — the CA pubkey's trailing newline broke the double-quoted YAML (`| trim | quote` fixes
+it; `helm template` missed it because `$(...)` strips newlines, Flux `valuesFrom` doesn't); (2) the
+nested CNI false-negatived source-controller's readiness probe, dropping it from its Service endpoints
+so helm-controller couldn't fetch the chart. The earlier pids-limit 2048 wall was separate and real.

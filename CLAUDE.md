@@ -252,27 +252,30 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     interface-based BGP advert + source-IP override (production VM LoadBalancer IPs), subnet-scoped
     masquerade, wildcard-subdomain FQDN policy. Caution: `CiliumBGPPeeringPolicy` v1 removed (v2 only —
     N/A here, no BGP); LB-IPAM/BGP may need action on upgrade (our `CiliumLoadBalancerIPPool` v2 survived).
-25. **Nested-node resource ceiling — the lab can't hold the full stack + Flux + a tenant at once.**
-    Hit while validating HelmRelease-per-tenant (Flux). Distinct walls, in order:
-    - **Podman default `--pids-limit=2048`** caps the Talos-in-Podman node; the whole k8s stack + Cilium
-      + KubeVirt + VMs share it. At the cap, new threads fail: `cilium-cni ... failed to create new OS
-      thread (errno=11 EAGAIN); may need to increase max user processes`, pods stuck ContainerCreating.
-      Fix (live): `sudo podman update --pids-limit -1 talu-lab-controlplane-1` (cgroup `pids.max`→max).
-      Encode on the node container at create time.
-    - **Aggressive probes false-negative under thread/CPU saturation.** Flux controllers' liveness
-      (`timeoutSeconds:1`) times out on the loaded node → kubelet SIGTERMs → clean **exit 0 `Completed`**
-      restart loop (NOT a crash/OOM — check `lastState.terminated.reason`). Relax probes (timeout 10s,
-      period 30s, failureThreshold 6). `/readyz` answering `ok` inside the pod while kubelet's probe
-      **connection times out** = the same thing on the readiness path.
-    - **In-cluster registry NodePort unreachable from the host** (`GET /v2/` → HTTP 000 timeout) though
-      the Pomerium NodePorts work — flaky NodePort programming. Push charts **from inside the cluster**
-      (`kubectl run helm pod` → `cp` chart → `helm push oci://registry.flux-system.svc:5000 --plain-http`).
-    - **Pod→service `no route to host`** (helm-controller → source-controller ClusterIP) under load —
-      Cilium service-map flakiness on the saturated node.
-    Verdict: the design (chart renders a working tenant; OCIRepository Ready=True; helm-controller
-    reconciles the HelmRelease) is standard Flux and reproduces on a real node — the nested single-node
-    lab is simply too resource-starved to run it end-to-end. Free VMs first (`kubectl delete vm`) or use
-    non-nested nodes. See `components/tenancy/flux/README.md`.
+25. **HelmRelease-per-tenant (Flux) — VALIDATED end-to-end. The blockers were NOT resources.** A tenant
+    is cheap (one small VM); the manual `helm template | kubectl apply` always worked because it never
+    used in-cluster controller↔controller networking. Flux failed for two real, specific reasons — don't
+    misattribute controller-plumbing/CNI/chart bugs to "the node is too small":
+    - **THE chart bug (root cause of the install failure):** the Pomerium User CA pubkey read from cm
+      `pomerium-user-ca` has a **trailing newline**; injected into `content: "{{ .sshUserCaPubKey }}"` it
+      makes a double-quoted YAML scalar span two lines → `MalformedYAMLError: could not find expected ':'`.
+      Local `helm template` MISSED it because `$(kubectl ...)` strips the newline, but Flux `valuesFrom`
+      injects the cm value verbatim. Fix: `content: {{ .sshUserCaPubKey | trim | quote }}` (any value from
+      a ConfigMap/Secret injected into YAML needs `trim`/`quote`). After the fix: **HR Ready=True, app1
+      Running** — full bundle (Secret/VM/Service/pinning/sg CNP/quota/RBAC) rendered by Flux.
+    - **Why helm-controller couldn't fetch the chart at first:** `source-controller`'s readiness probe
+      false-negatived (kubelet→pod-IP probe times out on the nested CNI though the app serves fine
+      internally) → the NotReady pod is **dropped from its Service endpoints** → helm-controller GET to
+      `source-controller.svc` had **zero backends → "no route to host."** Not resources — an endpoints/
+      networking chain. Workaround on the flaky lab: drop/loosen the readiness probe so it stays in
+      endpoints. Also: after re-pushing a fixed chart, **delete+recreate the HelmRelease** (a stuck failed
+      install keeps retrying the OLD cached artifact digest even after the OCIRepository updates).
+    Earlier (separate, real) wall: **Podman default `--pids-limit=2048`** caps the Talos-in-Podman node
+    (whole stack + VMs share it); at the cap new threads fail (`cilium-cni ... failed to create new OS
+    thread, errno=11 EAGAIN`). Fix live: `sudo podman update --pids-limit -1 talu-lab-controlplane-1`;
+    encode at node-create time. And the **in-cluster registry NodePort is unreachable from the host**
+    (HTTP 000) — push charts from **inside** the cluster (`helm push oci://registry.flux-system.svc:5000
+    --plain-http`). See `components/tenancy/flux/README.md`.
 
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the

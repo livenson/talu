@@ -26,7 +26,7 @@ stringData:
         lock_passwd: true
     write_files:
       - path: /etc/ssh/talu_ca.pub
-        content: "{{ required "sshUserCaPubKey is required (Pomerium User CA)" $root.Values.sshUserCaPubKey }}"
+        content: {{ required "sshUserCaPubKey is required (Pomerium User CA)" $root.Values.sshUserCaPubKey | trim | quote }}
         permissions: "0644"
       - path: /etc/ssh/sshd_config.d/60-talu-ca.conf
         content: |
