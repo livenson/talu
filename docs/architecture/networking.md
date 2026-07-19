@@ -65,8 +65,18 @@ behind its **virt-launcher pod**, and *that pod* is the Cilium endpoint. Consequ
 - The VM inherits the pod's PodCIDR IP, identity, egress, and MTU. Pod-network policy applies to the VM.
 - A VM's stable label is `kubevirt.io/vm: <name>` **on the virt-launcher pod** — so every Service
   selector and every `CiliumNetworkPolicy.endpointSelector` targets the VM by matching that label.
-- **Live migration keeps the Service IP**, not the pod IP — which is why tenant "stable IPs" are a
-  `LoadBalancer` Service (below), not the pod address.
+- **Inside the guest the IP is static.** Masquerade always presents the VM the same private NIC
+  address (KubeVirt's default `10.0.2.2/24`); it never changes — not on reboot, not on migration.
+  What is routable in the cluster is the **virt-launcher pod IP** (the Cilium endpoint, e.g.
+  `10.244.0.213`), a separate thing the guest never sees.
+- **Live migration changes the pod IP — so address a VM via a Service, never the pod.** Migration
+  doesn't relocate a pod; it spawns a *new* target virt-launcher pod on the destination node, copies
+  the running guest's RAM into it, then tears down the old pod (and its IP). The new pod draws a fresh
+  pod IP from Cilium IPAM. A `LoadBalancer`/ClusterIP Service selecting `kubevirt.io/vm: <name>` is
+  repointed to the new pod automatically, so the **Service/LB IP is the stable address that survives
+  the move** — the guest keeps running throughout; only connections pinned to the *old pod IP* reset
+  at the brief cutover. This is why tenant "stable IPs" are a `LoadBalancer` Service (below), not the
+  pod address.
 
 (Tier-2 flavor, not on the lab: a **Multus secondary NIC** / bridge binding gives a VM a real L2
 interface on a provider network — for workloads that need their own MAC/IP. The masquerade binding

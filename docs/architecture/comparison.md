@@ -2,7 +2,7 @@
 
 Talu is one point in a crowded landscape of "run VMs for tenants." This page places it honestly
 against the main alternatives — what they share, where they diverge, and when you'd pick each. The
-short version: **Talu is a lean, sovereign, Kubernetes-native VM *substrate* that an external system
+short version: **Talu is a lean, open-source, Kubernetes-native VM *substrate* that an external system
 drives through the K8s API — not a portal, not an appliance, not a distro.** Several alternatives are
 more complete products; that completeness is exactly the trade Talu makes.
 
@@ -76,7 +76,7 @@ VM lifecycle, images/templates, live migration. Talu's `securityGroups`/`Resourc
 maps directly onto concepts these platforms established.
 
 **Differences:** they run their **own control plane and API** (not Kubernetes). OpenStack is a mature,
-large-scale sovereign IaaS with a vast ecosystem but heavy operations and an imperative API. Proxmox
+large-scale open-source IaaS with a vast ecosystem but heavy operations and an imperative API. Proxmox
 is delightfully simple for on-prem (VMs + LXC, one UI) but single-cluster-scoped and not declarative.
 vSphere is the proprietary incumbent these OSS options exist to replace. Talu's bet is that the
 **Kubernetes declarative API is a better integration surface** than a bespoke cloud API — so an
@@ -111,7 +111,7 @@ Cilium policy), the image catalog, the golden-image discipline, and the validate
 - **Proxmox VE** — the lowest-friction path to VMs + containers on a few on-prem nodes.
 
 ## Choosing
-- **Talu** — you want a lean, sovereign, **K8s-native VM substrate** an external system drives via the
+- **Talu** — you want a lean, open-source, **K8s-native VM substrate** an external system drives via the
   Kubernetes API, and you want to **fork and own** it end to end.
 - **Cozystack** — you want a batteries-included open **PaaS** (with its own dashboard) out of the box.
 - **Harvester** — you want **turnkey HCI** on bare metal.
