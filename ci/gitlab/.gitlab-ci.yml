@@ -1,0 +1,22 @@
+# GitLab CI wrapper for the golden-image pipeline. `include:` this from your root .gitlab-ci.yml.
+# Needs a PRIVILEGED runner (loop devices for bootc-image-builder) — NO /dev/kvm required.
+# Uses the built-in GitLab Container Registry ($CI_REGISTRY_*); adjust for another registry.
+golden-image:
+  image: quay.io/podman/stable
+  tags: [privileged]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'          # scheduled patch rebuild
+    - if: '$CI_PIPELINE_SOURCE == "web"'               # manual / CVE
+    - changes: [images/**/*, ci/**/*]                  # on image/pipeline change
+  variables:
+    IMAGE_DIR: centos-bootc
+    REGISTRY: $CI_REGISTRY_IMAGE
+    CHANNEL: testing
+    TAG: $CI_PIPELINE_ID                                # promote to :stable after acceptance
+    SCAN: "true"
+    SIGN: "true"
+  before_script:
+    - dnf -y install trivy cosign git >/dev/null || true
+    - podman login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - bash ci/image-build.sh                            # runs as root in the image (no sudo)

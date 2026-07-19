@@ -1,0 +1,60 @@
+# In-cluster golden-image build — the zero-external-dependency option (vs the ci/ forge runners).
+# A privileged CronJob clones the repo and runs the SAME ci/image-build.sh (podman + bootc-image-builder,
+# no KVM), pushing the containerDisk to the in-cluster zot. GitOps-triggered, self-contained.
+#
+# REQUIREMENTS: a real node with loop devices + fuse (podman-in-pod). This is fragile on the NESTED lab
+# node (loop-in-nested) — it is meant for bare-metal/KVM nodes. Isolated in its own privileged namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: image-builds
+  labels:
+    app.kubernetes.io/part-of: talu
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: image-builder, namespace: image-builds }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: build-centos-bootc, namespace: image-builds }
+spec:
+  schedule: "0 3 * * 1"            # weekly patch rebuild
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 3600
+      template:
+        spec:
+          serviceAccountName: image-builder
+          restartPolicy: Never
+          containers:
+            - name: build
+              image: quay.io/podman/stable:latest
+              securityContext:
+                privileged: true            # loop + fuse for bootc-image-builder / podman-in-pod
+              env:
+                - { name: REPO_URL,   value: "https://github.com/livenson/talu.git" }   # override per fork
+                - { name: REPO_REF,   value: "main" }
+                - { name: IMAGE_DIR,  value: "centos-bootc" }
+                - { name: REGISTRY,   value: "zot.golden-images.svc:5000" }
+                - { name: CHANNEL,    value: "testing" }
+                - { name: TLS_VERIFY, value: "false" }   # zot is HTTP in-cluster
+                - { name: SCAN,       value: "false" }   # toggle on once Trivy is wired
+                - { name: SIGN,       value: "false" }
+              command: ["/bin/bash", "-ceu"]
+              args:
+                - |
+                  dnf -y install git >/dev/null
+                  git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" /src
+                  cd /src && bash ci/image-build.sh
+              resources:
+                requests: { cpu: "2", memory: 4Gi }
+                limits:   { cpu: "4", memory: 8Gi }
+              volumeMounts:
+                - { name: containers, mountPath: /var/lib/containers }
+          volumes:
+            - name: containers
+              emptyDir: {}

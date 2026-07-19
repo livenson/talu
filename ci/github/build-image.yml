@@ -1,0 +1,34 @@
+# GitHub Actions wrapper for the golden-image pipeline. Copy to .github/workflows/ in your fork.
+# The runner needs privileged podman (loop devices) — GitHub-hosted `ubuntu-latest` works; NO /dev/kvm.
+# Set repo Variables: REGISTRY, REGISTRY_USER; Secret: REGISTRY_PASSWORD (or wire keyless cloud auth).
+name: golden-image
+on:
+  schedule:
+    - cron: "0 3 * * 1"                 # weekly patch rebuild (picks up base-image + package updates)
+  workflow_dispatch: {}                 # manual / CVE-triggered
+  push:
+    paths: ["images/**", "ci/**"]       # rebuild when the image or pipeline changes
+permissions:
+  contents: read
+  id-token: write                       # keyless cosign (Sigstore/Fulcio)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y podman
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+          sudo curl -sSL -o /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 && sudo chmod +x /usr/local/bin/cosign
+      - name: registry login
+        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | sudo podman login "${{ vars.REGISTRY }}" -u "${{ vars.REGISTRY_USER }}" --password-stdin
+      - name: build + scan + sign + publish
+        env:
+          IMAGE_DIR: centos-bootc
+          REGISTRY: ${{ vars.REGISTRY }}
+          CHANNEL: testing
+          TAG: ${{ github.run_id }}      # immutable per-run tag; promote to :stable after acceptance
+          SCAN: "true"
+          SIGN: "true"
+        run: sudo -E bash ci/image-build.sh
