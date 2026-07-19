@@ -4,4 +4,4 @@
 |---|---|---|
 | _TBD_ | _TBD_ | platform / overall |
 
-Maintainer responsibilities and the review process are described in CONTRIBUTING.md.
+Maintainer responsibilities and the review process will be documented as the project formalizes.

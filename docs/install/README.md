@@ -12,7 +12,8 @@ Decide-once items (Phase 2 of the pilot plan — annoying to change later):
   whether the wildcard carries a region label.
 - **Forge** — Flux pulls over HTTPS with a read-only deploy token (outbound-only). The forge
   sits outside the cluster's failure domain.
-- **Secrets** — SOPS/age or OpenBao; the repo ships only `*.example` stubs.
+- **Secrets** — SOPS/age for values at rest; guest secrets ride into VMs as a Kubernetes Secret
+  via cloud-init (`cloudInitNoCloud.secretRef`). The repo ships only `*.example` stubs.
 
 Then: create your overlay from `environments/example` (see [`../customize/`](../customize/)),
 point Flux at it, and follow the pilot plan's phase order.

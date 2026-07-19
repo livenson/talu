@@ -11,7 +11,6 @@ rook:
   poolSize: 2
   failureDomain: osd
 replicas:
-  openbao: 1
   keycloak: 1
   pomerium: 1
 hostnames:

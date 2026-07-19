@@ -8,6 +8,6 @@ pods use hostPath, so label the `local-path-storage` namespace
 `pod-security.kubernetes.io/enforce=privileged`.
 
 **rocky-sandbox deviation (documented):** with Rook Ceph unavailable on the no-KVM lab
-(see `CLAUDE.md` #6), local-path is the **default** StorageClass here so platform PVCs
-(OpenBao, Keycloak, zot) bind. This is RWO Filesystem only — no snapshots/clones/RWX/live
+(see `docs/development/lab-notes.md` #6), local-path is the **default** StorageClass here so platform PVCs
+(Keycloak, zot) bind. This is RWO Filesystem only — no snapshots/clones/RWX/live
 migration. Those are validated on a nested-KVM/QEMU environment, not here.
