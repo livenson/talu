@@ -23,6 +23,10 @@ whenever you burn time on a non-obvious issue.
 
 ## Gotchas & fixes (each cost real time — don't rediscover)
 
+> Numbers are **stable IDs**, not a sequence — they're cross-referenced from roles/scripts/docs, so
+> new ones append and old ones never renumber (hence #11 sitting mid-list). #6–#9 are **historical
+> Rook findings** (Rook is not used — CephFS #15 is the storage path); #20 is **superseded** by #21.
+
 1. **Host MTU must be 1400 BEFORE any container engine starts.** The path carries ~1400-byte
    packets; the NIC defaults to 1500. When Docker/Podman touches forwarding, PMTU discovery
    breaks and large host packets (the SSH key exchange!) blackhole — **locking out all SSH**
@@ -171,10 +175,11 @@ Components + gotchas:
     on the VM namespace allows ingress only from the pomerium namespace — validated: a pod elsewhere is
     DROPPED (Hubble: `Policy denied DROPPED`), Pomerium is allowed. The route NAME is the VM selector — it's
     the middle token users type: `ssh <principal>@<vm>@ssh.<host> -p 23`.
-20. **`pomerium-cli tcp` headless:** `--service-account` OR `--browser-cmd <script>` (script curls the
-    Dex login for the user) + `--disable-tls-verification`. Run it via `systemd-run` (ssh-backgrounding
-    drops); a binary dropped into `/usr/local/bin` needs **`restorecon`** or SELinux denies systemd exec
-    (`Permission denied`).
+20. **SUPERSEDED by #21 (Native SSH) — kept for reference / other TCP tunnels.** `pomerium-cli tcp`
+    headless: `--service-account` OR `--browser-cmd <script>` (script curls the Dex login) +
+    `--disable-tls-verification`; run via `systemd-run` (ssh-backgrounding drops); a binary in
+    `/usr/local/bin` needs **`restorecon`** or SELinux denies systemd exec. VM SSH no longer uses this —
+    Pomerium Native SSH (#21) replaced the tunnel — but the pattern still applies to any `tcp+https` route.
 21. **Pomerium Native SSH is the SSH CA (OpenBao REMOVED).** OSS Core v0.30+ (we run v0.33) makes
     Pomerium the SSH proxy AND SSH User CA — users run stock `ssh <principal>@<route>@ssh.<host> -p 23`,
     auth via browser OIDC (Dex), Pomerium issues the cert. No tunnel, no `pomerium-cli`, no OpenBao.
