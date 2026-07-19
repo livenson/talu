@@ -54,4 +54,6 @@ Service + pinning policy and re-renders the Pomerium config (base HTTP routes + 
 one `ssh://<vm>` route per `talu.io/ssh-expose` label). `dev/lab/vm-ssh.sh <vm> [principal]` is a
 thin wrapper over `ssh <principal>@<vm>@ssh.<domain> -p <port>`. `dev/lab/gen-vm-manifests.sh`
 emits the full per-VM bundle (cloud-init Secret + VM + Service + pinning) for an external
-orchestrator to apply.
+orchestrator to apply. `dev/lab/gc-orphans.sh [--delete]` detects (and cleans) orphaned plumbing —
+a Service/pin/Secret/`ssh://` route left behind when a manually-exposed VM is deleted (chart-managed
+tenants never orphan, since Flux GCs the bundle together); dry-run by default.
