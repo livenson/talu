@@ -96,3 +96,17 @@ graph TD
 3. **Labels are truth, names are handles.** Nothing joins on names; `talu.io/project-uuid` is the key.
 4. **Declarative only.** No imperative side channels — the orchestrator writes objects and watches status.
 5. **Standalone-first.** No object requires an orchestrator to exist.
+
+## The building blocks (upstream docs)
+
+Talu is an assembly of standard components — the authoritative reference for each is upstream:
+
+| Layer | Component | Docs |
+|---|---|---|
+| OS | Talos Linux | <https://www.talos.dev/latest/> |
+| CNI / dataplane | Cilium | <https://docs.cilium.io/en/stable/> |
+| Virtualization | KubeVirt · CDI | <https://kubevirt.io/user-guide/> · <https://github.com/kubevirt/containerized-data-importer> |
+| Storage | ceph-csi (CephFS) · Rook (prod) | <https://github.com/ceph/ceph-csi> · <https://rook.io/docs/rook/latest/> |
+| Tenancy | Flux (helm-controller) | <https://fluxcd.io/flux/components/helm/helmreleases/> |
+| Access | Pomerium (Native SSH) · Dex · cert-manager | <https://www.pomerium.com/docs/capabilities/native-ssh-access> · <https://dexidp.io/docs/> · <https://cert-manager.io/docs/> |
+| Platform | Kubernetes (Pod Security Admission) | <https://kubernetes.io/docs/concepts/security/pod-security-admission/> |

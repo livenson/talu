@@ -118,3 +118,16 @@ Cilium policy), the image catalog, the golden-image discipline, and the validate
 - **OpenShift Virt** — you're on OpenShift and want **enterprise-supported** KubeVirt.
 - **OpenStack** — you want a **mature large-scale IaaS** beyond just VMs.
 - **Proxmox VE** — you want the **simplest on-prem** VM/container box.
+
+## Sources & further reading
+
+Primary docs for each system compared here:
+
+- **Cozystack** — <https://cozystack.io/docs/>
+- **Harvester** — <https://docs.harvesterhci.io/>
+- **OpenShift Virtualization** — <https://www.redhat.com/en/technologies/cloud-computing/openshift/virtualization>
+- **OpenStack** — <https://docs.openstack.org/>
+- **Proxmox VE** — <https://pve.proxmox.com/pve-docs/>
+- **oVirt** — <https://www.ovirt.org/documentation/> · **Apache CloudStack** — <https://docs.cloudstack.apache.org/>
+- **DIY KubeVirt** — <https://kubevirt.io/user-guide/>
+- **Talu's own substrate** — see the building-blocks table in [`README.md`](README.md#the-building-blocks-upstream-docs).

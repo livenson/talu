@@ -3,6 +3,8 @@
 **Responsibility:** Pomerium IAP — per-route policy, SNI fan-out on :443; **Native SSH proxy + SSH
 User CA**; Cilium pinning policy templates.
 
+**Upstream:** [Pomerium Native SSH](https://www.pomerium.com/docs/capabilities/native-ssh-access) · [Pomerium docs](https://www.pomerium.com/docs/).
+
 This is a reusable base — part of `components/` (the product). Adopters do **not**
 edit it; site-specific values live in `environments/<site>/`. See
 `docs/customize/` for the customization boundary.

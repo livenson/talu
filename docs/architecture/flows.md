@@ -6,10 +6,13 @@ objects and watches status; Talu never calls out to an external system. See
 
 ## Tenant / VM provisioning
 
-A tenant is one `HelmRelease` applied **directly to the Kubernetes API** (by an orchestrator, a CI
-job, or a human — or committed to Git and reconciled). Flux's helm-controller renders the
-`talu-tenant` chart into the per-tenant bundle. `HelmRelease.status` is the single object to watch;
-deleting it garbage-collects the whole tenant.
+A tenant is one [`HelmRelease`](https://fluxcd.io/flux/components/helm/helmreleases/) applied
+**directly to the Kubernetes API** (by an orchestrator, a CI job, or a human — or committed to Git and
+reconciled). Flux's helm-controller renders the `talu-tenant` chart (pulled from an
+[`OCIRepository`](https://fluxcd.io/flux/components/source/ocirepositories/)) into the per-tenant
+bundle; guest secrets ride in via KubeVirt
+[cloud-init `secretRef`](https://kubevirt.io/user-guide/user_workloads/startup_scripts/).
+`HelmRelease.status` is the single object to watch; deleting it garbage-collects the whole tenant.
 
 ```mermaid
 sequenceDiagram
@@ -32,8 +35,9 @@ sequenceDiagram
 
 ## SSH access (Pomerium Native SSH)
 
-There is no public `:22` and no static VM password. Pomerium is the SSH proxy **and** the SSH User
-CA; the VM trusts that CA (injected via cloud-init). The user runs a stock `ssh` client; Pomerium
+There is no public `:22` and no static VM password.
+[Pomerium Native SSH](https://www.pomerium.com/docs/capabilities/native-ssh-access) is the SSH proxy
+**and** the SSH User CA; the VM trusts that CA (injected via cloud-init). The user runs a stock `ssh` client; Pomerium
 authenticates them via OIDC in the browser, issues a short-lived certificate, and connects. Cilium
 pins the VM's `:22` so only Pomerium can reach it.
 

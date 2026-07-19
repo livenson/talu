@@ -5,6 +5,8 @@ A tenant/VM is a **`HelmRelease`** that an orchestrator `kubectl apply`s **direc
 single object the manager watches. This mirrors Cozystack's backing mechanism (chart + HelmRelease),
 minus the aggregation apiserver.
 
+**Upstream:** [Flux `HelmRelease`](https://fluxcd.io/flux/components/helm/helmreleases/) · [`OCIRepository`](https://fluxcd.io/flux/components/source/ocirepositories/) · [Cozystack](https://cozystack.io/docs/) (the pattern's origin).
+
 ## Pieces
 - `oci-registry.yaml` — a small in-cluster OCI registry the platform pushes the chart to (production:
   swap for the adopter's registry, or a `GitRepository`/`HelmRepository` source).

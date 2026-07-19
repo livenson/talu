@@ -58,9 +58,41 @@ graph TB
 
 ## VM networking — the key subtlety
 
-A KubeVirt VM does **not** get its own Cilium endpoint directly. With the default **masquerade
-binding** (`interfaces: [{ masquerade: {} }]`, `networks: [{ pod: {} }]`), the guest NIC is NAT'd
-behind its **virt-launcher pod**, and *that pod* is the Cilium endpoint. Consequences:
+A KubeVirt VM does **not** get its own Cilium endpoint directly. With the default [**masquerade
+binding**](https://kubevirt.io/user-guide/network/interfaces_and_networks/) (`interfaces: [{ masquerade: {} }]`,
+`networks: [{ pod: {} }]`), the guest NIC is NAT'd behind its **virt-launcher pod**, and *that pod*
+is the Cilium endpoint.
+
+**How the pod IP maps to the VM** — a 1:1 NAT *inside the virt-launcher pod's network namespace*; the
+guest never holds the pod IP. The pod's `eth0` carries the routable **pod IP** (the Cilium endpoint,
+e.g. `10.244.0.213`). KubeVirt builds a small link-local subnet inside the pod: a bridge at `10.0.2.1`
+(the guest's gateway) leases the guest **`10.0.2.2/24`** over an in-pod DHCP server (which also pushes
+the pod's MTU and DNS, so the guest matches the pod network). nftables rules bridge the two —
+**inbound** traffic to the pod IP is **DNAT'd** to `10.0.2.2` (so "reach the pod IP" *is* "reach the
+VM"); **outbound** traffic from `10.0.2.2` is **SNAT'd** (masqueraded) to the pod IP, so it carries the
+pod's Cilium identity and policy. By default all ports forward; a `ports:` list narrows it.
+
+```mermaid
+graph LR
+    SVC["Service VIP<br/>(ClusterIP / LB)<br/>the stable address"]
+    subgraph POD["virt-launcher pod netns = the Cilium endpoint"]
+        ETH["eth0 · pod IP<br/>10.244.0.213<br/>(ephemeral — new on migration)"]
+        NAT["masquerade NAT<br/>(nftables)<br/>DNAT in · SNAT out"]
+        GW["bridge 10.0.2.1<br/>guest gateway + DHCP"]
+    end
+    subgraph GUEST["guest VM"]
+        NIC["NIC 10.0.2.2/24<br/>static — all the guest sees"]
+    end
+    SVC -->|"endpoint = pod IP"| ETH
+    ETH <--> NAT
+    NAT <--> GW
+    GW <-->|"tap"| NIC
+
+    classDef c fill:#e8f0fe,stroke:#5b7fb5,color:#111827;
+    class ETH,NAT,GW c;
+```
+
+Consequences:
 
 - The VM inherits the pod's PodCIDR IP, identity, egress, and MTU. Pod-network policy applies to the VM.
 - A VM's stable label is `kubevirt.io/vm: <name>` **on the virt-launcher pod** — so every Service
@@ -180,5 +212,15 @@ not). Internal, non-announced range by default — routable reach needs L2/BGP (
 - Component values: `components/infrastructure/cilium/values.yaml`, `environments/<env>/cilium-values.yaml`.
 - The access-plane & tenant flows that ride this network: [`flows.md`](flows.md).
 - Cilium gotchas validated the hard way (MTU-first, `bpf.masquerade`, LB-IPAM, `--reuse-values`
-  upgrades): `../../CLAUDE.md` (#1, #11, #24).
+  upgrades): [`../development/lab-notes.md`](../development/lab-notes.md) (#1, #11, #24).
+
+## Further reading (upstream)
+- **Cilium** — [kube-proxy replacement](https://docs.cilium.io/en/stable/network/kubernetes/kubeproxy-free/) ·
+  [masquerading](https://docs.cilium.io/en/stable/network/concepts/masquerading/) ·
+  [LB-IPAM](https://docs.cilium.io/en/stable/network/lb-ipam/) ·
+  [L2 announcements](https://docs.cilium.io/en/stable/network/l2-announcements/) ·
+  [network policy](https://docs.cilium.io/en/stable/security/policy/) ·
+  [Hubble](https://docs.cilium.io/en/stable/observability/hubble/)
+- **KubeVirt** — [interfaces & networks (masquerade binding)](https://kubevirt.io/user-guide/network/interfaces_and_networks/) ·
+  [live migration](https://kubevirt.io/user-guide/compute/live_migration/)
 ```

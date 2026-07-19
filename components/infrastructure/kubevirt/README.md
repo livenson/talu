@@ -2,6 +2,8 @@
 
 **Responsibility:** KubeVirt operator + CR — VM lifecycle, live migration, hotplug (feature-gated).
 
+**Upstream:** [KubeVirt user guide](https://kubevirt.io/user-guide/) · [live migration](https://kubevirt.io/user-guide/compute/live_migration/) · [cloud-init `secretRef`](https://kubevirt.io/user-guide/user_workloads/startup_scripts/).
+
 Install the operator + CR from the KubeVirt release; the CR carries environment values.
 
 **rocky-sandbox (validated):** no `/dev/kvm`, so the KubeVirt CR sets
