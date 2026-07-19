@@ -1,0 +1,36 @@
+# Scrape an EXTERNAL Ceph (MicroCeph) — a per-site template, NOT in the kustomization (fill the mgr
+# endpoint first). Prereq on the Ceph side:  ceph mgr module enable prometheus  (serves :9283/metrics).
+# Then set the mgr host/IP below and add this file to kustomization.yaml. Gives cluster health, OSD/pool
+# capacity & IOPS, rebalance — the real storage-capacity dashboard.
+#
+# NOTE: not validatable on the no-KVM nested lab — in-cluster pods can't reach the Rocky host's ceph-mgr
+# (the pod's "host" is the nested Talos node). On real deployments the mgr endpoint is reachable.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ceph-mgr
+  namespace: monitoring
+  labels: { app.kubernetes.io/part-of: talu, talu.io/scrape: ceph }
+spec:
+  clusterIP: None
+  ports: [{ name: metrics, port: 9283, targetPort: 9283 }]
+---
+apiVersion: v1
+kind: Endpoints           # manual endpoints for the off-cluster mgr
+metadata:
+  name: ceph-mgr
+  namespace: monitoring
+  labels: { talu.io/scrape: ceph }
+subsets:
+  - addresses: [{ ip: "REPLACE_WITH_CEPH_MGR_IP" }]
+    ports: [{ name: metrics, port: 9283 }]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ceph-mgr
+  namespace: monitoring
+  labels: { app.kubernetes.io/part-of: talu }
+spec:
+  selector: { matchLabels: { talu.io/scrape: ceph } }
+  endpoints: [{ port: metrics, interval: 30s }]

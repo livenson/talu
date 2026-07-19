@@ -1,0 +1,120 @@
+# Operator VM-detail drill-down — pick any namespace + VM and see its CPU / memory / disk / network
+# load (from kubevirt_vmi_* per-VMI metrics). Admin-only via the operator Perses instance.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-vm-detail
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — VM detail
+    duration: 1h
+    # PromQL-based variables (use /api/v1/query, which the datasource proxies — unlike the
+    # /label/<name>/values endpoint, which prom-label-proxy/Perses does not serve here).
+    variables:
+      - kind: ListVariable
+        spec:
+          name: namespace
+          display: { name: Namespace }
+          plugin:
+            kind: PrometheusPromQLVariable
+            spec:
+              expr: kubevirt_vmi_memory_resident_bytes
+              labelName: namespace
+      - kind: ListVariable
+        spec:
+          name: vm
+          display: { name: VM }
+          plugin:
+            kind: PrometheusPromQLVariable
+            spec:
+              expr: 'kubevirt_vmi_memory_resident_bytes{namespace="$namespace"}'
+              labelName: name
+    panels:
+      cpu:
+        kind: Panel
+        spec:
+          display: { name: "vCPU load (cores used)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: 'sum(rate(kubevirt_vmi_cpu_usage_seconds_total{namespace="$namespace",name="$vm"}[5m]))' } }
+      vcpuwait:
+        kind: Panel
+        spec:
+          display: { name: "vCPU wait/steal (s/s)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: 'sum(rate(kubevirt_vmi_vcpu_wait_seconds_total{namespace="$namespace",name="$vm"}[5m]))' } }
+      mem:
+        kind: Panel
+        spec:
+          display: { name: "Memory: resident vs available (bytes)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: 'kubevirt_vmi_memory_resident_bytes{namespace="$namespace",name="$vm"}' } }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: 'kubevirt_vmi_memory_available_bytes{namespace="$namespace",name="$vm"}' } }
+      diskbytes:
+        kind: Panel
+        spec:
+          display: { name: "Disk throughput by drive (B/s) — read(+) write" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: 'sum by (drive) (rate(kubevirt_vmi_storage_read_traffic_bytes_total{namespace="$namespace",name="$vm"}[5m]))' } }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: 'sum by (drive) (rate(kubevirt_vmi_storage_write_traffic_bytes_total{namespace="$namespace",name="$vm"}[5m]))' } }
+      diskiops:
+        kind: Panel
+        spec:
+          display: { name: "Disk IOPS by drive — read / write" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: 'sum by (drive) (rate(kubevirt_vmi_storage_iops_read_total{namespace="$namespace",name="$vm"}[5m]))' } }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: 'sum by (drive) (rate(kubevirt_vmi_storage_iops_write_total{namespace="$namespace",name="$vm"}[5m]))' } }
+      net:
+        kind: Panel
+        spec:
+          display: { name: "Network (B/s) — rx / tx" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: 'sum(rate(kubevirt_vmi_network_receive_bytes_total{namespace="$namespace",name="$vm"}[5m]))' } }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: 'sum(rate(kubevirt_vmi_network_transmit_bytes_total{namespace="$namespace",name="$vm"}[5m]))' } }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: "CPU & memory" }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/cpu" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/vcpuwait" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/mem" } }
+      - kind: Grid
+        spec:
+          display: { title: "Disk & network" }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/diskbytes" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/diskiops" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/net" } }

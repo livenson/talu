@@ -1,0 +1,78 @@
+# Operator Network & Security dashboard — Cilium/Hubble policy verdicts + drops. Requires the cilium
+# agent + hubble metrics (components/infrastructure/cilium/values.yaml: prometheus + hubble.metrics) and
+# the cilium-agent ServiceMonitor (servicemonitors.yaml). Admin-only via the operator Perses instance.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-network-security
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — Network & Security
+    duration: 1h
+    panels:
+      verdicts:
+        kind: Panel
+        spec:
+          display: { name: "Flow verdicts (FORWARDED vs DROPPED /s)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (verdict) (rate(hubble_flows_processed_total[5m]))" } }
+      hubbledrops:
+        kind: Panel
+        spec:
+          display: { name: "Hubble drops by reason /s" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (reason) (rate(hubble_drop_total[5m]))" } }
+      ciliumdrops:
+        kind: Panel
+        spec:
+          display: { name: "Cilium drops by reason /s (policy denials show here)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (reason) (rate(cilium_drop_count_total[5m]))" } }
+      l7:
+        kind: Panel
+        spec:
+          display: { name: "L7 policy activity /s" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (proto) (rate(cilium_policy_l7_total[5m]))" } }
+      enforcement:
+        kind: Panel
+        spec:
+          display: { name: "Endpoints with policy enforcement" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (enforcement) (cilium_policy_endpoint_enforcement_status)" } }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: Policy verdicts }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/verdicts" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/ciliumdrops" } }
+      - kind: Grid
+        spec:
+          display: { title: Drops & L7 }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/hubbledrops" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/l7" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/enforcement" } }

@@ -50,6 +50,13 @@ spec:
           expr: max by (namespace, resource) (kube_resourcequota{type="used"})
         - record: talu:tenant_quota_hard
           expr: max by (namespace, resource) (kube_resourcequota{type="hard"})
+    # Golden-image freshness — 1 = the DataImportCron has detected a newer image upstream than the
+    # DataSource currently serves (so new VMs are a patch behind until the next import). Operator signal.
+    - name: talu.images
+      interval: 60s
+      rules:
+        - record: talu:image_outdated
+          expr: max by (cron_name, exported_namespace) (kubevirt_cdi_dataimportcron_outdated)
     # Info — namespace -> project_uuid, so a consumer can join usage to the tenant identity.
     # The project-uuid rides on the per-VMI domain metrics as `kubernetes_vmi_label_talu_io_project_uuid`
     # (KubeVirt relabels the VMI's talu.io/project-uuid label); rename it to a clean `project_uuid`.

@@ -39,16 +39,30 @@ l2announcements:
 externalIPs:
   enabled: true
 
-# Flow visibility — the allow/deny audit narrative (security acceptance test, Stage 6).
+# Prometheus metrics — feeds the operator Network & Security dashboard (policy verdicts, drops, L7).
+# The chart then creates the metrics Services + ServiceMonitors (kube-prometheus-stack picks them up).
+prometheus:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+operator:
+  replicas: 1               # environment value; example bumps to 2
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# Flow visibility — the allow/deny audit narrative (security acceptance test, Stage 6) + flow metrics.
 hubble:
   enabled: true
   relay:
     enabled: true
   ui:
     enabled: true
-
-operator:
-  replicas: 1               # environment value; example bumps to 2
+  metrics:
+    enabled: [dns, drop, tcp, flow, port-distribution, icmp, "httpV2:exemplars=true"]
+    serviceMonitor:
+      enabled: true
 
 # MTU is intentionally omitted here — it is an environment value. The sandbox pins it
 # under the host's mandated 1400 (see environments/rocky-sandbox/cilium-values.yaml).

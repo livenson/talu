@@ -19,6 +19,8 @@ resources:
   - perses-operator-helmrelease.yaml
   - perses-instance.yaml
   - dashboard-fleet.yaml
+  - dashboard-netsec.yaml
+  - dashboard-vmdetail.yaml
 configMapGenerator:
   - name: kube-prometheus-stack-values
     files:

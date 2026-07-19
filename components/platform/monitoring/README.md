@@ -24,10 +24,15 @@ accounting (the § READ verb). Billing/€-conversion is *not* here — it lives
   maps to a Perses *project*). Needs cert-manager (present in the access plane).
 - **`perses-instance.yaml`** — the `Perses` server CR (`talu`, labelled `talu.io/perses=operator`) +
   a default `PersesDatasource` pointing at the in-cluster Prometheus.
-- **`dashboard-fleet.yaml`** — the operator **fleet dashboard** (`PersesDashboard`), built entirely on
-  the `talu:tenant_*` rules + node-exporter (VMs / vCPU / memory / egress / quota per tenant; node CPU
-  and memory). Perses is exposed **only through Pomerium** (a `perses.<domain>` route scoped to the
-  admin group — no public endpoint), same as every other Talu UI.
+- **Operator dashboards** (`PersesDashboard`, exposed **only through Pomerium** — a `perses.<domain>`
+  route scoped to the admin group, no public endpoint):
+  - `dashboard-fleet.yaml` — fleet overview (VMs / vCPU / memory / egress / quota per tenant; node CPU &
+    memory; **golden-image freshness** ← `talu:image_outdated`).
+  - `dashboard-netsec.yaml` — **Network & Security** (Cilium/Hubble policy verdicts, drops, L7).
+  - `dashboard-vmdetail.yaml` — **per-VM drill-down** with `$namespace`+`$vm` pickers (CPU / memory /
+    disk throughput & IOPS / network from `kubevirt_vmi_*`).
+- **`servicemonitors.yaml`** also scrapes the **Cilium agent + Hubble** metrics (enabled via the cilium
+  values); **`ceph-scrape.yaml`** is a per-site template for an external Ceph mgr (fill the endpoint).
 
 The `talu:tenant_*` series (per namespace): `vmi_count`, `vcpu_cores:allocated`,
 `memory_bytes:allocated`/`:resident`, `network_{receive,transmit}_bytes:total` (+ transmit rate),
