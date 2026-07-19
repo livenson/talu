@@ -38,7 +38,7 @@ graph TB
     POL -. "enforces on every endpoint" .- EPS
     KPR -. "load-balances to" .- EPS
 
-    classDef c fill:#e8f0fe,stroke:#5b7fb5;
+    classDef c fill:#e8f0fe,stroke:#5b7fb5,color:#111827;
     class KPR,MASQ,POL,LBIPAM,VXLAN c;
 ```
 
@@ -93,8 +93,8 @@ graph LR
     X -.->|":22 DROP<br/>(default-deny)"| VMEP
     NET2["0.0.0.0/0"] -->|":80/:443 ALLOW<br/>(sg-web)"| VMEP
 
-    classDef ok fill:#e7f7e7,stroke:#3a3;
-    classDef no fill:#fdeaea,stroke:#c33;
+    classDef ok fill:#e7f7e7,stroke:#3a3,color:#0b3d0b;
+    classDef no fill:#fdeaea,stroke:#c33,color:#5c0d0d;
     class P,NET2 ok;
     class X no;
 ```

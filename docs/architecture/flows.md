@@ -69,25 +69,17 @@ sequenceDiagram
     participant PR as Prometheus HTTP API
     participant IDP as OIDC IdP
 
-    rect rgb(238,245,255)
     Note over O,API: 1 · WRITE — labelled objects
     O->>API: apply HelmRelease / VMs (talu.io/project-uuid on every object)
-    end
-    rect rgb(238,255,238)
     Note over O,API: 2 · WATCH — the only progress signal
     O->>API: watch .status (HelmRelease Ready, VMI conditions, route readiness)
     API-->>O: readiness / health
-    end
-    rect rgb(255,247,230)
     Note over O,PR: 3 · READ — usage for billing
     O->>PR: per-namespace PromQL (cpu / memory / disk / network)
     PR-->>O: metered usage
-    end
-    rect rgb(245,238,255)
     Note over O,IDP: 4 · DELEGATE — identity
     O->>IDP: create group / user for the project
     Note right of IDP: authorization = OIDC group membership
-    end
 ```
 
 **What a consumer must not assume:** no imperative side channels (declarative objects only); labels

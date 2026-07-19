@@ -64,7 +64,7 @@ graph TD
     KV --> CEPH
     PROM -.scrapes.-> KV & CILIUM & TNS
 
-    classDef opt fill:#eeeeee,stroke:#999999,stroke-dasharray:4 3;
+    classDef opt fill:#eeeeee,stroke:#999999,color:#111827,stroke-dasharray:4 3;
     class ORCH opt;
 ```
 
