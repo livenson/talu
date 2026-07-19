@@ -79,8 +79,8 @@ sequenceDiagram
     O->>API: watch .status (HelmRelease Ready, VMI conditions, route readiness)
     API-->>O: readiness / health
     Note over O,PR: 3 · READ — usage for billing
-    O->>PR: per-namespace PromQL (cpu / memory / disk / network)
-    PR-->>O: metered usage
+    O->>PR: talu:tenant_* recording rules (per namespace)
+    PR-->>O: metered usage (vCPU / memory / net / storage / quota)
     Note over O,IDP: 4 · DELEGATE — identity
     O->>IDP: create group / user for the project
     Note right of IDP: authorization = OIDC group membership

@@ -3,7 +3,7 @@
 **Talu** (Estonian: *farmstead* — "own your ground") is an open-source, multitenant VM
 platform: fast tenant provisioning, HA, zero-downtime updates, with a deliberately small
 operational footprint. It runs on a Kubernetes + KubeVirt substrate (Talos Linux, Cilium,
-CephFS, KubeVirt/CDI, Pomerium, a generic OIDC IdP) and is **API-first and
+CephFS, KubeVirt/CDI, Pomerium, a generic OIDC IdP, Prometheus + Perses) and is **API-first and
 orchestrator-agnostic** — the whole management surface is the Kubernetes declarative API plus
 the Prometheus HTTP API. See [`docs/architecture/`](docs/architecture/) for the component
 diagram and [runtime flows](docs/architecture/flows.md).

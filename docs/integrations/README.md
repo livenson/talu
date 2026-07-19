@@ -19,8 +19,11 @@ architecture in [`../architecture/`](../architecture/). This page is the integra
    parse names.
 2. **Watch** object status — the only progress/health signal: `HelmRelease` `Ready`, `VMI` conditions,
    route readiness. One `HelmRelease.status` summarizes a whole tenant. Names are handles; labels are truth.
-3. **Read** the Prometheus HTTP API for usage — the per-namespace PromQL set (the same queries that
-   render tenant dashboards are what you invoice).
+3. **Read** the Prometheus HTTP API for usage — the per-namespace **`talu:tenant_*`** recording rules
+   (VM count, allocated vCPU/memory, egress, storage, quota utilisation), keyed on `namespace` and
+   joinable to `talu.io/project-uuid` via `talu:tenant_project_uuid:info`. The **same** series render
+   the per-tenant Perses dashboards — the dashboard *is* the invoice. €-conversion/billing stays in the
+   orchestrator; Talu only exposes usage. See [`../../components/platform/monitoring/`](../../components/platform/monitoring/).
 4. **Delegate** identity to the shared **OIDC IdP** (generic — Dex/Keycloak/ZITADEL) and express
    authorization as **group membership** (a per-project group). Talu consumes the OIDC claims; it never
    calls back to the orchestrator.
@@ -42,7 +45,7 @@ See [`../architecture/flows.md`](../architecture/flows.md#tenant--vm-provisionin
 | Guest secrets | cloud-init from a Kubernetes `Secret` (`cloudInitNoCloud.secretRef`) | §2 |
 | Shell access | Pomerium **Native SSH** — Pomerium is the SSH proxy + User CA; short-lived certs, no public :22 | §3 |
 | VM console | virt-api VNC subresource via a per-tenant ServiceAccount | §5 |
-| Usage → billing | Prometheus HTTP API, per-namespace recording rules | §7 |
+| Usage → billing | Prometheus HTTP API — the `talu:tenant_*` per-namespace recording rules | [`monitoring/`](../../components/platform/monitoring/) |
 
 ## What a consumer must NOT assume
 
