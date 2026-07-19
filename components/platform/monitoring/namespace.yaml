@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+    # node-exporter uses hostNetwork/hostPath → privileged (Talos enforces PSA baseline cluster-wide).
+    pod-security.kubernetes.io/enforce: privileged

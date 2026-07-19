@@ -1,0 +1,101 @@
+# Operator fleet dashboard — built entirely on the talu:tenant_* recording rules + node-exporter.
+# Synced into the Perses server by the operator (namespace → Perses project). Admin-only (via Pomerium).
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-fleet-overview
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — Fleet Overview
+    duration: 1h
+    panels:
+      vms:
+        kind: Panel
+        spec:
+          display: { name: VMs per tenant }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:tenant_vmi_count" } }
+      vcpu:
+        kind: Panel
+        spec:
+          display: { name: Allocated vCPU per tenant }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:tenant_vcpu_cores:allocated" } }
+      mem:
+        kind: Panel
+        spec:
+          display: { name: Allocated memory per tenant (bytes) }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:tenant_memory_bytes:allocated" } }
+      egress:
+        kind: Panel
+        spec:
+          display: { name: Egress rate per tenant (B/s) }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:tenant_network_transmit_bytes:rate5m" } }
+      quotacpu:
+        kind: Panel
+        spec:
+          display: { name: CPU quota utilisation (used/hard) }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:tenant_quota_used{resource=\"requests.cpu\"} / talu:tenant_quota_hard{resource=\"requests.cpu\"}" }
+      nodecpu:
+        kind: Panel
+        spec:
+          display: { name: Node CPU utilisation }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))" }
+      nodemem:
+        kind: Panel
+        spec:
+          display: { name: Node memory available (bytes) }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "node_memory_MemAvailable_bytes" } }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: Tenants }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/vms" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/vcpu" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/mem" } }
+            - { x: 0,  y: 8, width: 8, height: 8, content: { $ref: "#/spec/panels/egress" } }
+            - { x: 8,  y: 8, width: 8, height: 8, content: { $ref: "#/spec/panels/quotacpu" } }
+      - kind: Grid
+        spec:
+          display: { title: Nodes }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/nodecpu" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/nodemem" } }

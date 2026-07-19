@@ -1,0 +1,24 @@
+# ServiceMonitors for the Talu-specific metric sources that don't ship their own.
+# (kube-state-metrics + node-exporter come from the kube-prometheus-stack chart.)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kubevirt
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  # KubeVirt's virt-operator publishes a headless `kubevirt-prometheus-metrics` Service exposing
+  # per-VMI metrics (kubevirt_vmi_*) over TLS; labels/ports confirmed against the running cluster.
+  namespaceSelector:
+    matchNames: [kubevirt]
+  selector:
+    matchLabels:
+      prometheus.kubevirt.io: "true"
+  endpoints:
+    - port: metrics
+      scheme: https
+      interval: 30s
+      honorLabels: true
+      tlsConfig:
+        insecureSkipVerify: true

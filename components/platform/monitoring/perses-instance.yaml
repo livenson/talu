@@ -1,0 +1,45 @@
+# The Perses server (operator-managed). Dashboards/datasources target it via instanceSelector
+# matchLabels: talu.io/perses=operator. Exposed only through Pomerium (admin group) — no public route.
+apiVersion: perses.dev/v1alpha2
+kind: Perses
+metadata:
+  name: talu
+  namespace: monitoring
+  labels:
+    talu.io/perses: operator
+    app.kubernetes.io/part-of: talu
+spec:
+  image: docker.io/persesdev/perses:v0.53.0
+  containerPort: 8080
+  config:
+    database:
+      file:
+        folder: /perses
+        extension: yaml
+---
+# Prometheus datasource (default) → the in-cluster kube-prometheus-stack Prometheus.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDatasource
+metadata:
+  name: talu-prometheus
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    default: true
+    display:
+      name: Talu Prometheus
+    plugin:
+      kind: PrometheusDatasource
+      spec:
+        # proxy (not directUrl): the Perses backend proxies queries to the in-cluster Prometheus, so
+        # the browser only ever talks to Perses (reachable via Pomerium) — directUrl would make the
+        # browser hit an unreachable ClusterIP ("Failed to fetch").
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: http://kube-prometheus-stack-prometheus.monitoring.svc:9090

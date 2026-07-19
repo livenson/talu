@@ -1,0 +1,26 @@
+# Talu monitoring — Prometheus only. Grafana is off (Perses is the dashboard layer, exposed via
+# Pomerium); Alertmanager is off (alerting deferred). This Prometheus selects ALL ServiceMonitors,
+# PodMonitors and PrometheusRules cluster-wide, so component ServiceMonitors (KubeVirt, …) and the
+# per-namespace usage recording rules are scraped without release-label wiring.
+grafana:
+  enabled: false
+alertmanager:
+  enabled: false
+
+# Talos runs its own control plane behind KubePrism and Cilium replaces kube-proxy — the default
+# etcd/scheduler/controller-manager/kube-proxy scrapers don't apply here and would just show as down.
+kubeControllerManager: { enabled: false }
+kubeScheduler: { enabled: false }
+kubeProxy: { enabled: false }
+kubeEtcd: { enabled: false }
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+    retention: 15d
+    resources:
+      requests: { cpu: 200m, memory: 512Mi }

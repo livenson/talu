@@ -1,0 +1,26 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kube-prometheus-stack
+  namespace: monitoring
+spec:
+  interval: 1h
+  install:
+    crds: CreateReplace
+    createNamespace: false          # namespace.yaml owns it (PSA privileged label)
+  upgrade:
+    crds: CreateReplace
+  chart:
+    spec:
+      chart: kube-prometheus-stack
+      version: "87.17.0"            # app v0.92.1 (prometheus-operator)
+      sourceRef:
+        kind: HelmRepository
+        name: prometheus-community
+        namespace: monitoring
+  # Same values file used to bootstrap the stack directly; environment overlays layer their own
+  # configMapGenerator on top (retention/storage/resources per site).
+  valuesFrom:
+    - kind: ConfigMap
+      name: kube-prometheus-stack-values
+      valuesKey: values.yaml

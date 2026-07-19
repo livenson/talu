@@ -1,0 +1,66 @@
+# The per-namespace usage set — the metrics half of the integration contract (the § READ verb).
+# Every series is keyed on `namespace` (== tenant slug); `talu:tenant_project_uuid:info` maps that to
+# the project UUID so any consumer can join usage to the tenant identity. The SAME series back the
+# per-tenant dashboards (dashboards == invoices). Metric names verified against KubeVirt v1.8.4 /
+# kube-state-metrics on the lab. Billing/€-conversion happens in the external orchestrator, not here.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: talu-tenant-usage
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  groups:
+    # Allocation — what a tenant reserves (the primary billing signal for a VM platform).
+    - name: talu.tenant.allocation
+      interval: 30s
+      rules:
+        - record: talu:tenant_vmi_count
+          expr: count by (namespace) (kubevirt_vmi_info)
+        - record: talu:tenant_vcpu_cores:allocated
+          expr: sum by (namespace) (kubevirt_vm_resource_requests{resource="cpu"})
+        - record: talu:tenant_memory_bytes:allocated
+          expr: sum by (namespace) (kubevirt_vm_resource_requests{resource="memory"})
+        - record: talu:tenant_storage_bytes:requested
+          expr: sum by (namespace) (kube_persistentvolumeclaim_resource_requests_storage_bytes)
+    # Usage — actual consumption (utilisation dashboards; also informs metered billing).
+    - name: talu.tenant.usage
+      interval: 30s
+      rules:
+        - record: talu:tenant_vcpu_seconds:rate5m
+          expr: sum by (namespace) (rate(kubevirt_vmi_vcpu_seconds_total[5m]))
+        - record: talu:tenant_memory_bytes:resident
+          expr: sum by (namespace) (kubevirt_vmi_memory_resident_bytes)
+        - record: talu:tenant_network_receive_bytes:total
+          expr: sum by (namespace) (kubevirt_vmi_network_receive_bytes_total)
+        - record: talu:tenant_network_transmit_bytes:total
+          expr: sum by (namespace) (kubevirt_vmi_network_transmit_bytes_total)
+        - record: talu:tenant_network_transmit_bytes:rate5m
+          expr: sum by (namespace) (rate(kubevirt_vmi_network_transmit_bytes_total[5m]))
+        - record: talu:tenant_storage_read_bytes:total
+          expr: sum by (namespace) (kubevirt_vmi_storage_read_traffic_bytes_total)
+        - record: talu:tenant_storage_write_bytes:total
+          expr: sum by (namespace) (kubevirt_vmi_storage_write_traffic_bytes_total)
+    # Envelope — quota utilisation (present once a ResourceQuota exists; the chart default ensures one).
+    - name: talu.tenant.quota
+      interval: 30s
+      rules:
+        - record: talu:tenant_quota_used
+          expr: max by (namespace, resource) (kube_resourcequota{type="used"})
+        - record: talu:tenant_quota_hard
+          expr: max by (namespace, resource) (kube_resourcequota{type="hard"})
+    # Info — namespace -> project_uuid, so a consumer can join usage to the tenant identity.
+    # The project-uuid rides on the per-VMI domain metrics as `kubernetes_vmi_label_talu_io_project_uuid`
+    # (KubeVirt relabels the VMI's talu.io/project-uuid label); rename it to a clean `project_uuid`.
+    - name: talu.tenant.info
+      interval: 30s
+      rules:
+        - record: talu:tenant_project_uuid:info
+          expr: |
+            count by (namespace, project_uuid) (
+              label_replace(
+                kubevirt_vmi_memory_resident_bytes,
+                "project_uuid", "$1", "kubernetes_vmi_label_talu_io_project_uuid", "(.+)"
+              )
+            )

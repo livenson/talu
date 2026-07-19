@@ -1,5 +1,27 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# Skeleton — real manifests (HelmRelease / CRs) land here per the pilot plan.
-# Intentionally empty so `kustomize build` succeeds during scaffolding.
-resources: []
+# Flux-managed monitoring stack (kube-prometheus-stack, Prometheus only) + the per-namespace usage
+# recording rules that are the metrics half of the integration contract (the § READ verb). The
+# rocky-sandbox lab bootstraps this via Helm directly (helm-controller is flaky on the nested node);
+# the HelmRelease is the production/GitOps path. Environment overlays add their own values on top.
+namespace: monitoring
+resources:
+  - namespace.yaml
+  # metrics pipeline
+  - helmrepository.yaml
+  - helmrelease.yaml
+  - servicemonitors.yaml
+  - recording-rules.yaml
+  # dashboards (Perses, behind Pomerium). The Perses/PersesDashboard/PersesDatasource CRs depend on
+  # the operator's CRDs — under Flux the kustomize-controller retries until they exist (or split into
+  # a dependent Kustomization for strict ordering).
+  - perses-helmrepository.yaml
+  - perses-operator-helmrelease.yaml
+  - perses-instance.yaml
+  - dashboard-fleet.yaml
+configMapGenerator:
+  - name: kube-prometheus-stack-values
+    files:
+      - values.yaml
+generatorOptions:
+  disableNameSuffixHash: true
