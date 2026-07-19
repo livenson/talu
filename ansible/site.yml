@@ -13,7 +13,7 @@
     - { role: core_services,  tags: [core] }         # local-path (default SC) + cert-manager internal CA
     - { role: storage_ceph,   tags: [storage] }      # MicroCeph + CephFS (RWX) + ceph-csi
     - { role: kubevirt,       tags: [kubevirt] }     # KubeVirt (useEmulation) + CDI
-    # Stage 6 — identity & access plane (validated end-to-end; CLAUDE.md #16-#23).
+    # Stage 6 — identity & access plane (validated end-to-end; docs/development/lab-notes.md #16-#23).
     - { role: identity_dex,      tags: [stage6, dex] }       # tiny OIDC IdP (#16)
     - { role: kubevirt_manager,  tags: [stage6, kvmanager] } # VM web UI on the floating IP (#22)
     - { role: identity_pomerium, tags: [stage6, pomerium] }  # IAP + Native SSH proxy/CA (#17,#18,#18b,#21)

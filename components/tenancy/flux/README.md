@@ -33,7 +33,7 @@ Flux rendered the full tenant bundle (cloud-init Secret, VirtualMachine **app1 R
 `app1-ssh-pin` + `sg-web` CiliumNetworkPolicies, ResourceQuota, Role) with the CA pubkey injected via
 `valuesFrom`. The orchestrator flow proven: one object applied directly to the API, one `.status` to watch.
 
-Two real bugs were fixed getting here (NEITHER was "the node is too small" — see CLAUDE.md #25):
+Two real bugs were fixed getting here (NEITHER was "the node is too small" — see docs/development/lab-notes.md #25):
 (1) a chart bug — the CA pubkey's trailing newline broke the double-quoted YAML (`| trim | quote` fixes
 it; `helm template` missed it because `$(...)` strips newlines, Flux `valuesFrom` doesn't); (2) the
 nested CNI false-negatived source-controller's readiness probe, dropping it from its Service endpoints

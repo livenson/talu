@@ -1,5 +1,5 @@
 ---
-# Stage 0: host prep on Rocky 10 (OpenStack, no KVM). Order matters (CLAUDE.md #1-#4).
+# Stage 0: host prep on Rocky 10 (OpenStack, no KVM). Order matters (docs/development/lab-notes.md #1-#4).
 - name: Discover primary interface
   ansible.builtin.set_fact:
     primary_iface: "{{ ansible_default_ipv4.interface }}"

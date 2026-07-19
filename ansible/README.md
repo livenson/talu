@@ -1,7 +1,7 @@
 # Talu install — Ansible
 
 Idempotent installation of the Talu **no-KVM lab** (Rocky 10, OpenStack), encoding the
-validated procedure and every gotcha from `../CLAUDE.md`. Replaces the ad-hoc shell steps;
+validated procedure and every gotcha from `../docs/development/lab-notes.md`. Replaces the ad-hoc shell steps;
 the `dev/lab/*.sh` scripts remain as reference for what each role does.
 
 ## Prerequisites (control node = your laptop)

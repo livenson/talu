@@ -21,4 +21,4 @@ spec:
   selector: { app: registry }
   ports: [{ name: oci, port: 5000, targetPort: 5000 }]
 # ClusterIP only: push from inside the cluster (a NodePort is unreliable from the host on the nested
-# lab — see CLAUDE.md #25). OCIRepository pulls from registry.flux-system.svc:5000.
+# lab — see docs/development/lab-notes.md #25). OCIRepository pulls from registry.flux-system.svc:5000.

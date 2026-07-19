@@ -89,7 +89,7 @@ EOF
 # RBD (block) mounts are unreliable on nested Talos (/dev wall). CephFS mounts are network
 # filesystem mounts (mount -t ceph) — no block device — so they work. RWX + snapshots, and
 # RWX Filesystem can back KubeVirt disks + live migration. This is the recommended sandbox
-# storage class. See CLAUDE.md #15.
+# storage class. See docs/development/lab-notes.md #15.
 echo "[microceph] enabling CephFS (talufs)"
 $MC enable mds >/dev/null 2>&1 || true
 $MC.ceph fs volume create talufs >/dev/null 2>&1 || true
@@ -113,7 +113,7 @@ storageClass:
 secret: {create: true, name: csi-cephfs-secret, adminID: cephfs, adminKey: "$FSKEY"}
 EOF
 helm upgrade --install ceph-csi-cephfs ceph-csi/ceph-csi-cephfs -n cephfs-csi -f /tmp/cephfs-values.yaml >/dev/null
-# GOTCHA (CLAUDE.md #15): the chart writes the secret as userID/userKey, but the driver needs
+# GOTCHA (docs/development/lab-notes.md #15): the chart writes the secret as userID/userKey, but the driver needs
 # adminID/adminKey — recreate it, else provisioning fails with `rados: ret=-22`.
 kubectl -n cephfs-csi delete secret csi-cephfs-secret >/dev/null 2>&1 || true
 kubectl -n cephfs-csi create secret generic csi-cephfs-secret --from-literal=adminID=cephfs --from-literal=adminKey="$FSKEY" >/dev/null

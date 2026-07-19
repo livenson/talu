@@ -1,6 +1,6 @@
 ---
 # Stage 5: external MicroCeph (host, real udev) + CephFS RWX via ceph-csi.
-# CephFS (network fs mount) is reliable on the nested node; RBD block is not (CLAUDE.md #14/#15).
+# CephFS (network fs mount) is reliable on the nested node; RBD block is not (docs/development/lab-notes.md #14/#15).
 - name: Install snapd + MicroCeph
   become: true
   block:

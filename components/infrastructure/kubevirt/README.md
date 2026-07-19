@@ -8,7 +8,7 @@ Install the operator + CR from the KubeVirt release; the CR carries environment 
 `spec.configuration.developerConfiguration.useEmulation: true` (QEMU TCG). VM namespaces must be
 labeled `pod-security.kubernetes.io/enforce=privileged` (virt-launcher needs NET_ADMIN → violates
 PSA baseline). Validated: a CirrOS **containerDisk** VM boots under TCG and reaches the serial-console
-login prompt (`virtctl console -n <ns> <vm>`). See `CLAUDE.md` #13–14 for storage caveats
+login prompt (`virtctl console -n <ns> <vm>`). See `docs/development/lab-notes.md` #13–14 for storage caveats
 (Filesystem-mode disks only; containerDisk is the reliable path — CDI-import-to-Ceph is flaky on the
 nested node). Sandbox CR:
 
