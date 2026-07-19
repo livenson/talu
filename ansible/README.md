@@ -29,10 +29,9 @@ Idempotent: a second full run reports `changed=0` (validated).
 | `core_services` | local-path (default SC) + cert-manager internal CA | PSA privileged |
 | `storage_ceph` | MicroCeph + **CephFS RWX** + ceph-csi-cephfs + snapshotter | #14 RBD unreliable, #15 CephFS + secret adminID/adminKey |
 | `kubevirt` | KubeVirt (`useEmulation`) + CDI, scratch→local-path | #13 emulation/PSA |
-| `secrets_openbao` | OpenBao dev-mode SSH CA (engine + CA + role via JSON) | #21 (dev-mode ephemeral; self-heals) |
 | `identity_dex` | tiny OIDC IdP (issuer/clients/static user) | #16 Dex-not-Keycloak |
 | `kubevirt_manager` | VM web UI bundle (route via Pomerium) | #22 |
-| `identity_pomerium` | IAP: OIDC→Dex, autocert LE, hostAlias, NodePort + host `socat` | #17 OIDC loop, #18 expose, #18b v0.33 |
+| `identity_pomerium` | IAP **+ Native SSH proxy/CA** (OIDC→Dex, autocert LE, hostAlias, NodePort + host `socat`, :23) | #17,#18,#18b,#21 |
 
 Stage 6 roles (tag `stage6`) carry `lab_domain` (derived from `lab_floating_ip`) so they retarget
 on VM reinstall. Per-VM SSH routes are layered by `dev/lab/expose-vm.sh` / `gen-vm-manifests.sh`

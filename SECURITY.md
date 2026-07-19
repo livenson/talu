@@ -13,9 +13,10 @@ justification:
 
 - **The platform never acts inside tenant guests.** No `guest-exec` via qemu-guest-agent
   for management; agent updates arrive via the platform APT repo + unattended-upgrades.
-- **Bake capabilities, inject identity.** No secret, token, or per-tenant material is ever
-  baked into an image or left etcd-resident in cloud-init. Machine identity bootstraps via
-  single-use response-wrapped OpenBao tokens.
+- **Bake capabilities, inject identity.** Golden images are generic; per-tenant identity and
+  secrets arrive at boot via cloud-init sourced from a Kubernetes `Secret` (not baked into the
+  image or the VM manifest). SSH uses Pomerium **Native SSH** — short-lived certificates issued
+  after OIDC, no static credentials anywhere.
 - **One policy-controlled front door.** All inbound human/tunneled traffic enters via
   Pomerium; Cilium pins the tenant path to the proxy in eBPF (non-bypassable).
 - **One identity vocabulary.** OIDC identity = Pomerium subject = SSH cert principal

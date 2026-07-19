@@ -87,15 +87,14 @@ Service — chosen address assigned, wrong-pool refused, address independent of 
 **Exit:** a freshly pushed image goes cluster-live via the cron; a tenant clone comes off the
 rolled snapshot; the **ephemeral (containerDisk, no PVC)** flavor boots.
 
-### Stage 6 — Identity, secrets & SSH chain + **security acceptance test** (the payoff)
-Keycloak (behind the IdP-swap interface), OpenBao (1-member Raft, manual-unseal runbook,
-audit on, SSH CA), Pomerium (OIDC, per-route policy incl. `allow: public`), Cilium pinning.
-Exercise the **wrapped-token bootstrap** (mint `role/vm-<name>` → response-wrap single-use
-SecretID → cloud-init → `bao-agent` unwraps; pre-unwrapped token fails loudly) and the **SSH
-chain** (OIDC `bao login` → `ssh/sign/member` cert → `pomerium-cli tcp` tunnel → cert auth).
-**Exit:** unauthenticated route → Keycloak; correct-group user passes; group removal blocks
-within session TTL; SSH works **only** via short-lived cert through the tunnel; cross-namespace
-reach to a VM port denied, through-Pomerium allowed; Hubble shows the denied attempts.
+### Stage 6 — Identity & access plane + **security acceptance test** (the payoff)
+Generic OIDC IdP (Dex on the lab; Keycloak/ZITADEL as a values swap), Pomerium as the IAP **and
+Native SSH proxy + SSH User CA** (no OpenBao — Pomerium issues the short-lived certs itself), Cilium
+per-VM pinning. Guest secrets ride into the VM via cloud-init sourced from a Kubernetes `Secret`
+(`cloudInitNoCloud.secretRef`). VM trusts Pomerium's User CA (`TrustedUserCAKeys`); no static password.
+**Exit:** unauthenticated route → OIDC login; correct-group user passes; SSH works **only** via
+Pomerium Native SSH (`ssh <user>@<vm>@ssh.<host>` → browser OIDC → short-lived cert); cross-namespace
+reach to a VM's `:22` denied, through-Pomerium allowed; Hubble shows the denied attempts.
 
 ### Stage 7 — Talu-native tenancy + **§10 integration-contract proof** (orchestrator-free)
 Prometheus + recording rules for the billing PromQL set; tuppr CRs for API-surface + CEL-gate
