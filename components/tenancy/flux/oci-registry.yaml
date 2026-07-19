@@ -20,5 +20,7 @@ metadata: { name: registry, namespace: flux-system }
 spec:
   selector: { app: registry }
   ports: [{ name: oci, port: 5000, targetPort: 5000 }]
-# ClusterIP only: push from inside the cluster (a NodePort is unreliable from the host on the nested
-# lab — see docs/development/lab-notes.md #25). OCIRepository pulls from registry.flux-system.svc:5000.
+# ClusterIP: OCIRepository pulls from registry.flux-system.svc:5000 (in-cluster), and we push from
+# inside the cluster. (A NodePort would also be reachable from the host — the host routes to the
+# talos-docker node's eth0 over the podman bridge and Cilium's eBPF NodePort forwards it; add one if
+# you need host/off-cluster pushes.)

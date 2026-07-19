@@ -24,7 +24,7 @@ sequenceDiagram
 
     O->>API: apply HelmRelease (chart=talu-tenant, values, talu.io/project-uuid)
     F->>SRC: fetch talu-tenant chart
-    F->>F: render bundle — namespace, ResourceQuota, RBAC,<br/>cloud-init Secret, VirtualMachine, ssh Service, CiliumNetworkPolicies
+    F->>F: render bundle — namespace, ResourceQuota, RBAC, cloud-init Secret,<br/>VirtualMachine (+ DataVolume from a golden-image DataSource if source=dataSource),<br/>ssh Service, CiliumNetworkPolicies, (optional) per-tenant Perses dashboards
     F->>API: apply tenant objects (owned by the release)
     API->>KV: VirtualMachine created
     KV->>KV: start VMI — cloud-init from Secret<br/>(TrustedUserCAKeys + guest secrets)

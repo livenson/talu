@@ -91,9 +91,16 @@ graph TD
   deployments run it on KVM nodes — a values change, not a rebuild.
 - **Observability & accounting = one PromQL set.** Prometheus scrapes KubeVirt/Cilium/kube-state-metrics
   and computes the per-namespace **`talu:tenant_*`** recording rules — the *same* series feed the operator
-  Perses dashboards, the per-tenant dashboards, and the orchestrator's usage read (verb 3). Per-tenant data
-  isolation is enforced by **prom-label-proxy** (hard-scopes every query to the tenant's namespace); all
-  dashboards are fronted by Pomerium. Billing/€-conversion is the orchestrator's job — Talu only meters.
+  Perses dashboards (fleet, network/security, per-VM detail), the per-tenant dashboards, and the
+  orchestrator's usage read (verb 3). Per-tenant data isolation is enforced by **prom-label-proxy**
+  (hard-scopes every query to the tenant's namespace); all dashboards are fronted by Pomerium.
+  Billing/€-conversion is the orchestrator's job — Talu only meters.
+- **Golden images are bootc, delivery is automatic.** Images are built as **bootc** (image-mode) OCI
+  containerDisks (CI or an in-cluster Job, no KVM needed) and pushed to **zot**. A CDI **`DataImportCron`**
+  rolls a **`DataSource`** on each new digest; a tenant VM with `source: dataSource` clones from it, so a
+  *new* VM always gets the latest patched image, and a *running* VM self-updates from the registry via
+  bootc. The default `source: containerDisk` needs no catalog (standalone-first); `dataSource` is the
+  opt-in auto-patching path. See [`../../image-automation-plan.md`](../../image-automation-plan.md).
 
 ## Design rules (the invariants)
 
@@ -115,6 +122,7 @@ Talu is an assembly of standard components — the authoritative reference for e
 | CNI / dataplane | Cilium | <https://docs.cilium.io/en/stable/> |
 | Virtualization | KubeVirt · CDI | <https://kubevirt.io/user-guide/> · <https://github.com/kubevirt/containerized-data-importer> |
 | Storage | ceph-csi (CephFS) · Rook (prod) | <https://github.com/ceph/ceph-csi> · <https://rook.io/docs/rook/latest/> |
+| Images / patching | bootc (image mode) · bootc-image-builder · CDI DataImportCron · zot | <https://bootc-dev.github.io/bootc/> · <https://github.com/osbuild/bootc-image-builder> · <https://zotregistry.dev/> |
 | Tenancy | Flux (helm-controller) | <https://fluxcd.io/flux/components/helm/helmreleases/> |
 | Access | Pomerium (Native SSH) · Dex · cert-manager | <https://www.pomerium.com/docs/capabilities/native-ssh-access> · <https://dexidp.io/docs/> · <https://cert-manager.io/docs/> |
 | Observability / accounting | Prometheus (kube-prometheus-stack) · Perses · prom-label-proxy | <https://prometheus-operator.dev/> · <https://perses.dev/> · <https://github.com/prometheus-community/prom-label-proxy> |

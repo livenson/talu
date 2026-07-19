@@ -368,7 +368,11 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     Earlier (separate, real) wall: **Podman default `--pids-limit=2048`** caps the Talos-in-Podman node
     (whole stack + VMs share it); at the cap new threads fail (`cilium-cni ... failed to create new OS
     thread, errno=11 EAGAIN`). Fix live: `sudo podman update --pids-limit -1 talu-lab-controlplane-1`;
-    encode at node-create time. And the **in-cluster registry NodePort is unreachable from the host**
-    (HTTP 000) — push charts from **inside** the cluster (`helm push oci://registry.flux-system.svc:5000
-    --plain-http`). See `components/tenancy/flux/README.md`.
+    encode at node-create time. The registry here is ClusterIP, so we pushed charts from **inside** the
+    cluster (`helm push oci://registry.flux-system.svc:5000 --plain-http`). NOTE (corrected later): an
+    earlier claim that "the NodePort is unreachable from the host (HTTP 000)" was **wrong** — that was a
+    premature curl before the pod was Ready. A NodePort **is** reachable from the host: the host routes to
+    the talos-docker node's `eth0` (`10.5.0.2`) over the `podman1` bridge, and Cilium's eBPF NodePort
+    (Direct Routing on eth0) forwards it. `curl 10.5.0.2:<nodePort>` and `podman push` both work. See
+    `components/tenancy/flux/README.md`.
 
