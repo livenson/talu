@@ -20,8 +20,9 @@ CI pushes the signed containerDisk to **zot** (`components/infrastructure/zot/`)
 rolls a **`managedDataSource`**. Tenant VMs clone from that DataSource (tenant chart `source: dataSource`,
 `dataVolumeTemplate → sourceRef`), so **a new VM always boots the latest patched image** with no spec
 change; **running VMs self-update via bootc**. Freshness is on the operator dashboard
-(`talu:image_outdated` ← `kubevirt_cdi_dataimportcron_outdated`). Full design + phasing:
-[`../image-automation-plan.md`](../image-automation-plan.md).
+(`talu:image_outdated` ← `kubevirt_cdi_dataimportcron_outdated`). Lifecycle **sequence diagram** and a
+why-bootc comparison: [`../docs/architecture/flows.md`](../docs/architecture/flows.md#golden-image-lifecycle--patching);
+full design + phasing: [`../image-automation-plan.md`](../image-automation-plan.md).
 
 > Validated on the no-KVM lab: `centos-bootc` built on the host (no nested virt) → containerDisk → zot →
 > `DataImportCron` → `DataSource` → a VM boots the self-built image (same- and cross-namespace clone).
