@@ -130,7 +130,7 @@ sequenceDiagram
     Note over Z,VM: 3b · RUNNING VM — bootc self-update (pets)
     VM->>Z: bootc: pull channel tag (schedule / maintenance window)
     Z-->>VM: new image layers
-    VM->>VM: stage → (soft-)reboot → activate<br/>(atomic; one-command rollback)
+    VM->>VM: stage → (soft-)reboot → activate<br/>(atomic, one-command rollback)
 
     Note over DIC,P: 4 · FRESHNESS
     DIC-->>P: kubevirt_cdi_dataimportcron_outdated<br/>→ talu:image_outdated (operator dashboard + alert)
