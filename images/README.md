@@ -21,7 +21,7 @@ rolls a **`managedDataSource`**. Tenant VMs clone from that DataSource (tenant c
 `dataVolumeTemplate → sourceRef`), so **a new VM always boots the latest patched image** with no spec
 change; **running VMs self-update via bootc**. Freshness is on the operator dashboard
 (`talu:image_outdated` ← `kubevirt_cdi_dataimportcron_outdated`). Lifecycle **sequence diagram** and a
-why-bootc comparison: [`../docs/architecture/flows.md`](../docs/architecture/flows.md#golden-image-lifecycle--patching);
+why-bootc comparison: [`../docs/architecture/flows.md`](../docs/architecture/flows.md#golden-image-lifecycle-and-patching);
 full design + phasing: [`../image-automation-plan.md`](../image-automation-plan.md).
 
 > Validated on the no-KVM lab: `centos-bootc` built on the host (no nested virt) → containerDisk → zot →

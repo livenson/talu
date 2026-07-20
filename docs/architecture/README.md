@@ -100,7 +100,7 @@ graph TD
   rolls a **`DataSource`** on each new digest; a tenant VM with `source: dataSource` clones from it, so a
   *new* VM always gets the latest patched image, and a *running* VM self-updates from the registry via
   bootc. The default `source: containerDisk` needs no catalog (standalone-first); `dataSource` is the
-  opt-in auto-patching path. Sequence + why-bootc: [`flows.md`](flows.md#golden-image-lifecycle--patching);
+  opt-in auto-patching path. Sequence + why-bootc: [`flows.md`](flows.md#golden-image-lifecycle-and-patching);
   design/phasing: [`../../image-automation-plan.md`](../../image-automation-plan.md).
 
 ## Design rules (the invariants)

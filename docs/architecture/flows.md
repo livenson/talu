@@ -90,7 +90,7 @@ sequenceDiagram
 are truth, names are handles (`talu.io/project-uuid` is the join key); and Talu may run with **no
 orchestrator at all** — never design objects that require one to exist.
 
-## Golden-image lifecycle & patching
+## Golden-image lifecycle and patching
 
 How an OS image is built, catalogued, and delivered — to **new** VMs and to **already-running** ones.
 The design goal is *patching as automatic as possible*; the lever that makes it work is **bootc
