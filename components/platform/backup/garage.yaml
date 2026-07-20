@@ -1,0 +1,111 @@
+# Garage — the S3 target Velero writes to (see README.md for why Garage and not MinIO).
+#
+# NOTE ON SECRETS: rpc_secret / admin_token are deliberately ABSENT from this ConfigMap so nothing
+# secret lives in Git. Garage reads them from the GARAGE_RPC_SECRET / GARAGE_ADMIN_TOKEN environment
+# variables instead (supported since v0.8.2), injected from the `garage-secrets` Secret which the
+# operator creates out-of-band — see README.md § Bootstrap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garage-config
+  namespace: garage
+data:
+  garage.toml: |
+    metadata_dir = "/var/lib/garage/meta"
+    data_dir     = "/var/lib/garage/data"
+    db_engine    = "sqlite"
+
+    # Single-node default. With a real multi-node cluster set this to 3 and give each node its own
+    # zone in the layout (`garage layout assign -z <zone>`), which is what makes Garage geo-aware.
+    replication_factor = 1
+
+    rpc_bind_addr   = "[::]:3901"
+    rpc_public_addr = "127.0.0.1:3901"
+
+    [s3_api]
+    s3_region     = "garage"
+    api_bind_addr = "[::]:3900"
+    root_domain   = ".s3.garage.localhost"
+
+    [admin]
+    api_bind_addr = "[::]:3903"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: garage-data
+  namespace: garage
+spec:
+  accessModes: [ReadWriteOnce]
+  # Deliberately NOT the CephFS class: a backup target must not depend on the storage it protects
+  # (a Ceph outage would take the backups with it). Environment overlays should point this at a
+  # disk independent of the cluster — and in production, run Garage OUTSIDE the cluster entirely.
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: garage
+  namespace: garage
+  labels:
+    app: garage
+    app.kubernetes.io/part-of: talu
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # single RWO volume — never run two writers against it
+  selector:
+    matchLabels:
+      app: garage
+  template:
+    metadata:
+      labels:
+        app: garage
+        app.kubernetes.io/part-of: talu
+    spec:
+      containers:
+        - name: garage
+          image: dxflrs/garage:v2.3.0
+          env:
+            - name: GARAGE_RPC_SECRET
+              valueFrom:
+                secretKeyRef: { name: garage-secrets, key: rpc-secret }
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: { name: garage-secrets, key: admin-token }
+          ports:
+            - { containerPort: 3900, name: s3 }
+            - { containerPort: 3901, name: rpc }
+            - { containerPort: 3903, name: admin }
+          volumeMounts:
+            - { name: config, mountPath: /etc/garage.toml, subPath: garage.toml }
+            - { name: data, mountPath: /var/lib/garage }
+          readinessProbe:
+            tcpSocket: { port: 3900 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: config
+          configMap: { name: garage-config }
+        - name: data
+          persistentVolumeClaim: { claimName: garage-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage
+  namespace: garage
+  labels:
+    app: garage
+spec:
+  selector:
+    app: garage
+  ports:
+    - { name: s3, port: 3900, targetPort: 3900 }
+    - { name: admin, port: 3903, targetPort: 3903 }

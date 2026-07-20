@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Backup tier 3 (platform / DR): Velero + node-agent file-system backup, writing to a Garage S3
+# bucket. Tiers 1 (talosctl etcd snapshot) and 2 (KubeVirt VirtualMachineSnapshot) need no component
+# — they are built into Talos and KubeVirt. See docs/operations/backup-restore.md for the flows.
+#
+# Namespaces are created here rather than inherited, because the velero namespace needs the
+# privileged PSA label before the node-agent DaemonSet can schedule.
+#
+# NOTE: no `namespace:` field — this component spans two namespaces (velero, garage) and every
+# resource carries its own.
+resources:
+  - namespace.yaml
+  # the S3 target
+  - garage.yaml
+  # velero (production/GitOps path — see README on the lab's direct-helm bootstrap)
+  - helmrepository.yaml
+  - helmrelease.yaml
+configMapGenerator:
+  - name: velero-values
+    namespace: velero
+    files:
+      - values.yaml
+generatorOptions:
+  disableNameSuffixHash: true

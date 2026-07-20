@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: velero
+  labels:
+    app.kubernetes.io/part-of: talu
+    # The node-agent DaemonSet mounts /var/lib/kubelet/{pods,plugins} hostPaths for file-system
+    # backup. Talos enforces PSA `baseline` cluster-wide, which forbids hostPath — without this
+    # label the DaemonSet silently schedules 0 pods and NO volume data is ever backed up.
+    # See docs/development/lab-notes.md gotcha #5 / #27.
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: garage
+  labels:
+    app.kubernetes.io/part-of: talu
+    # Garage needs no host access — leave it under the cluster-wide `baseline` default.

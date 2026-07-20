@@ -7,7 +7,7 @@
 | [customize/](customize/) | the customization boundary + tracking upstream |
 | [integrations/](integrations/) | driving Talu from an external orchestrator (e.g. Waldur, a portal, or CI) |
 | [development/](development/) | the Rocky 10 quick-mode validation path + dev loop |
-| [operations/](operations/) | runbooks |
+| [operations/](operations/) | runbooks — incl. [backup & restore flows](operations/backup-restore.md) |
 
 **Start here:** [architecture/](architecture/) for the component diagram, then
 [architecture/flows.md](architecture/flows.md) for the provisioning, SSH, and integration

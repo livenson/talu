@@ -18,6 +18,6 @@ Decide-once items (Phase 2 of the pilot plan — annoying to change later):
 Then: create your overlay from `environments/example` (see [`../customize/`](../customize/)),
 point Flux at it, and follow the pilot plan's phase order.
 
-**Upstream references:** [Talos Linux](https://www.talos.dev/latest/) · [Flux (GitOps)](https://fluxcd.io/flux/) ·
+**Upstream references:** [Talos Linux](https://www.talos.dev/) · [Flux (GitOps)](https://fluxcd.io/flux/) ·
 [SOPS](https://github.com/getsops/sops) / [age](https://github.com/FiloSottile/age) · the substrate
 building-blocks table in [`../architecture/README.md`](../architecture/README.md#the-building-blocks-upstream-docs).

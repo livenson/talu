@@ -376,3 +376,59 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     (Direct Routing on eth0) forwards it. `curl 10.5.0.2:<nodePort>` and `podman push` both work. See
     `components/tenancy/flux/README.md`.
 
+26. **Full MicroCeph OSDs death-spiral and won't boot — recover with `bluefs-bdev-expand`, not a rebuild.**
+    The lab's loop-file OSDs are tiny (created ~4 GiB each). Heavy churn (DataVolume clones, VM snapshots,
+    orphaned cephfs subvolumes) fills them; once full, an OSD **aborts on startup** because BlueFS can't
+    allocate the few MiB it needs for rocksdb: `bluefs _allocate unable to allocate 0x400000 ... free 0x1df000`
+    → `ceph_abort_msg` → all OSDs down, PGs stale, `HEALTH_ERR N full osd(s) / pool(s) full`, and CephFS
+    provisioning/attach hangs `DeadlineExceeded`. It looks like data loss but is **non-destructive to fix** —
+    the OSD `block` symlinks straight to `/var/snap/microceph/common/data/osd/ceph-N/osd-backing.img` (no loop
+    device), so **grow the file + expand BlueStore**:
+    `snap stop microceph.osd` → for each N: `truncate -s 16G <backing.img>` then
+    `microceph.ceph-bluestore-tool bluefs-bdev-expand --path /var/snap/microceph/common/data/osd/ceph-N`
+    → `snap start microceph.osd`. OSDs boot, PGs go active+clean, full-flags auto-clear once usage drops
+    under the ratio, MDS finishes `recovering` → `volumes: 1/1 healthy`. Then a stuck cephfs PVC needs a
+    delete+recreate (an in-flight `Aborted: operation ... already exists` lock from the timed-out attempt).
+    SECOND-ORDER GOTCHA: growing the backing files bloats the **host** disk (3×16 GiB); the Talos-in-Podman
+    node's kubelet shares that fs, trips `node.kubernetes.io/disk-pressure=NoSchedule`, and new pods won't
+    schedule. Relieve it (`podman image prune -a`) or ride the ~5-min eviction-transition hysteresis; a tiny
+    test pod can also just **tolerate** `node.kubernetes.io/disk-pressure`. Real fix long-term: reclaim the
+    orphaned cephfs subvolumes / RBD images (bluestore won't shrink the file, so cleanup frees ceph space but
+    not host disk) or run non-nested with real disks. This is a lab-substrate limit, **not** a Talu/Velero bug.
+    This is a **known** BlueStore failure mode: the DB/data are collocated so data uses a 4K alloc unit but
+    BlueFS/DB needs contiguous 64K blocks — near-full there's free space overall but no contiguous 64K run.
+    Upstream's documented remedy is exactly this (expand by as little as 1 GiB), plus a follow-up
+    `ceph-bluestore-tool repair`; Rook automates it in an `expand-bluefs` init container. Refs:
+    [ceph tracker #53899](https://tracker.ceph.com/issues/53899),
+    [#53466](https://tracker.ceph.com/issues/53466),
+    [rook#6530](https://github.com/rook/rook/issues/6530).
+
+27. **Velero fs-backup (kopia/restic) SKIPS `hostPath`-backed volumes — `local-path` PVs are hostPath, so
+    they produce NO PodVolumeBackup.** A backup of a `local-path` PVC `Completes` with `warnings=1` and
+    silently creates zero PodVolumeBackups — Velero's node-agent excludes hostPath volumes by design. Use a
+    **real CSI filesystem volume (CephFS here)** to exercise fs-backup. Validated end-to-end on CephFS:
+    marker file → `defaultVolumesToFsBackup: true` Backup → `PodVolumeBackup Completed (kopia, 19 bytes)` →
+    **destroy the whole namespace (pod+PVC+PV+subvolume)** → Restore → `PodVolumeRestore Completed` recreates
+    the pod on a **new PV** and its `restore-wait` init container kopia-restores the data → the marker
+    survives byte-for-byte. Also needs the `velero` ns labelled `pod-security...enforce=privileged` (#5) or
+    the node-agent DaemonSet gets 0 pods (it mounts `/var/lib/kubelet/*` hostPaths).
+
+28. **MinIO → Garage for the Velero S3 target (MinIO's OSS edition is archived).** MinIO removed the
+    admin console from Community Edition (May 2025), pulled the community docs (Oct 2025), and the
+    `minio/minio` repo was **archived read-only in 2026** — no CVE stream for a tier that must stay
+    restorable for years. [Garage](https://garagehq.deuxfleurs.fr/) (Deuxfleurs, AGPLv3, Rust, ~50 MB)
+    is a drop-in for the **stock `velero-plugin-for-aws`** — validated end-to-end here, kopia included.
+    Its footprint is 3–6× smaller, which matters on this node (see #25/#26). Two traps when migrating:
+    - **The credentials Secret is named `velero`, not `cloud-credentials`.** The Deployment mounts a
+      *volume* called `cloud-credentials` whose `secretName` is `velero`. Creating a Secret literally
+      named `cloud-credentials` changes nothing and the BSL keeps failing against the OLD backend
+      (`AccessDenied: Forbidden: No such key: minio`). Confirm with
+      `kubectl -n velero get deploy velero -o jsonpath='{.spec.template.spec.volumes[*].secret.secretName}'`.
+    - **Delete the stale `BackupRepository`** (`kubectl -n velero delete backuprepository --all`) when
+      repointing, or kopia keeps addressing the old bucket. Then restart `deploy/velero` + `ds/node-agent`.
+    Also: **Garage stores nothing until a layout is applied** — `garage layout assign -z <zone> -c <cap>
+    <node-id>` then `garage layout apply --version 1`, else `garage status` shows `NO ROLE ASSIGNED`.
+    Trade-off accepted: Garage has **no S3 Object Lock** (no WORM immutability) — see
+    [S3 compatibility](https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/)
+    and the caveat in [`../operations/backup-restore.md`](../operations/backup-restore.md).
+

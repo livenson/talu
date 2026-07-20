@@ -1,0 +1,56 @@
+# Velero values — object backup + node-agent file-system (kopia) backup of volume DATA, to Garage.
+# Site-specific overrides (bucket, endpoint, schedules, retention) belong in environments/<site>/.
+
+# Object-store plugin + the KubeVirt plugin that teaches Velero the VM↔VMI↔DataVolume↔PVC graph,
+# so a VirtualMachine restores as a coherent unit instead of loose objects.
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.11.1
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - { mountPath: /target, name: plugins }
+  - name: kubevirt-velero-plugin
+    image: quay.io/kubevirt/kubevirt-velero-plugin:v0.7.1
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - { mountPath: /target, name: plugins }
+
+# The S3 credentials are NOT in Git. Create the Secret out-of-band (README § Bootstrap); the chart
+# mounts it as the `cloud-credentials` volume.
+# GOTCHA (lab-notes #28): with the chart's default (useSecret + no existingSecret) the Secret is
+# named `velero`, which does NOT match the volume name `cloud-credentials` — naming it explicitly
+# here removes that trap.
+credentials:
+  useSecret: true
+  existingSecret: garage-credentials
+
+configuration:
+  backupStorageLocation:
+    - name: default
+      provider: aws
+      bucket: velero
+      default: true
+      config:
+        region: garage                                # matches s3_region in garage.toml
+        s3Url: http://garage.garage.svc:3900
+        s3ForcePathStyle: "true"                      # required for non-AWS S3
+
+  # No CSI VolumeSnapshotLocation: Tier 3 uses file-system backup so restores are portable across
+  # clusters and storage backends. Per-VM CSI snapshots are Tier 2 (KubeVirt VirtualMachineSnapshot).
+  volumeSnapshotLocation: []
+
+  # Back up volume DATA by default. Without this, a backup captures only Kubernetes objects and a
+  # restore silently comes back with empty volumes.
+  defaultVolumesToFsBackup: true
+  uploaderType: kopia
+
+# The node-agent DaemonSet is what actually copies volume data. Requires the privileged PSA label on
+# the velero namespace (see namespace.yaml) or it schedules 0 pods.
+deployNodeAgent: true
+
+snapshotsEnabled: false
+backupsEnabled: true
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 1Gi }

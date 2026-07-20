@@ -118,7 +118,7 @@ Talu is an assembly of standard components — the authoritative reference for e
 
 | Layer | Component | Docs |
 |---|---|---|
-| OS | Talos Linux | <https://www.talos.dev/latest/> |
+| OS | Talos Linux | <https://www.talos.dev/> |
 | CNI / dataplane | Cilium | <https://docs.cilium.io/en/stable/> |
 | Virtualization | KubeVirt · CDI | <https://kubevirt.io/user-guide/> · <https://github.com/kubevirt/containerized-data-importer> |
 | Storage | ceph-csi (CephFS) · Rook (prod) | <https://github.com/ceph/ceph-csi> · <https://rook.io/docs/rook/latest/> |
@@ -126,4 +126,5 @@ Talu is an assembly of standard components — the authoritative reference for e
 | Tenancy | Flux (helm-controller) | <https://fluxcd.io/flux/components/helm/helmreleases/> |
 | Access | Pomerium (Native SSH) · Dex · cert-manager | <https://www.pomerium.com/docs/capabilities/native-ssh-access> · <https://dexidp.io/docs/> · <https://cert-manager.io/docs/> |
 | Observability / accounting | Prometheus (kube-prometheus-stack) · Perses · prom-label-proxy | <https://prometheus-operator.dev/> · <https://perses.dev/> · <https://github.com/prometheus-community/prom-label-proxy> |
+| Backup / DR | Talos etcd snapshot · KubeVirt snapshot/restore · Velero (+ kubevirt-velero-plugin) · Garage (S3 target) | <https://www.talos.dev/v1.11/advanced/disaster-recovery/> · <https://kubevirt.io/user-guide/storage/snapshot_restore_api/> · <https://velero.io/docs/main/> · <https://github.com/kubevirt/kubevirt-velero-plugin> · <https://garagehq.deuxfleurs.fr/> |
 | Platform | Kubernetes (Pod Security Admission) | <https://kubernetes.io/docs/concepts/security/pod-security-admission/> |

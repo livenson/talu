@@ -5,15 +5,23 @@ kit — and for single-node incidents.
 
 **Available today:**
 
+- **[`backup-restore.md`](backup-restore.md)** — the three backup tiers (Talos etcd snapshot ·
+  KubeVirt `VirtualMachineSnapshot` · Velero + file-system backup to S3/MinIO) with **explicit
+  backup and restore flows**, validated end-to-end on the lab including a destroy-and-restore that
+  recovered volume **data**. Read the `hostPath`/`local-path` gotcha before trusting a backup.
 - **Host lockout recovery** (the Docker/network/MTU lockout): the failure mode and the
   cloud-console recovery are documented in
   [`../development/lab-notes.md`](../development/lab-notes.md) gotcha #1 — host MTU must be 1400
   before any container engine, or PMTU blackholes the SSH key exchange and locks out all SSH.
   Recover via `ip link set <iface> mtu 1400` from the provider console.
+- **Full/crashed Ceph OSDs** (`bluefs enospc` → OSDs won't boot → CephFS provisioning hangs): the
+  non-destructive `bluefs-bdev-expand` recovery is
+  [`../development/lab-notes.md`](../development/lab-notes.md) gotcha #26.
 
 **Planned** (added as the components they cover land):
 
-- `etcd-restore.md` — restore Talos/etcd from a snapshot into a scratch node (test it — an
-  untested backup is a hypothesis).
 - `ceph-recovery.md` — MON/OSD loss, `size 2` single-node caveats, re-add and rebalance
   (production Rook; the lab uses external MicroCeph — see `../../dev/lab/microceph-setup.sh`).
+  The full-OSD case is already covered by lab-notes #26 (above).
+- Promote Velero + MinIO from the lab install into `components/platform/backup/` so Tier 3 is
+  part of the product, not a manual step.
