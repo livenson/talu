@@ -1,0 +1,129 @@
+# kube-state-metrics CustomResourceState — the ONLY way to get true per-tenant backup SIZE.
+#
+# WHY THIS EXISTS: Velero's own `velero_backup_tarball_size_bytes` is the size of the *object
+# manifest tarball only* — it does NOT include the volume data that the node-agent (kopia) uploads,
+# which on a real tenant is essentially all of the backup. Measured on the lab: a backup of a 512 KiB
+# payload reported `tarball_size_bytes = 10050` (~52x understatement). That metric is also labelled
+# ONLY by `schedule`, so it carries no per-namespace attribution at all.
+#
+# PodVolumeBackup carries the real numbers, and `spec.pod.namespace` carries the tenant. Field paths
+# verified against a real PVB on the lab:
+#   metadata.namespace      -> "velero"   (NOT the tenant — do not use for attribution)
+#   spec.pod.namespace      -> "bkdemo"   (the tenant namespace)
+#   spec.volume             -> "data"
+#   status.progress.totalBytes / .bytesDone -> 524288
+#
+# This file is merged into the kube-prometheus-stack values (see kustomization.yaml); it is applied
+# to the kube-state-metrics subchart, which needs both the CRS config and RBAC on velero.io.
+kube-state-metrics:
+  rbac:
+    extraRules:
+      - apiGroups: ["velero.io"]
+        resources:
+          - backups
+          - restores
+          - podvolumebackups
+          - podvolumerestores
+          - schedules
+          - backupstoragelocations
+        verbs: ["list", "watch"]
+  customResourceState:
+    enabled: true
+    config:
+      kind: CustomResourceStateMetrics
+      spec:
+        resources:
+          # --- the real volume-data size, per tenant -------------------------------------------
+          - groupVersionKind:
+              group: velero.io
+              version: v1
+              kind: PodVolumeBackup
+            metricNamePrefix: talu_velero_pvb
+            labelsFromPath:
+              name: [metadata, name]
+              tenant_namespace: [spec, pod, namespace]
+              volume: [spec, volume]
+              backup: [metadata, labels, "velero.io/backup-name"]
+            metrics:
+              - name: bytes
+                help: "Volume data bytes captured by file-system backup (kopia) for this pod volume."
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, progress, totalBytes]
+              - name: bytes_done
+                help: "Volume data bytes uploaded so far (equals bytes when Completed)."
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, progress, bytesDone]
+              - name: phase
+                help: "PodVolumeBackup phase."
+                each:
+                  type: StateSet
+                  stateSet:
+                    labelName: phase
+                    path: [status, phase]
+                    list: [New, InProgress, Completed, Failed]
+          # --- restore side: proves data actually came back ------------------------------------
+          - groupVersionKind:
+              group: velero.io
+              version: v1
+              kind: PodVolumeRestore
+            metricNamePrefix: talu_velero_pvr
+            labelsFromPath:
+              name: [metadata, name]
+              tenant_namespace: [spec, pod, namespace]
+              volume: [spec, volume]
+              restore: [metadata, labels, "velero.io/restore-name"]
+            metrics:
+              - name: bytes
+                help: "Volume data bytes restored for this pod volume."
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, progress, totalBytes]
+              - name: phase
+                help: "PodVolumeRestore phase."
+                each:
+                  type: StateSet
+                  stateSet:
+                    labelName: phase
+                    path: [status, phase]
+                    list: [New, InProgress, Completed, Failed]
+          # --- backup objects: phase + expiry (a Backup CR lives in the velero namespace) -------
+          - groupVersionKind:
+              group: velero.io
+              version: v1
+              kind: Backup
+            metricNamePrefix: talu_velero_backup
+            labelsFromPath:
+              name: [metadata, name]
+              schedule: [metadata, labels, "velero.io/schedule-name"]
+            metrics:
+              - name: phase
+                help: "Backup phase."
+                each:
+                  type: StateSet
+                  stateSet:
+                    labelName: phase
+                    path: [status, phase]
+                    list: [New, InProgress, Completed, PartiallyFailed, Failed, Deleting]
+              - name: items_backed_up
+                help: "Number of items backed up."
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, progress, itemsBackedUp]
+              - name: errors
+                help: "Error count reported by the backup."
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, errors]
+              - name: warnings
+                help: "Warning count reported by the backup (a hostPath volume skipped shows up here)."
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, warnings]

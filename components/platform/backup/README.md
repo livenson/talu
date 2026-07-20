@@ -16,6 +16,9 @@ diagrams, and the validated round-trips are in
   host access).
 - **`garage.yaml`** — the S3 target: `ConfigMap` (`garage.toml`), `PersistentVolumeClaim`,
   `Deployment` (`dxflrs/garage:v2.3.0`), `Service` (3900 S3 / 3903 admin).
+- **`servicemonitors.yaml`** — scrape Velero (`:8085`) and Garage (`:3903`). The `talu:backup_*`
+  recording rules, the kube-state-metrics CustomResourceState that yields **true per-tenant backup
+  size**, and the Backup & DR dashboard live in `components/platform/monitoring/`.
 - **`helmrepository.yaml` / `helmrelease.yaml` / `values.yaml`** — Velero, chart **`12.1.0`**
   (app **`v1.18.1`**), with `velero-plugin-for-aws v1.11.1` and `kubevirt-velero-plugin v0.7.1` as
   plugin initContainers, `deployNodeAgent: true`, and `defaultVolumesToFsBackup: true`.

@@ -16,6 +16,8 @@ resources:
   # velero (production/GitOps path — see README on the lab's direct-helm bootstrap)
   - helmrepository.yaml
   - helmrelease.yaml
+  # scrape velero (:8085) + garage (:3903); rules/dashboard live in the monitoring component
+  - servicemonitors.yaml
 configMapGenerator:
   - name: velero-values
     namespace: velero

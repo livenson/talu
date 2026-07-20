@@ -29,8 +29,15 @@ accounting (the § READ verb). Billing/€-conversion is *not* here — it lives
   - `dashboard-fleet.yaml` — fleet overview (VMs / vCPU / memory / egress / quota per tenant; node CPU &
     memory; **golden-image freshness** ← `talu:image_outdated`).
   - `dashboard-netsec.yaml` — **Network & Security** (Cilium/Hubble policy verdicts, drops, L7).
+  - `dashboard-backup.yaml` — **Backup & DR** (staleness per schedule, true per-tenant backup size,
+    outcomes, restore drills, Garage capacity/health). Backed by `backup-rules.yaml` +
+    `ksm-velero-crs.yaml`; see [`../../../docs/operations/backup-restore.md`](../../../docs/operations/backup-restore.md).
   - `dashboard-vmdetail.yaml` — **per-VM drill-down** with `$namespace`+`$vm` pickers (CPU / memory /
     disk throughput & IOPS / network from `kubevirt_vmi_*`).
+- **`backup-rules.yaml`** — the `talu:backup_*` set (size, freshness, outcomes) + backup alerts.
+  **`ksm-velero-crs.yaml`** — kube-state-metrics CustomResourceState over the Velero CRs; it is the
+  ONLY source of true per-tenant backup size, because `velero_backup_tarball_size_bytes` covers just
+  the object manifest (measured ~52x understatement on the lab) and is labelled only by `schedule`.
 - **`servicemonitors.yaml`** also scrapes the **Cilium agent + Hubble** metrics (enabled via the cilium
   values); **`ceph-scrape.yaml`** is a per-site template for an external Ceph mgr (fill the endpoint).
 

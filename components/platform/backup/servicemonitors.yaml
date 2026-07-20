@@ -1,0 +1,41 @@
+# Scrape the backup tier. The monitoring stack's Prometheus selects ServiceMonitors cluster-wide
+# (serviceMonitorSelectorNilUsesHelmValues: false), so these are picked up without release-label wiring.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: velero
+  namespace: velero
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  # The velero chart publishes a Service on 8085 named `http-monitoring` (verified on the lab).
+  namespaceSelector:
+    matchNames: [velero]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: velero
+  endpoints:
+    - port: http-monitoring
+      interval: 30s
+      path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: garage
+  namespace: garage
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  # Garage serves Prometheus metrics on the admin port (3903). Leaving `metrics_token` unset in
+  # garage.toml keeps /metrics unauthenticated inside the cluster; set GARAGE_METRICS_TOKEN and add a
+  # bearerTokenSecret here if you need it locked down.
+  namespaceSelector:
+    matchNames: [garage]
+  selector:
+    matchLabels:
+      app: garage
+  endpoints:
+    - port: admin
+      interval: 30s
+      path: /metrics

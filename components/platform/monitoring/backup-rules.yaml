@@ -1,0 +1,111 @@
+# Backup & DR rules. Every metric name below was verified against the running lab (Velero v1.18.1
+# on :8085, Garage v2.3.0 on :3903, and the kube-state-metrics CustomResourceState in
+# ksm-velero-crs.yaml) — nothing here is guessed.
+#
+# READ THIS BEFORE TRUSTING A "BACKUP SIZE" NUMBER:
+#   velero_backup_tarball_size_bytes is the OBJECT MANIFEST tarball only — it does NOT include the
+#   volume data the node-agent (kopia) uploads. Measured on the lab: a backup whose real payload was
+#   524288 B reported tarball_size_bytes = 10050 (~52x understatement). It is also labelled ONLY by
+#   `schedule`, so it carries no per-namespace attribution.
+#   => talu:backup_volume_bytes:by_tenant (from PodVolumeBackup) is the real per-tenant size.
+#
+# NOTE ON GARAGE METRICS: Garage exports several UNPREFIXED, generic names (cluster_healthy,
+# table_size, block_bytes_*). They are always scoped with job="garage" here to avoid collisions.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: talu-backup
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  groups:
+    # ---- size / capacity -------------------------------------------------------------------
+    - name: talu.backup.size
+      interval: 60s
+      rules:
+        # The real per-tenant backup size: volume data, attributed via PodVolumeBackup's
+        # spec.pod.namespace (the PVB object itself lives in the velero namespace).
+        - record: talu:backup_volume_bytes:by_tenant
+          expr: sum by (tenant_namespace) (talu_velero_pvb_bytes)
+        # Per-backup breakdown (useful for "which backup grew?").
+        - record: talu:backup_volume_bytes:by_backup
+          expr: sum by (backup, tenant_namespace) (talu_velero_pvb_bytes)
+        # Object-manifest size per schedule — small, and NOT the volume data (see header).
+        - record: talu:backup_tarball_bytes:by_schedule
+          expr: sum by (schedule) (velero_backup_tarball_size_bytes)
+        # CAPACITY RUNWAY — read the semantics carefully. garage_local_disk_{total,avail} measure the
+        # FILESYSTEM the object store's data/metadata dirs live on, NOT the bytes of backup data.
+        # Verified on the lab: total = 105639944192 (the whole host disk, matching `df`), of which
+        # most is unrelated (Ceph OSD images etc). These are therefore named *_disk_* and answer
+        # "will backups run out of room?", not "how big are my backups?".
+        # They approximate the backup footprint ONLY when Garage owns a dedicated disk/host — which
+        # is the recommended production layout anyway (see docs/operations/backup-restore.md).
+        # For actual backup size use talu:backup_volume_bytes:by_tenant above.
+        - record: talu:backup_store_disk_used_bytes
+          expr: max by (volume) (garage_local_disk_total{job="garage"} - garage_local_disk_avail{job="garage"})
+        - record: talu:backup_store_disk_avail_bytes
+          expr: max by (volume) (garage_local_disk_avail{job="garage"})
+        - record: talu:backup_store_disk_avail_ratio
+          expr: >-
+            max by (volume) (
+              garage_local_disk_avail{job="garage"} / clamp_min(garage_local_disk_total{job="garage"}, 1)
+            )
+    # ---- freshness / outcome ---------------------------------------------------------------
+    - name: talu.backup.health
+      interval: 60s
+      rules:
+        # The single number that matters most: how stale is the newest successful backup.
+        - record: talu:backup_last_success_age_seconds
+          expr: time() - velero_backup_last_successful_timestamp
+        - record: talu:backup_successes:increase24h
+          expr: sum by (schedule) (increase(velero_backup_success_total[24h]))
+        - record: talu:backup_failures:increase24h
+          expr: sum by (schedule) (increase(velero_backup_failure_total[24h]))
+        - record: talu:backup_partial_failures:increase24h
+          expr: sum by (schedule) (increase(velero_backup_partial_failure_total[24h]))
+        - record: talu:restore_failures:increase24h
+          expr: sum (increase(velero_restore_failed_total[24h]))
+        - record: talu:restore_successes:increase24h
+          expr: sum (increase(velero_restore_success_total[24h]))
+    # ---- alerts ----------------------------------------------------------------------------
+    # NOTE: Alertmanager is disabled in this stack (see monitoring/values.yaml), so these fire into
+    # Prometheus' /alerts and the dashboards only. Wire an Alertmanager (or route to the
+    # orchestrator) before relying on them for paging.
+    - name: talu.backup.alerts
+      rules:
+        # A backup that silently STOPPED running is the classic failure — invisible without this.
+        - alert: TaluBackupStale
+          expr: talu:backup_last_success_age_seconds{schedule!=""} > 172800
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "Backup schedule {{ $labels.schedule }} has had no successful backup for >48h"
+            description: "Last success was {{ $value | humanizeDuration }} ago."
+        - alert: TaluBackupFailing
+          expr: talu:backup_failures:increase24h > 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "Backup schedule {{ $labels.schedule }} failed in the last 24h"
+        # Warnings are how Velero reports a SKIPPED volume — including the hostPath/local-path case
+        # where the backup "succeeds" while capturing no volume data at all (lab-notes #27).
+        - alert: TaluBackupHasWarnings
+          expr: talu_velero_backup_warnings > 0
+          for: 15m
+          labels: { severity: info }
+          annotations:
+            summary: "Backup {{ $labels.name }} completed with warnings — check for skipped volumes"
+            description: "Velero skips hostPath-backed volumes silently; a 'successful' backup may contain no volume data."
+        - alert: TaluBackupStoreNearFull
+          expr: talu:backup_store_disk_avail_ratio < 0.10
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "Disk hosting the backup object store is >90% full ({{ $labels.volume }})"
+        - alert: TaluBackupStoreUnhealthy
+          expr: cluster_healthy{job="garage"} == 0
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: "Garage reports the backup object store cluster as unhealthy"

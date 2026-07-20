@@ -314,6 +314,61 @@ kubectl label ns velero pod-security.kubernetes.io/enforce=privileged --overwrit
 
 ---
 
+## Monitoring backups (sizes, freshness, dashboards)
+
+Backups are scraped like everything else: a **Backup & DR** Perses dashboard (operator, via Pomerium)
+on top of `talu:backup_*` recording rules. ServiceMonitors live in the backup component (Velero
+`:8085`, Garage `:3903`); the rules, KSM config and dashboard live in
+[`components/platform/monitoring/`](../../components/platform/monitoring/).
+
+### ⚠️ Velero's own size metric is not the size of your backup
+
+`velero_backup_tarball_size_bytes` measures the **Kubernetes object manifest tarball only** — it does
+**not** include the volume data the node-agent (kopia) uploads, which on any real tenant is
+essentially the whole backup. Measured on the lab: a backup whose actual payload was **524,288 B**
+reported `tarball_size_bytes = 10,050` — a **~52× understatement**. It is also labelled **only by
+`schedule`**, so it carries no per-namespace attribution whatsoever.
+
+Two consequences for how you operate:
+
+1. **Back up via a `Schedule` per tenant.** The `schedule` label is the only dimension Velero's own
+   metrics expose, so `schedule: <tenant>` is what makes freshness and outcome metrics
+   attributable. Ad-hoc backups all collapse into `schedule=""`.
+2. **True size comes from `PodVolumeBackup`**, surfaced through a kube-state-metrics
+   **CustomResourceState** config ([`ksm-velero-crs.yaml`](../../components/platform/monitoring/ksm-velero-crs.yaml)).
+   `spec.pod.namespace` carries the tenant — note the PVB object itself lives in the `velero`
+   namespace, so `metadata.namespace` is the wrong field to attribute on.
+
+### The series
+
+| Series | Meaning |
+|---|---|
+| `talu:backup_volume_bytes:by_tenant` | **the real backup size** — kopia volume data per tenant |
+| `talu:backup_volume_bytes:by_backup` | same, broken out per backup (which one grew?) |
+| `talu:backup_tarball_bytes:by_schedule` | object manifests only — small, see warning above |
+| `talu:backup_last_success_age_seconds` | **the number that matters most** — staleness per schedule |
+| `talu:backup_{successes,failures,partial_failures}:increase24h` | outcomes |
+| `talu:restore_{successes,failures}:increase24h` | restore drills |
+| `talu:backup_store_disk_{used_bytes,avail_bytes,avail_ratio}` | capacity runway of the **disk hosting Garage** — *not* backup bytes (see below) |
+
+> **`garage_local_disk_*` measures the filesystem, not your backups.** On the lab it reported
+> ~105.6 GB total / 81.9 GB used — the entire host disk (Ceph OSD images and all), matching `df`.
+> It answers "will backups run out of room?", not "how big are my backups?". It only approximates the
+> backup footprint when Garage owns a **dedicated disk**, which is the recommended production layout.
+
+### Alerts
+
+Shipped in [`backup-rules.yaml`](../../components/platform/monitoring/backup-rules.yaml):
+`TaluBackupStale` (>48 h without a successful backup — a schedule that silently stopped is the
+classic failure), `TaluBackupFailing`, `TaluBackupHasWarnings` (Velero reports a **skipped** volume as
+a warning, which is how the hostPath trap shows up), `TaluBackupStoreNearFull`, and
+`TaluBackupStoreUnhealthy`.
+
+> Alertmanager is **disabled** in this stack, so these evaluate into Prometheus `/alerts` and the
+> dashboards only. Wire an Alertmanager (or route to the orchestrator) before relying on them to page.
+
+---
+
 ## Validated on the lab
 
 Real results from the rocky-sandbox lab (see [lab-notes.md](../development/lab-notes.md)):
@@ -337,6 +392,13 @@ Real results from the rocky-sandbox lab (see [lab-notes.md](../development/lab-n
   with `PodVolumeRestore Completed`, pod rescheduled onto a **new PV**, marker recovered byte-for-byte.
   ✓ Stock `velero-plugin-for-aws`, **no Velero changes** — MinIO was then removed from the lab and the
   BSL stayed `Available`.
+- **Backup monitoring** — both scrape targets `up` (`job="velero"`, `job="garage"`); the KSM
+  CustomResourceState emits `talu_velero_pvb_bytes{tenant_namespace="bkdemo"} = 524288` (the real
+  volume payload, correctly attributed to the tenant) against
+  `velero_backup_tarball_size_bytes{schedule="bkdemo"} = 10050` for the same backup — the ~52×
+  discrepancy that motivates the CRS config. All `talu:backup_*` rules and all five alerts report
+  `health: ok` with no evaluation errors, and the Backup & DR dashboard syncs
+  (`Available=True, Degraded=False`). ✓
 
 ## Recovering the substrate itself
 

@@ -1,0 +1,217 @@
+# Operator Backup & DR dashboard — built on the talu:backup_* recording rules (backup-rules.yaml).
+# Admin-only, via Pomerium. One Grid per row: Perses collapses per-item `y` WITHIN a single Grid,
+# which overlaps panels — each row must be its own Grid.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-backup-dr
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — Backup & DR
+    duration: 24h
+    panels:
+      # --- freshness: the number that actually matters -----------------------------------------
+      staleness:
+        kind: Panel
+        spec:
+          display:
+            name: Age of last successful backup (hours)
+            description: >-
+              Per schedule. A line that climbs without resetting means backups have silently stopped —
+              the classic failure mode. Alert TaluBackupStale fires past 48h.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:backup_last_success_age_seconds{schedule!=\"\"} / 3600" }
+      outcomes:
+        kind: Panel
+        spec:
+          display:
+            name: Backup outcomes per schedule (24h)
+            description: Successes vs failures vs partial failures over the last 24h.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:backup_successes:increase24h" }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:backup_failures:increase24h" }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:backup_partial_failures:increase24h" }
+      # --- size ---------------------------------------------------------------------------------
+      sizetenant:
+        kind: Panel
+        spec:
+          display:
+            name: Backup volume data per tenant (bytes)
+            description: >-
+              The REAL backup size — volume data captured by kopia, from PodVolumeBackup. Velero's own
+              velero_backup_tarball_size_bytes covers only the object manifest and understates this
+              massively (measured ~52x on the lab).
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:backup_volume_bytes:by_tenant" }
+      sizebackup:
+        kind: Panel
+        spec:
+          display:
+            name: Backup volume data per backup (bytes)
+            description: Which individual backup grew, broken out by backup name and tenant.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:backup_volume_bytes:by_backup" }
+      tarball:
+        kind: Panel
+        spec:
+          display:
+            name: Object-manifest tarball per schedule (bytes)
+            description: Kubernetes object manifests only — NOT volume data. Kept for completeness.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:backup_tarball_bytes:by_schedule" }
+      # --- object store capacity & health --------------------------------------------------------
+      storeused:
+        kind: Panel
+        spec:
+          display:
+            name: Object store disk used (bytes)
+            description: >-
+              Filesystem usage of the disk hosting Garage — NOT the size of the backups. It equals the
+              backup footprint only when Garage owns a dedicated disk. For backup size see the panels above.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:backup_store_disk_used_bytes" }
+      storeavail:
+        kind: Panel
+        spec:
+          display:
+            name: Object store disk free (ratio)
+            description: Capacity runway for the backup target. TaluBackupStoreNearFull alerts below 0.10.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:backup_store_disk_avail_ratio" }
+      storehealth:
+        kind: Panel
+        spec:
+          display:
+            name: "Garage cluster health (1 = healthy)"
+            description: Backup target availability — if this is 0, backups are not landing anywhere.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "cluster_healthy{job=\"garage\"}" }
+      s3errors:
+        kind: Panel
+        spec:
+          display:
+            name: Garage S3 error rate (per second)
+            description: Rising errors mean Velero cannot write — backups will start failing.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (status_code) (rate(api_s3_error_counter{job=\"garage\"}[5m]))" }
+      # --- restore side ---------------------------------------------------------------------------
+      restores:
+        kind: Panel
+        spec:
+          display:
+            name: Restore outcomes (24h)
+            description: >-
+              An untested backup is a hypothesis — this is where a restore drill shows up.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:restore_successes:increase24h" }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu:restore_failures:increase24h" }
+      restorebytes:
+        kind: Panel
+        spec:
+          display:
+            name: Volume data restored per tenant (bytes)
+            description: Proof that data actually came back, from PodVolumeRestore.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (tenant_namespace) (talu_velero_pvr_bytes)" }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: Freshness & outcomes }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/staleness" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/outcomes" } }
+      - kind: Grid
+        spec:
+          display: { title: Backup size }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/sizetenant" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/sizebackup" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/tarball" } }
+      - kind: Grid
+        spec:
+          display: { title: Object store (Garage) }
+          items:
+            - { x: 0,  y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/storeused" } }
+            - { x: 6,  y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/storeavail" } }
+            - { x: 12, y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/storehealth" } }
+            - { x: 18, y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/s3errors" } }
+      - kind: Grid
+        spec:
+          display: { title: Restore }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/restores" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/restorebytes" } }
