@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+  labels:
+    app.kubernetes.io/part-of: talu
+    # Alloy reads pod logs via the Kubernetes API (loki.source.kubernetes) — no hostPath — so this
+    # namespace stays under the cluster-wide PSA `baseline` default.

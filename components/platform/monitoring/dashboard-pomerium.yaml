@@ -1,0 +1,249 @@
+# Operator Access & Identity dashboard — Pomerium (the only ingress: IAP + Native SSH proxy/CA).
+# Built on Pomerium's own Prometheus metrics (metrics_address :9902) — Envoy `envoy_*` + Pomerium
+# `pomerium_*`. Every metric name was verified against the running Pomerium v0.33 on the lab.
+#
+# SCOPE / HONEST LIMITATION: metrics answer "how much, where, allowed-or-denied, how many open
+# connections" — NOT "which user". Per-user identity + the audit trail ("who accessed what, when")
+# live in Pomerium's structured ACCESS LOGS, which metrics deliberately omit (cardinality). A per-user
+# audit needs a log store (e.g. Loki) + a logs datasource — not deployed here. See the note panel.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-access-pomerium
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — Access & Identity (Pomerium)
+    duration: 1h
+    panels:
+      # --- access outcomes -----------------------------------------------------------------------
+      outcomes:
+        kind: Panel
+        spec:
+          display:
+            name: Ingress requests by outcome (req/s)
+            description: >-
+              Response class on the public ingress listener: 2xx granted, 3xx redirect-to-login,
+              4xx denied/unauthorized, 5xx error. A rising 4xx line = access being refused.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (envoy_response_code_class) (rate(envoy_http_downstream_rq_xx{envoy_http_conn_manager_prefix=\"ingress\"}[5m]))" }
+      authz:
+        kind: Panel
+        spec:
+          display:
+            name: Authorization decisions (per second)
+            description: >-
+              Pomerium's policy engine: allow rate vs deny rate (evaluations − allowals). Denials are
+              the security signal — someone hit a route they're not allowed on.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "rate(pomerium_authorize_evaluator_allowals_total[5m])" }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "rate(pomerium_authorize_evaluator_evaluations_total[5m]) - rate(pomerium_authorize_evaluator_allowals_total[5m])" }
+      # --- open connections (the "who has open connections" — count & kind, not identity) ---------
+      httpconns:
+        kind: Panel
+        spec:
+          display:
+            name: Active HTTP connections (ingress)
+            description: Live downstream connections on the public listener.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(envoy_http_downstream_cx_active{envoy_http_conn_manager_prefix=\"ingress\"})" }
+      sessions:
+        kind: Panel
+        spec:
+          display:
+            name: Active authenticated sessions
+            description: >-
+              Live user sessions Pomerium is tracking (HTTP IAP + Native SSH). This is the closest
+              metric to "who's connected right now" — a count, not identities (those are in the logs).
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(pomerium_databroker_syncer_active{record_type=\"session.Session\"})" }
+      # --- where (per upstream service / route) --------------------------------------------------
+      upstreamconns:
+        kind: Panel
+        spec:
+          display:
+            name: Error rate per service (4xx/5xx, req/s)
+            description: >-
+              Failed/denied requests per service, BY HOSTNAME (pomerium_http_server_requests_total by
+              http_status). A rising line points at a broken or under-attack service. 401/403 = access
+              denied, 5xx = the upstream is failing.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (host) (rate(pomerium_http_server_requests_total{http_status=~\"4..|5..\"}[5m]))" }
+      upstreamrps:
+        kind: Panel
+        spec:
+          display:
+            name: Request rate per service (req/s)
+            description: >-
+              Requests per second per service, BY HOSTNAME (pomerium_http_server_requests_total) — the
+              readable "where". (Envoy's per-route counter labels only by opaque route-ID; Pomerium's own
+              request counter carries the host, so we use that.)
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (host) (rate(pomerium_http_server_requests_total[5m]))" }
+      # --- traffic size per service (bytes) — BY HOSTNAME ----------------------------------------
+      # Uses Pomerium's own pomerium_http_server_{request,response}_size_bytes_sum, which carry a real
+      # `host` label (perses.<domain>, hubble.<domain>, …) — unlike the Envoy cluster byte counters,
+      # whose only label is the opaque route-<id>. This is the HTTP body size per service.
+      trafficrx:
+        kind: Panel
+        spec:
+          display:
+            name: Request traffic per service (bytes/s, from clients)
+            description: HTTP request body bytes per service, by hostname (rate over 5m).
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (host) (rate(pomerium_http_server_request_size_bytes_sum[5m]))" }
+      traffictx:
+        kind: Panel
+        spec:
+          display:
+            name: Response traffic per service (bytes/s, to clients)
+            description: >-
+              HTTP response body bytes per service, by hostname (rate over 5m). For streaming UIs
+              (Hubble, dashboards) this is the dominant line.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (host) (rate(pomerium_http_server_response_size_bytes_sum[5m]))" }
+      totaltraffic:
+        kind: Panel
+        spec:
+          display:
+            name: Total request vs response bytes/s
+            description: Aggregate HTTP body bytes in (request) vs out (response) across all services.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(rate(pomerium_http_server_request_size_bytes_sum[5m]))" }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(rate(pomerium_http_server_response_size_bytes_sum[5m]))" }
+      # --- latency & health ----------------------------------------------------------------------
+      latency:
+        kind: Panel
+        spec:
+          display:
+            name: Request latency p95 per service (ms)
+            description: >-
+              95th-percentile request time per service, BY HOSTNAME (pomerium_http_server_request_duration,
+              seconds → ms). Spot which specific service is slow, not just an aggregate.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "histogram_quantile(0.95, sum by (le, server_address) (rate(pomerium_http_server_request_duration_bucket[5m]))) * 1000" }
+      health:
+        kind: Panel
+        spec:
+          display:
+            name: "Pomerium/Envoy live (1 = serving)"
+            description: If this drops to 0, the entire access plane is down — nothing is reachable.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "envoy_server_live" }
+      idperrors:
+        kind: Panel
+        spec:
+          display:
+            name: IdP / OIDC errors (per second)
+            description: >-
+              Errors talking to the OIDC IdP (Dex). A spike here is a broken login — e.g. the issuer
+              mismatch that 500s sign-in (lab-notes: keep lab_floating_ip in sync).
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(rate(pomerium_idp_last_user_refresh_errors_total[5m]))" }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: Access outcomes — allowed / denied }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/outcomes" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/authz" } }
+      - kind: Grid
+        spec:
+          display: { title: Open connections (count & kind — identities are in the access logs) }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/httpconns" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/sessions" } }
+      - kind: Grid
+        spec:
+          display: { title: Where — per service (by hostname) }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/upstreamconns" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/upstreamrps" } }
+      - kind: Grid
+        spec:
+          display: { title: Traffic size per service }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/trafficrx" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/traffictx" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/totaltraffic" } }
+      - kind: Grid
+        spec:
+          display: { title: Latency & health }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/latency" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/health" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/idperrors" } }

@@ -9,6 +9,11 @@ kubeconfig_path: /home/rocky/.talu/kubeconfig
 
 cilium_version: "1.19.6"          # multi-pool IPAM GA; bump via -f values (NOT --reuse-values, gotcha #24)
 cilium_mtu: 1300                 # 1300 + VXLAN 50 < host 1400
+# Cilium/Hubble values enable ServiceMonitors, so the prometheus-operator CRDs must exist BEFORE
+# Cilium installs — but the monitoring stack deploys later (chicken-and-egg on a fresh cluster).
+# The cilium role applies these CRDs first. Keep in step with the kube-prometheus-stack app version
+# (chart 87.17.0 == prometheus-operator v0.92.1); the monitoring HelmRelease later reconciles them.
+prometheus_operator_crd_version: "v0.92.1"
 dns_forwarders: "8.8.8.8 1.1.1.1"   # CoreDNS default upstream is unusable here (gotcha #12)
 
 ceph_rbd_pool: kubernetes
@@ -18,8 +23,21 @@ enable_host_dev_nbd: false        # partial fix only; CephFS is the reliable pat
 kubevirt_use_emulation: true      # no /dev/kvm
 cdi_scratch_storageclass: local-path
 
+# Observability + backup (deployed via helm/kubectl — no flux helm-controller on the nested node)
+kube_prometheus_stack_version: "87.17.0"   # app v0.92.1; Prometheus-only (Grafana/Alertmanager off)
+perses_operator_version: "0.4.0"           # dashboards-as-code operator
+velero_chart_version: "12.1.0"             # app v1.18.1
+garage_capacity: "50G"                     # Garage layout capacity for the single lab node
+loki_chart_version: "7.1.0"                # app 3.6.8 — the audit log store (SingleBinary); the
+                                           # audit VIEW is native Perses (LokiDatasource+LogsTable), no Grafana
+alloy_chart_version: "1.10.1"              # app v1.17.1 — log collector (reads pod logs via K8s API)
+
 # --- Stage 6: identity & access plane (Dex + Pomerium Native SSH + kubevirt-manager) ---
-lab_floating_ip: "203.0.113.10"                          # OpenStack floating IP (changes on VM reinstall)
+lab_floating_ip: "193.40.155.97"                         # OpenStack floating IP — MUST match the real VM
+                                                         # (was the 203.0.113.10 example placeholder; a stale
+                                                         # value makes Dex's issuer domain wrong → Pomerium
+                                                         # sign-in 500s "issuer URL did not match"). Keep in
+                                                         # sync with env.sh LAB_SSH on every VM reinstall.
 lab_domain: "{{ lab_floating_ip | replace('.', '-') }}.sslip.io"
 talos_node_ip: "10.5.0.2"                                 # Talos-in-podman controlplane IP (docker provisioner default)
 

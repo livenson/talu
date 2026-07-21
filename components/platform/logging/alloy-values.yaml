@@ -1,0 +1,55 @@
+# Grafana Alloy — the log collector (DaemonSet). Reads pod logs via the Kubernetes API (no hostPath),
+# labels them namespace/pod/container/node, and ships to Loki. The JSON structure of each log line
+# (Pomerium's email/host/path/allow, etc.) is parsed at QUERY time with LogQL `| json` — so ingest
+# stays low-cardinality (we do NOT promote email/path to Loki labels, which would explode series).
+controller:
+  type: daemonset
+
+alloy:
+  configMap:
+    content: |
+      // Discover every pod in the cluster.
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // Keep the useful topology labels; drop the noisy internal meta.
+      // (River requires one attribute per line inside a block.)
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          target_label  = "node"
+        }
+      }
+
+      // Tail container logs through the API server (works on Talos without hostPath).
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.write.default.receiver]
+      }
+
+      // Ship to Loki.
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.logging.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }
+
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+# The chart's default RBAC grants pods + pods/log read (needed by loki.source.kubernetes).

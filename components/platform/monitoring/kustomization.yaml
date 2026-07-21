@@ -23,6 +23,7 @@ resources:
   - dashboard-netsec.yaml
   - dashboard-vmdetail.yaml
   - dashboard-backup.yaml
+  - dashboard-pomerium.yaml
 configMapGenerator:
   - name: kube-prometheus-stack-values
     files:

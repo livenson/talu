@@ -22,3 +22,24 @@ spec:
       honorLabels: true
       tlsConfig:
         insecureSkipVerify: true
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: pomerium
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  # Pomerium exposes Envoy `envoy_*` + Pomerium `pomerium_*` metrics on :9902 (metrics_address in the
+  # config). The Service must publish a named `metrics` port on 9902 (identity_pomerium role / the
+  # route-sync config set metrics_address). Feeds the Access & Identity dashboard.
+  namespaceSelector:
+    matchNames: [pomerium]
+  selector:
+    matchLabels:
+      app: pomerium
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics

@@ -1,0 +1,111 @@
+---
+# Backup tier-3: Velero (+ node-agent kopia fs-backup) writing to a Garage S3 bucket. Mirrors
+# components/platform/backup/. Garage is chosen over MinIO (MinIO's OSS edition is archived); the
+# trade-off (no S3 Object Lock) is documented in docs/operations/backup-restore.md. Secrets are
+# generated here, never committed.
+- name: Backup component dir (on the lab, from the synced repo)
+  ansible.builtin.set_fact:
+    bk_dir: "{{ playbook_dir }}/../components/platform/backup"
+
+- name: Apply namespaces (velero PSA privileged for the node-agent hostPaths; garage baseline)
+  ansible.builtin.command: "kubectl apply -f {{ bk_dir }}/namespace.yaml"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+# Garage reads rpc_secret / admin_token from env (kept out of Git); generate once, never rotate.
+- name: Does garage-secrets exist?
+  ansible.builtin.command: "kubectl -n garage get secret garage-secrets"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: garage_secret_check
+  failed_when: false
+  changed_when: false
+
+- name: Create garage-secrets (rpc-secret + admin-token) if absent
+  ansible.builtin.shell: |
+    kubectl -n garage create secret generic garage-secrets \
+      --from-literal=rpc-secret="$(openssl rand -hex 32)" \
+      --from-literal=admin-token="$(openssl rand -base64 32)"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  when: garage_secret_check.rc != 0
+  changed_when: true
+
+- name: Deploy Garage (ConfigMap + PVC + Deployment + Service)
+  ansible.builtin.command: "kubectl apply -f {{ bk_dir }}/garage.yaml"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Wait for Garage ready
+  ansible.builtin.command: "kubectl -n garage rollout status deploy/garage --timeout=180s"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+# Garage stores nothing until a cluster layout is applied; then bucket + key. Fully idempotent:
+# skip layout if a role is already assigned, reuse the key if it exists (key info --show-secret).
+- name: Bootstrap Garage (layout + bucket + key) — idempotent; emit the access key
+  ansible.builtin.shell: |
+    set -e
+    POD=$(kubectl -n garage get pod -l app=garage -o jsonpath='{.items[0].metadata.name}')
+    G="kubectl -n garage exec $POD -- /garage"
+    if ! $G layout show 2>/dev/null | grep -q 'dc1'; then
+      NODE=$($G node id -q 2>/dev/null | cut -d@ -f1)
+      $G layout assign -z dc1 -c {{ garage_capacity }} "$NODE" >/dev/null
+      $G layout apply --version 1 >/dev/null
+    fi
+    $G bucket create velero >/dev/null 2>&1 || true
+    if $G key info velero-key --show-secret >/dev/null 2>&1; then
+      INFO=$($G key info velero-key --show-secret 2>/dev/null)
+    else
+      INFO=$($G key create velero-key 2>/dev/null)
+    fi
+    $G bucket allow --read --write --owner velero --key velero-key >/dev/null 2>&1 || true
+    echo "AK=$(echo "$INFO" | awk '/Key ID/{print $NF}')"
+    echo "SK=$(echo "$INFO" | awk '/Secret key/{print $NF}')"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: garage_boot
+  changed_when: true
+
+- name: Parse Garage access key
+  ansible.builtin.set_fact:
+    garage_ak: "{{ garage_boot.stdout | regex_search('AK=(\\S+)', '\\1') | first }}"
+    garage_sk: "{{ garage_boot.stdout | regex_search('SK=(\\S+)', '\\1') | first }}"
+
+# values.yaml sets credentials.existingSecret: garage-credentials, so the chart mounts a Secret NAMED
+# `garage-credentials` as the `cloud-credentials` volume. (Naming it explicitly avoids gotcha #28,
+# where the chart's DEFAULT secret name is `velero` and mismatches the volume.) Recreate it so a
+# rotated key propagates.
+- name: Create the Velero credentials Secret (name MUST match values.yaml existingSecret)
+  ansible.builtin.shell: |
+    kubectl -n velero create secret generic garage-credentials --from-file=cloud=/dev/stdin --dry-run=client -o yaml <<EOF | kubectl apply -f -
+    [default]
+    aws_access_key_id={{ garage_ak }}
+    aws_secret_access_key={{ garage_sk }}
+    EOF
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  no_log: true
+  changed_when: true
+
+- name: Add Velero helm repo
+  ansible.builtin.shell: |
+    helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts >/dev/null 2>&1 || true
+    helm repo update vmware-tanzu >/dev/null
+  changed_when: false
+
+- name: Install/upgrade Velero (+ node-agent, fs-backup default, KubeVirt plugin) to Garage
+  ansible.builtin.command: >
+    helm upgrade --install velero vmware-tanzu/velero
+    --version {{ velero_chart_version }} --namespace velero
+    -f {{ bk_dir }}/values.yaml --wait --timeout 6m
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Apply Velero + Garage ServiceMonitors
+  ansible.builtin.command: "kubectl apply -f {{ bk_dir }}/servicemonitors.yaml"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Wait for the BackupStorageLocation to become Available
+  ansible.builtin.command: >
+    kubectl -n velero wait backupstoragelocation/default
+    --for=jsonpath='{.status.phase}'=Available --timeout=120s
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false

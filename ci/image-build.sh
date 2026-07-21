@@ -8,7 +8,7 @@
 #   REGISTRY    push target, e.g. zot.golden-images.svc:5000        [required]
 #   CHANNEL     testing | stable                                    [default testing]
 #   TAG         image tag (default = CHANNEL; pass a date/version for immutable tags)
-#   SCAN        true|false  — Trivy HIGH/CRITICAL gate              [default false]
+#   SCAN        true|false  — Trivy scan (NON-GATING on bootc; needs SBOM — see note below) [default false]
 #   SIGN        true|false  — cosign sign the pushed digest         [default false]
 #   TLS_VERIFY  true|false  — registry TLS (false for in-cluster HTTP zot)  [default true]
 set -euo pipefail
@@ -28,8 +28,20 @@ echo "== build $IMAGE_DIR -> $REF =="
 bash "$HERE/images/build-bootc.sh" "$IMAGE_DIR" "$REF"
 
 if [ "$SCAN" = true ]; then
-  echo "== scan (Trivy, gate on HIGH/CRITICAL) =="
-  trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed "$REF"
+  # WARNING (validated on the lab, 2026-07): plain `trivy image` does NOT gate OS packages on
+  # bootc/ostree images. In the static image layers the rootfs is an ostree object store
+  # (/sysroot/ostree/repo/objects/, content-addressed); /etc/os-release and the rpmdb
+  # (/usr/share/rpm/rpmdb.sqlite via an ostree symlink chain) only materialise at boot. So trivy
+  # reports `Detected OS: None` and finds 0 of the image's 478 rpm packages — it only surfaces
+  # Go-binary CVEs from embedded tooling (bootc/skopeo). Scanning $REF (the containerDisk, a scratch
+  # qcow2 wrapper) finds literally nothing.
+  # A REAL OS gate needs a build-time SBOM: have build-bootc.sh / bootc-image-builder emit one while
+  # the rootfs is mounted, then `trivy sbom <sbom.json> --exit-code 1 --severity HIGH,CRITICAL`.
+  # Until that is wired this is a best-effort, NON-BLOCKING scan of the app image for the Go-binary
+  # signal only — it is NOT an OS-CVE gate. Do not treat a green SCAN as "no OS CVEs".
+  APP="localhost/talu-golden-${IMAGE_DIR}:latest"
+  echo "== scan (Trivy, NON-GATING — bootc OS packages need an SBOM; see comment) =="
+  trivy image --severity HIGH,CRITICAL --ignore-unfixed "$APP" || true
 fi
 
 echo "== publish =="

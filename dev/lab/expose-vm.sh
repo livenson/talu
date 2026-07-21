@@ -50,6 +50,7 @@ echo "== 2. re-render Pomerium config (base HTTP + SSH server + ssh://<vm> per l
 CFG="
 autocert: true
 autocert_dir: /data/autocert
+metrics_address: \":9902\"
 authenticate_service_url: https://authenticate.${DOMAIN}
 idp_provider: oidc
 idp_provider_url: https://id.${DOMAIN}/dex
@@ -74,7 +75,12 @@ routes:
   - from: https://perses.${DOMAIN}
     to: http://talu.monitoring.svc.cluster.local:8080
     allowed_users: [${ALLOWED_USERS}]
-    allow_websockets: true"
+    allow_websockets: true
+  - from: https://hubble.${DOMAIN}
+    to: http://hubble-ui.kube-system.svc.cluster.local:80
+    allowed_users: [${ALLOWED_USERS}]
+    allow_websockets: true
+"
 # one ssh:// route per exposed VM (declarative). Each route's allow-list comes from the
 # Service's talu.io/allowed-users annotation (per-tenant policy), not a global default.
 while read -r vm svc ns au _; do

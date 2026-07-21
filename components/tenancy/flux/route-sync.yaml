@@ -47,6 +47,7 @@ spec:
                   CFG="
                   autocert: true
                   autocert_dir: /data/autocert
+                  metrics_address: \":9902\"
                   authenticate_service_url: https://authenticate.$D
                   idp_provider: oidc
                   idp_provider_url: https://id.$D/dex
@@ -71,7 +72,12 @@ spec:
                     - from: https://perses.$D
                       to: http://talu.monitoring.svc.cluster.local:8080
                       allowed_users: [alice@talu.local]
-                      allow_websockets: true"
+                      allow_websockets: true
+                    - from: https://hubble.$D
+                      to: http://hubble-ui.kube-system.svc.cluster.local:80
+                      allowed_users: [alice@talu.local]
+                      allow_websockets: true
+"
                   # ssh://<vm> routes from talu.io/ssh-expose Services
                   while read -r vm svc ns au _; do
                     [ -z "$vm" ] && continue

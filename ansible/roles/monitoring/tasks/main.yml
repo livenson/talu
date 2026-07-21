@@ -1,0 +1,67 @@
+---
+# Monitoring: Prometheus (kube-prometheus-stack, Prometheus-only) + Perses dashboards + the
+# talu:tenant_*/talu:backup_* recording rules and ServiceMonitors. Deployed with helm/kubectl (the
+# rocky-sandbox lab does NOT run flux helm-controller — it's flaky on the nested node), mirroring
+# components/platform/monitoring/. See that component's README for the design.
+- name: Monitoring component dir (on the lab, from the synced repo)
+  ansible.builtin.set_fact:
+    mon_dir: "{{ playbook_dir }}/../components/platform/monitoring"
+
+- name: Apply the monitoring namespace (PSA privileged — node-exporter needs hostNetwork/hostPath)
+  ansible.builtin.command: "kubectl apply -f {{ mon_dir }}/namespace.yaml"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Add helm repos (prometheus-community + perses)
+  ansible.builtin.shell: |
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
+    helm repo add perses https://perses.github.io/helm-charts >/dev/null 2>&1 || true
+    helm repo update prometheus-community perses >/dev/null
+  changed_when: false
+
+# The values.yaml (Prometheus-only, selects all SMs/Rules) + ksm-velero-crs.yaml (the kube-state-metrics
+# CustomResourceState that yields TRUE per-tenant backup size — see lab-notes/backup-restore.md).
+- name: Install/upgrade kube-prometheus-stack (Prometheus-only)
+  ansible.builtin.command: >
+    helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack
+    --version {{ kube_prometheus_stack_version }} --namespace monitoring
+    -f {{ mon_dir }}/values.yaml -f {{ mon_dir }}/ksm-velero-crs.yaml
+    --wait --timeout 8m
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Install/upgrade the Perses operator (manages the Perses server + dashboard CRs)
+  ansible.builtin.command: >
+    helm upgrade --install perses-operator perses/perses-operator
+    --version {{ perses_operator_version }} --namespace monitoring --wait --timeout 4m
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Wait for the Perses CRDs to register
+  ansible.builtin.command: "kubectl wait --for condition=established crd/perses.perses.dev crd/persesdashboards.perses.dev --timeout=120s"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+# ServiceMonitors + recording rules need the prometheus-operator CRDs (from the stack above); the
+# Perses instance + dashboards need the Perses CRDs (above). Apply the whole set — kubectl apply is
+# idempotent and the kustomization lists exactly these files.
+- name: Apply Prometheus scrape config + recording rules
+  ansible.builtin.command: "kubectl apply -f {{ mon_dir }}/{{ item }}"
+  loop:
+    - servicemonitors.yaml
+    - recording-rules.yaml
+    - backup-rules.yaml
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Apply the Perses instance + datasource + operator dashboards
+  ansible.builtin.command: "kubectl apply -f {{ mon_dir }}/{{ item }}"
+  loop:
+    - perses-instance.yaml
+    - dashboard-fleet.yaml
+    - dashboard-netsec.yaml
+    - dashboard-vmdetail.yaml
+    - dashboard-backup.yaml
+    - dashboard-pomerium.yaml
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true

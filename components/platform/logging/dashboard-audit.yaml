@@ -1,0 +1,100 @@
+# Operator "Access Audit (Pomerium)" dashboard — in PERSES (not Grafana). Answers the per-user
+# question metrics can't: WHO accessed WHAT, WHEN, and allowed-or-denied. Built on Pomerium's
+# `authorize check` log lines shipped to Loki by Alloy; each line carries email / host / path /
+# method / allow. Uses the LokiLogQuery + LogsTable plugins (queried through the Loki datasource
+# proxy). Admin-only, via Pomerium at perses.<domain> alongside the metrics dashboards.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-access-audit
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — Access Audit (Pomerium)
+    duration: 6h
+    # Free-text filters (regex). email/host are parsed json fields, not Loki labels, so a dynamic
+    # dropdown can't enumerate them — a regex text box does the job: leave ".*" for everything, or type
+    # a user (e.g. alice@talu.local) / service (e.g. hubble). The queries splice $user / $service in.
+    variables:
+      - kind: TextVariable
+        spec:
+          name: user
+          display: { name: "User (email regex)" }
+          value: ".*"
+      - kind: TextVariable
+        spec:
+          name: service
+          display: { name: "Service (host regex)" }
+          value: ".*"
+    panels:
+      rate:
+        kind: Panel
+        spec:
+          display:
+            name: Requests per user (req/s)
+            description: Access decisions per authenticated user — a spike is unusual activity worth a look.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: LokiTimeSeriesQuery
+                  spec:
+                    # Loki isn't the default datasource (Prometheus is), so name it explicitly —
+                    # otherwise Perses resolves to "undefined" and the panel errors.
+                    datasource: { kind: LokiDatasource, name: talu-loki }
+                    query: 'sum by (email) (rate({namespace="pomerium"} | json | message="authorize check" | email != "" | email =~ "$user" | host =~ "$service" [5m]))'
+      audit:
+        kind: Panel
+        spec:
+          display:
+            name: Access audit — who accessed what
+            description: >-
+              The trail: every authenticated request Pomerium authorized — email, method, host+path,
+              and the allow decision. This is the "who / what / when" the metrics dashboards can't show.
+          plugin: { kind: LogsTable, spec: {} }
+          queries:
+            - kind: LogQuery
+              spec:
+                plugin:
+                  kind: LokiLogQuery
+                  spec:
+                    datasource: { kind: LokiDatasource, name: talu-loki }
+                    query: '{namespace="pomerium"} | json | message="authorize check" | email != "" | email =~ "$user" | host =~ "$service" | line_format "{{.email}}  {{.method}} {{.host}}{{.path}}  allow={{.allow}}"'
+      denied:
+        kind: Panel
+        spec:
+          display:
+            name: DENIED access attempts
+            description: Requests Pomerium refused — the security signal (wrong user, no session, not on the allow-list).
+          plugin: { kind: LogsTable, spec: {} }
+          queries:
+            - kind: LogQuery
+              spec:
+                plugin:
+                  kind: LokiLogQuery
+                  spec:
+                    datasource: { kind: LokiDatasource, name: talu-loki }
+                    query: '{namespace="pomerium"} | json | message="authorize check" | allow="false" | email =~ "$user" | host =~ "$service" | line_format "{{.email}}  {{.method}} {{.host}}{{.path}}"'
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: Activity }
+          items:
+            - { x: 0, y: 0, width: 24, height: 8, content: { $ref: "#/spec/panels/rate" } }
+      - kind: Grid
+        spec:
+          display: { title: Who accessed what }
+          items:
+            - { x: 0, y: 0, width: 24, height: 12, content: { $ref: "#/spec/panels/audit" } }
+      - kind: Grid
+        spec:
+          display: { title: Denied }
+          items:
+            - { x: 0, y: 0, width: 24, height: 9, content: { $ref: "#/spec/panels/denied" } }

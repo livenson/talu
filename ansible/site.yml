@@ -19,3 +19,7 @@
     - { role: identity_pomerium, tags: [stage6, pomerium] }  # IAP + Native SSH proxy/CA (#17,#18,#18b,#21)
     # OpenBao removed — Pomerium's Native SSH is the SSH CA now (#21). identity_keycloak stays as
     # reference but disabled (Keycloak too heavy for the lab — #16).
+    # Observability + backup/DR (Prometheus/Perses; Velero + node-agent -> Garage S3).
+    - { role: monitoring, tags: [monitoring, obs] }          # Prometheus + Perses dashboards + rules
+    - { role: backup,     tags: [backup, dr] }               # Velero (+kopia) -> Garage; validated round-trip
+    - { role: logging,    tags: [logging, audit] }           # Loki + Alloy + Grafana; per-user access audit

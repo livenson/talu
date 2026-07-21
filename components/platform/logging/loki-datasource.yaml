@@ -1,0 +1,26 @@
+# Loki datasource for Perses — so the audit logs render in Perses (no Grafana). Perses v0.53 ships the
+# LokiDatasource / LokiLogQuery / LogsTable plugins built-in. Targets the operator Perses server (in
+# `monitoring`) via instanceSelector, and PROXIES to Loki (like the Prometheus datasource) so the
+# browser only ever talks to Perses (reachable via Pomerium) — directUrl would hit an unreachable IP.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDatasource
+metadata:
+  name: talu-loki
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    default: false          # Prometheus stays the default datasource; Loki is opt-in per query
+    display:
+      name: Talu Loki
+    plugin:
+      kind: LokiDatasource
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: http://loki.logging.svc.cluster.local:3100
