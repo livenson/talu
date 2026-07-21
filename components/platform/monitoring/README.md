@@ -34,6 +34,14 @@ accounting (the § READ verb). Billing/€-conversion is *not* here — it lives
     `ksm-velero-crs.yaml`; see [`../../../docs/operations/backup-restore.md`](../../../docs/operations/backup-restore.md).
   - `dashboard-vmdetail.yaml` — **per-VM drill-down** with `$namespace`+`$vm` pickers (CPU / memory /
     disk throughput & IOPS / network from `kubevirt_vmi_*`).
+  - `dashboard-pomerium.yaml` — **Access & Identity (Pomerium)**: request outcomes (allow/deny/error),
+    authorization decisions, open connections (HTTP + Native-SSH sessions), and per-service request /
+    error / latency / **traffic size by hostname** (from `pomerium_http_server_*`, which carry a `host`
+    label — the Envoy cluster metrics only have opaque route-IDs). Needs `metrics_address :9902` on
+    Pomerium + the `pomerium` ServiceMonitor (both in the `identity_pomerium` role + `servicemonitors.yaml`).
+  - The **Access Audit (Pomerium)** dashboard — *who accessed what, when* — lives with the logging tier
+    (`components/platform/logging/dashboard-audit.yaml`), rendered in this same Perses via a Loki
+    datasource. Metrics answer *how much / where*; the audit (logs) answers *who*.
 - **`backup-rules.yaml`** — the `talu:backup_*` set (size, freshness, outcomes) + backup alerts.
   **`ksm-velero-crs.yaml`** — kube-state-metrics CustomResourceState over the Velero CRs; it is the
   ONLY source of true per-tenant backup size, because `velero_backup_tarball_size_bytes` covers just

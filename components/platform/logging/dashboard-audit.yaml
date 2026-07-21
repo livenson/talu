@@ -67,6 +67,26 @@ spec:
                   spec:
                     datasource: { kind: LokiDatasource, name: talu-loki }
                     query: '{namespace="pomerium"} | json | message="authorize check" | email != "" | email =~ "$user" | host =~ "$service" | line_format "{{.email}}  {{.method}} {{.host}}{{.path}}  allow={{.allow}}"'
+      ssh:
+        kind: Panel
+        spec:
+          display:
+            name: SSH logins (who + when)
+            description: >-
+              Native-SSH authorizations from the platform — WHO logged in (email) and WHEN, with the
+              allow decision. LIMITATION: Pomerium's OSS SSH authorize log identifies the target VM only
+              by an opaque `route-checksum`, NOT the hostname (host/route-id are empty for SSH) — so you
+              can see who logged in when, but you can't filter these by VM name. See the note in the
+              logging README on why per-VM SSH needs a checksum→VM map or Hubble flow correlation.
+          plugin: { kind: LogsTable, spec: {} }
+          queries:
+            - kind: LogQuery
+              spec:
+                plugin:
+                  kind: LokiLogQuery
+                  spec:
+                    datasource: { kind: LokiDatasource, name: talu-loki }
+                    query: '{namespace="pomerium"} | json | message="authorize check" | host="" | email != "" | email =~ "$user" | line_format "{{.email}}  allow={{.allow}}  (SSH route-checksum {{.route_checksum}})"'
       denied:
         kind: Panel
         spec:
@@ -93,6 +113,11 @@ spec:
           display: { title: Who accessed what }
           items:
             - { x: 0, y: 0, width: 24, height: 12, content: { $ref: "#/spec/panels/audit" } }
+      - kind: Grid
+        spec:
+          display: { title: SSH connections (Native SSH) }
+          items:
+            - { x: 0, y: 0, width: 24, height: 9, content: { $ref: "#/spec/panels/ssh" } }
       - kind: Grid
         spec:
           display: { title: Denied }

@@ -91,10 +91,18 @@ graph TD
   deployments run it on KVM nodes — a values change, not a rebuild.
 - **Observability & accounting = one PromQL set.** Prometheus scrapes KubeVirt/Cilium/kube-state-metrics
   and computes the per-namespace **`talu:tenant_*`** recording rules — the *same* series feed the operator
-  Perses dashboards (fleet, network/security, per-VM detail), the per-tenant dashboards, and the
-  orchestrator's usage read (verb 3). Per-tenant data isolation is enforced by **prom-label-proxy**
-  (hard-scopes every query to the tenant's namespace); all dashboards are fronted by Pomerium.
-  Billing/€-conversion is the orchestrator's job — Talu only meters.
+  Perses dashboards (fleet, network/security, per-VM detail, **Access & Identity** for Pomerium, backup/DR),
+  the per-tenant dashboards, and the orchestrator's usage read (verb 3). Per-tenant data isolation is
+  enforced by **prom-label-proxy** (hard-scopes every query to the tenant's namespace); all dashboards are
+  fronted by Pomerium. Billing/€-conversion is the orchestrator's job — Talu only meters.
+- **Audit = metrics answer *how much / where*; logs answer *who*.** The access-plane **audit tier** —
+  Loki (store) + Grafana Alloy (collects pod logs via the K8s API) — ships Pomerium's access decisions to
+  Loki, surfaced as an **Access Audit** dashboard **natively in Perses** (Loki datasource + `LogsTable`;
+  no Grafana). It answers *who accessed what, when* (per-user email/host/allow) — the identity that
+  metrics deliberately omit. See [`../operations/`](../operations/) and the logging component.
+- **Backup & DR = three tiers.** `talosctl etcd snapshot` (system), KubeVirt `VirtualMachineSnapshot`
+  (per-VM), and **Velero + node-agent (kopia) → Garage S3** (platform/off-cluster), with validated
+  destroy-and-restore. Full flows: [`../operations/backup-restore.md`](../operations/backup-restore.md).
 - **Golden images are bootc, delivery is automatic.** Images are built as **bootc** (image-mode) OCI
   containerDisks (CI or an in-cluster Job, no KVM needed) and pushed to **zot**. A CDI **`DataImportCron`**
   rolls a **`DataSource`** on each new digest; a tenant VM with `source: dataSource` clones from it, so a
@@ -127,5 +135,6 @@ Talu is an assembly of standard components — the authoritative reference for e
 | Tenancy | Flux (helm-controller) | <https://fluxcd.io/flux/components/helm/helmreleases/> |
 | Access | Pomerium (Native SSH) · Dex · cert-manager | <https://www.pomerium.com/docs/capabilities/native-ssh-access> · <https://dexidp.io/docs/> · <https://cert-manager.io/docs/> |
 | Observability / accounting | Prometheus (kube-prometheus-stack) · Perses · prom-label-proxy | <https://prometheus-operator.dev/> · <https://perses.dev/> · <https://github.com/prometheus-community/prom-label-proxy> |
+| Logging / audit | Loki · Grafana Alloy · Perses (Loki datasource + LogsTable) | <https://grafana.com/oss/loki/> · <https://grafana.com/docs/alloy/latest/> · <https://perses.dev/> |
 | Backup / DR | Talos etcd snapshot · KubeVirt snapshot/restore · Velero (+ kubevirt-velero-plugin) · Garage (S3 target) | <https://www.talos.dev/v1.11/advanced/disaster-recovery/> · <https://kubevirt.io/user-guide/storage/snapshot_restore_api/> · <https://velero.io/docs/main/> · <https://github.com/kubevirt/kubevirt-velero-plugin> · <https://garagehq.deuxfleurs.fr/> |
 | Platform | Kubernetes (Pod Security Admission) | <https://kubernetes.io/docs/concepts/security/pod-security-admission/> |

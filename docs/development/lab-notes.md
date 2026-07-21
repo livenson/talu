@@ -432,3 +432,49 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     [S3 compatibility](https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/)
     and the caveat in [`../operations/backup-restore.md`](../operations/backup-restore.md).
 
+29. **`lab_floating_ip` stale → Dex issuer domain wrong → every Pomerium sign-in 500s.** `lab_domain`
+    is derived from `lab_floating_ip` in `ansible/group_vars/all.yml`. If it's left at the
+    `203.0.113.10` example placeholder (not the real VM IP), Dex is deployed with
+    `issuer: https://id.203-0-113-10.sslip.io/dex`, but Pomerium's `idp_provider_url` uses the real
+    domain — so OIDC discovery mismatches and sign-in fails: `identity/oidc: could not connect to oidc:
+    oidc: issuer URL provided to client (...) did not match the issuer URL returned by provider (...)`,
+    HTTP 500 on `/.pomerium/sign_in`. The symptom looks like a broken IdP; it's a stale variable.
+    Fix: set `lab_floating_ip` to the real IP (keep it in sync with `env.sh` LAB_SSH on every reinstall),
+    re-run `--tags dex`. (For a one-off live patch, edit the `dex` ConfigMap's `issuer`/`redirectURIs`
+    and restart Dex — but fix the variable so it survives.)
+
+30. **Cilium install hard-fails on a fresh cluster: "Service Monitor requires monitoring.coreos.com/v1
+    CRDs".** Talu's Cilium/Hubble values enable ServiceMonitors, but the prometheus-operator CRDs are
+    installed later (by the `monitoring` role) — chicken-and-egg. The `cilium` role now applies the
+    servicemonitors/podmonitors/prometheusrules CRDs (pinned `prometheus_operator_crd_version`) BEFORE
+    the Cilium helm install; the monitoring HelmRelease (`crds: CreateReplace`) reconciles them later.
+
+31. **A host reboot can wedge KubeVirt's containerDisk data-path — the fix is recreating the NODE, not
+    restarting it.** After an unclean reboot (e.g. a force-killed shutdown that hung on stuck rbd-nbd
+    devices — see #14/#15), containerDisk VMs churn at `Scheduled`: the launcher's `volumecontainerdisk`
+    creates its socket then it "does not exist anymore" and exits, and `/var/run/kubevirt-ephemeral-disks`
+    never appears on the node. This SURVIVES every targeted restart — virt-handler, kubelet, a `podman
+    restart` of the node container, SELinux permissive, even a full KubeVirt reinstall (delete/recreate
+    the CR). Ruled out: Ceph/snap (healthy), host+node mount propagation (`shared`), SELinux (no denials),
+    certs (present). It's baked into the node container's post-reboot state; only recreating the node
+    clears it. `make up` (talos_cluster) destroys+recreates the node → fixed; then re-run the stack
+    (ansible) and redeploy tenants. NOTE: `talos_cluster` is idempotent and SKIPS create if the container
+    exists — so `make down`/`talosctl cluster destroy` first, or it just reconfigures the broken node.
+    Loop devices must be re-attached after a host reboot (`dev/loopdev/setup.sh up`) before the node
+    container will start (it binds `/dev/loopN`).
+
+32. **The SSH principal is per-tenant, not always `talu`.** `ssh <principal>@<vm>@ssh.<domain> -p 23`
+    (Pomerium Native SSH) — the FIRST token is the guest Linux user = the tenant's `principal`
+    (`defaults.principal`, or a per-VM override in the values). e.g. `acme`'s app1 sets `principal: alice`,
+    so it's `ssh alice@app1@ssh.<domain> -p 23`, NOT `talu`. Connecting as the wrong principal =
+    `Permission Denied` from the guest sshd (Pomerium authenticates + authorizes fine — the log shows
+    `successfully authenticated` + `allow:true` — then the VM rejects the cert because that user doesn't
+    exist). The `vm-ssh.sh` helper defaults to `talu`; pass the principal: `vm-ssh.sh app1 alice`. Find a
+    VM's principal: `kubectl -n <ns> get secret <vm>-userdata -o jsonpath='{.data.userdata}' | base64 -d
+    | grep -A1 'users:'`. (Also: the login IDENTITY `alice@talu.local` and the guest principal `alice`
+    are independent — one is gated by the route allow-list, the other is which Linux account you land in.)
+    Platform-side SSH audit caveat: Pomerium's OSS SSH authorize log carries email + time + allow but the
+    target VM only as an opaque `route-checksum` (host/route-id empty for SSH) — so who+when is auditable,
+    per-VM-name filtering is not (without a checksum→VM map or Hubble flow correlation). See the logging
+    component's Access Audit dashboard + README.
+

@@ -31,11 +31,18 @@ Idempotent: a second full run reports `changed=0` (validated).
 | `kubevirt` | KubeVirt (`useEmulation`) + CDI, scratch→local-path | #13 emulation/PSA |
 | `identity_dex` | tiny OIDC IdP (issuer/clients/static user) | #16 Dex-not-Keycloak |
 | `kubevirt_manager` | VM web UI bundle (route via Pomerium) | #22 |
-| `identity_pomerium` | IAP **+ Native SSH proxy/CA** (OIDC→Dex, autocert LE, hostAlias, NodePort + host `socat`, :23) | #17,#18,#18b,#21 |
+| `identity_pomerium` | IAP **+ Native SSH proxy/CA** (OIDC→Dex, autocert LE, hostAlias, NodePort + host `socat`, :23) + metrics `:9902` | #17,#18,#18b,#21 |
+| `monitoring` (tag `monitoring`/`obs`) | kube-prometheus-stack (Prometheus-only) + Perses operator + all operator dashboards + `talu:tenant_*`/`talu:backup_*` rules + ServiceMonitors | Perses (not Grafana) is the dashboard layer |
+| `backup` (tag `backup`/`dr`) | Velero (+ node-agent kopia fs-backup) → **Garage** S3; idempotent Garage bootstrap (layout/bucket/key), generated secrets | #27 hostPath skipped, #28 Garage/creds-secret name |
+| `logging` (tag `logging`/`audit`) | Loki + Grafana Alloy (pod logs via K8s API) + the **Access Audit** view native in Perses (LokiDatasource + LogsTable) | audit = Perses, no Grafana |
 
 Stage 6 roles (tag `stage6`) carry `lab_domain` (derived from `lab_floating_ip`) so they retarget
-on VM reinstall. Per-VM SSH routes are layered by `dev/lab/expose-vm.sh` / `gen-vm-manifests.sh`
-(or the tenant chart), not the base `identity_pomerium` role.
+on VM reinstall — **keep `lab_floating_ip` in sync with the real VM IP** or Dex's issuer domain is
+wrong and every Pomerium sign-in 500s (lab-notes #29). Per-VM SSH routes are layered by
+`dev/lab/expose-vm.sh` / `gen-vm-manifests.sh` (or the tenant chart), not the base `identity_pomerium`
+role. `cilium` installs the prometheus-operator CRDs before Cilium (its ServiceMonitors need them —
+lab-notes #30). Ordering: `monitoring` before `backup`/`logging` (they add Perses CRs to the Perses
+server it stands up).
 
 ## Not covered (deliberate)
 Tenant workloads and RBD block storage (unreliable on the nested node — CephFS is the storage path
