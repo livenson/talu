@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 672" width="1000" height="672" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <!-- Talu architecture overview. Hand-authored SVG (presentation attributes only, no <style>/<filter>/webfonts) so GitHub renders it cleanly on light and dark. -->
+  <rect x="6" y="6" width="988" height="660" rx="16" fill="#F7F5F0" stroke="#E2DDD3"/>
+
+  <!-- title band -->
+  <text x="28" y="56" font-size="34" font-weight="700" fill="#2E6A4E">Talu</text>
+  <text x="112" y="56" font-size="18" fill="#26303B">— multitenant KubeVirt VM platform</text>
+  <text x="28" y="80" font-size="12" fill="#616B76" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">API-first · orchestrator-agnostic · runs standalone (Git-first)</text>
+  <text x="966" y="46" font-size="12.5" fill="#8A8578" font-style="italic" text-anchor="end">Estonian: farmstead — “own your ground”</text>
+  <text x="966" y="66" font-size="11" fill="#A39D90" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="end">MIT · github.com/livenson/talu</text>
+
+  <!-- ============ LEFT COLUMN: the layered stack ============ -->
+
+  <!-- A: external / optional -->
+  <rect x="28" y="100" width="662" height="56" rx="10" fill="#FFFFFF" stroke="#C9C3B8" stroke-dasharray="5 4"/>
+  <text x="44" y="121" font-size="10.5" letter-spacing="1.2" fill="#8A8578">OPTIONAL · EXTERNAL — YOU DRIVE VIA THE API</text>
+  <text x="44" y="143" font-size="12.5" fill="#26303B">Orchestrator · portal · CI (e.g. Waldur) — an optional consumer of the K8s + Prometheus API, never a dependency</text>
+
+  <!-- arrow A -> B -->
+  <line x1="359" y1="156" x2="359" y2="178" stroke="#C6871F" stroke-width="2"/>
+  <polygon points="359,184 354,175 364,175" fill="#C6871F"/>
+  <text x="372" y="174" font-size="10.5" fill="#8A8578" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">OIDC sign-in · apply labelled objects</text>
+
+  <!-- B: access plane -->
+  <rect x="28" y="182" width="662" height="92" rx="10" fill="#FBF3E4" stroke="#E4C98A"/>
+  <text x="44" y="204" font-size="10.5" letter-spacing="1.2" fill="#B07715">ACCESS PLANE — THE ONLY INGRESS</text>
+  <rect x="44" y="214" width="252" height="48" rx="8" fill="#C6871F"/>
+  <text x="58" y="235" font-size="15" font-weight="700" fill="#FFFFFF">Pomerium</text>
+  <text x="58" y="252" font-size="10.5" fill="#FBEAD0">IAP · Native SSH proxy · SSH User CA</text>
+  <rect x="308" y="216" width="230" height="21" rx="5" fill="#FFFFFF" stroke="#E4C98A"/>
+  <text x="318" y="230" font-size="11" fill="#26303B">OIDC IdP · Dex / Keycloak / ZITADEL</text>
+  <rect x="308" y="241" width="230" height="21" rx="5" fill="#FFFFFF" stroke="#E4C98A"/>
+  <text x="318" y="255" font-size="11" fill="#26303B">cert-manager · internal CA + TLS</text>
+  <text x="552" y="230" font-size="10.5" fill="#9A7A3C">no public :22</text>
+  <text x="552" y="245" font-size="10.5" fill="#9A7A3C">no static password</text>
+
+  <!-- arrow B -> C -->
+  <line x1="359" y1="274" x2="359" y2="296" stroke="#2E6A4E" stroke-width="2"/>
+  <polygon points="359,302 354,293 364,293" fill="#2E6A4E"/>
+
+  <!-- C: tenancy -->
+  <rect x="28" y="306" width="662" height="150" rx="10" fill="#EAF3EC" stroke="#BFDCC7"/>
+  <text x="44" y="328" font-size="10.5" letter-spacing="1.2" fill="#2E6A4E">TENANCY — THE TENANT API (a HelmRelease you apply)</text>
+  <text x="44" y="348" font-size="12.5" fill="#26303B">Flux helm-controller renders the <tspan font-weight="700">talu-tenant</tspan> chart → a per-tenant namespace</text>
+  <rect x="44" y="356" width="632" height="90" rx="8" fill="#FFFFFF" stroke="#BFDCC7"/>
+  <text x="58" y="376" font-size="11" font-weight="700" fill="#2E6A4E">Per-tenant namespace</text>
+  <text x="662" y="376" font-size="10" fill="#7C9A85" text-anchor="end" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">talu.io/project-uuid on every object</text>
+  <!-- 4 sub-chips -->
+  <g font-size="9.8" fill="#5A6672">
+    <rect x="58" y="386" width="146" height="48" rx="6" fill="#F2F8F3" stroke="#CFE3D5"/>
+    <text x="68" y="406" font-size="11.5" font-weight="700" fill="#26303B">VirtualMachines</text>
+    <text x="68" y="422">KubeVirt VMs + disks</text>
+    <rect x="214" y="386" width="146" height="48" rx="6" fill="#F2F8F3" stroke="#CFE3D5"/>
+    <text x="224" y="406" font-size="11.5" font-weight="700" fill="#26303B">ssh Service + CNP</text>
+    <text x="224" y="422">Pomerium-pinned :22</text>
+    <rect x="370" y="386" width="146" height="48" rx="6" fill="#F2F8F3" stroke="#CFE3D5"/>
+    <text x="380" y="406" font-size="11.5" font-weight="700" fill="#26303B">ResourceQuota + RBAC</text>
+    <text x="380" y="422">scoped access + metering</text>
+    <rect x="526" y="386" width="140" height="48" rx="6" fill="#F2F8F3" stroke="#CFE3D5"/>
+    <text x="536" y="406" font-size="11.5" font-weight="700" fill="#26303B">cloud-init Secret</text>
+    <text x="536" y="422">CA trust + guest secrets</text>
+  </g>
+
+  <!-- arrow C -> D -->
+  <line x1="359" y1="456" x2="359" y2="478" stroke="#46586A" stroke-width="2"/>
+  <polygon points="359,484 354,475 364,475" fill="#46586A"/>
+
+  <!-- D: virtualization -->
+  <rect x="28" y="488" width="662" height="56" rx="10" fill="#EEF1F5" stroke="#CAD4DE"/>
+  <text x="44" y="509" font-size="10.5" letter-spacing="1.2" fill="#46586A">VIRTUALIZATION</text>
+  <text x="44" y="531" font-size="12.5" fill="#26303B">KubeVirt + CDI · golden images are <tspan font-weight="700">bootc</tspan> (auto-patch: CDI DataImportCron → zot registry)</text>
+
+  <!-- arrow D -> E -->
+  <line x1="359" y1="544" x2="359" y2="566" stroke="#5A6672" stroke-width="2"/>
+  <polygon points="359,572 354,563 364,563" fill="#5A6672"/>
+
+  <!-- E: substrate -->
+  <rect x="28" y="576" width="662" height="66" rx="10" fill="#ECEEF0" stroke="#CFD4D9"/>
+  <text x="44" y="598" font-size="10.5" letter-spacing="1.2" fill="#5A6672">SUBSTRATE — STANDARD &amp; SWAPPABLE</text>
+  <text x="44" y="618" font-size="12.5" fill="#26303B">Talos Linux (immutable) · Cilium — network policy, LB-IPAM, no kube-proxy</text>
+  <text x="44" y="634" font-size="12" fill="#5A6672">CephFS (ceph-csi) — RWX storage</text>
+
+  <!-- ============ RIGHT RAIL: observability & ops (cross-cuts) ============ -->
+  <rect x="704" y="182" width="268" height="460" rx="10" fill="#EAF0EC" stroke="#C4D6C9"/>
+  <text x="720" y="204" font-size="10.5" letter-spacing="1.2" fill="#2E6A4E">OBSERVABILITY &amp; OPS</text>
+  <text x="720" y="220" font-size="10" fill="#7C9A85" font-style="italic">one API set — cross-cuts every layer</text>
+
+  <!-- metrics -->
+  <rect x="720" y="230" width="236" height="98" rx="8" fill="#FFFFFF" stroke="#C4D6C9"/>
+  <text x="734" y="251" font-size="13" font-weight="700" fill="#2E6A4E">Metrics</text>
+  <text x="734" y="270" font-size="11.5" fill="#26303B">Prometheus → Perses</text>
+  <text x="734" y="287" font-size="10" fill="#7C9A85" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">talu:tenant_* recording rules</text>
+  <text x="734" y="305" font-size="10.5" fill="#5A6672">fleet · per-tenant dashboards</text>
+  <text x="734" y="320" font-size="10.5" fill="#5A6672">usage read for the orchestrator</text>
+
+  <!-- logs & audit -->
+  <rect x="720" y="338" width="236" height="132" rx="8" fill="#FFFFFF" stroke="#C4D6C9"/>
+  <text x="734" y="359" font-size="13" font-weight="700" fill="#2E6A4E">Logs &amp; Audit</text>
+  <text x="734" y="378" font-size="11.5" fill="#26303B">Loki + Grafana Alloy → Perses</text>
+  <text x="734" y="396" font-size="10.5" fill="#5A6672"><tspan font-weight="700" fill="#26303B">Access Audit</tspan> — who reached what</text>
+  <text x="734" y="414" font-size="10.5" fill="#5A6672"><tspan font-weight="700" fill="#26303B">VM Logs</tspan> — inside the guests</text>
+  <text x="748" y="430" font-size="10.5" fill="#5A6672">· operator (fleet) + per-tenant</text>
+  <text x="748" y="446" font-size="10.5" fill="#5A6672">· platform-stamped labels (spoof-proof)</text>
+  <text x="734" y="462" font-size="10" fill="#7C9A85" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">native in Perses — no Grafana</text>
+
+  <!-- backup -->
+  <rect x="720" y="480" width="236" height="102" rx="8" fill="#FFFFFF" stroke="#C4D6C9"/>
+  <text x="734" y="501" font-size="13" font-weight="700" fill="#2E6A4E">Backup &amp; DR</text>
+  <text x="734" y="520" font-size="11.5" fill="#26303B">Velero + kopia → Garage S3</text>
+  <text x="734" y="537" font-size="10.5" fill="#5A6672">etcd snapshot · KubeVirt VM snapshots</text>
+  <text x="734" y="553" font-size="10.5" fill="#5A6672">validated destroy-and-restore</text>
+  <text x="734" y="571" font-size="10" fill="#7C9A85" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">off-cluster, three tiers</text>
+
+  <!-- observes connector (rail cross-cuts the stack) -->
+  <line x1="704" y1="412" x2="696" y2="412" stroke="#7C9A85" stroke-width="1.6" stroke-dasharray="4 3"/>
+  <polygon points="690,412 699,407 699,417" fill="#7C9A85"/>
+
+  <!-- footer -->
+  <line x1="28" y1="650" x2="972" y2="650" stroke="#E2DDD3"/>
+  <text x="28" y="666" font-size="10.5" fill="#8A8578"><tspan font-weight="700" fill="#5A6672">components/</tspan> = the product (clone, don't edit)   ·   <tspan font-weight="700" fill="#5A6672">environments/&lt;site&gt;/</tspan> = your values (overlay)   ·   pull upstream = a clean git merge</text>
+</svg>

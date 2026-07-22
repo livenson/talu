@@ -100,6 +100,13 @@ graph TD
   Loki, surfaced as an **Access Audit** dashboard **natively in Perses** (Loki datasource + `LogsTable`;
   no Grafana). It answers *who accessed what, when* (per-user email/host/allow) — the identity that
   metrics deliberately omit. See [`../operations/`](../operations/) and the logging component.
+- **VM logs = what's happening *inside* the guests.** The same Loki + Alloy tier also collects each VM's
+  own logs as a **tenant-scoped index** (`namespace=<tenant>, vm=<name>`), shown as **VM Logs** dashboards —
+  a fleet-wide **operator** view and a **per-tenant** one. **Tier 1** (always on) streams the guest journal
+  to its serial console, which KubeVirt captures and Alloy ships to Loki, stamping the tenant/VM labels
+  **from pod metadata** — so a guest can't forge them. Opt-in **Tier 2** runs an in-guest agent that pushes
+  to a per-tenant, **Cilium-pinned ingest gateway** which hard-stamps the namespace (the guest is never
+  trusted with the tenant label). Details: [the logging component](../../components/platform/logging/).
 - **Backup & DR = three tiers.** `talosctl etcd snapshot` (system), KubeVirt `VirtualMachineSnapshot`
   (per-VM), and **Velero + node-agent (kopia) → Garage S3** (platform/off-cluster), with validated
   destroy-and-restore. Full flows: [`../operations/backup-restore.md`](../operations/backup-restore.md).

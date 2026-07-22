@@ -8,11 +8,28 @@ orchestrator-agnostic** — the whole management surface is the Kubernetes decla
 the Prometheus HTTP API. See [`docs/architecture/`](docs/architecture/) for the component
 diagram and [runtime flows](docs/architecture/flows.md).
 
+<p align="center">
+  <img src="docs/assets/architecture-overview.svg" alt="Talu architecture overview: the layered stack — access plane (Pomerium as the only ingress), tenancy (Flux + the talu-tenant chart rendering per-tenant namespaces), virtualization (KubeVirt/CDI), substrate (Talos, Cilium, CephFS) — with an observability &amp; ops rail cross-cutting every layer: metrics (Prometheus + Perses), logs &amp; audit (Loki + Alloy — Access Audit and VM Logs, operator + per-tenant), and backup/DR (Velero to Garage S3)." width="920">
+</p>
+
 **Talu works standalone — no external orchestrator required.** You can operate it entirely
 through Git: Flux reconciles both the platform and its tenants from a repository you control.
 An external billing/portal/automation system is an **optional** consumer of a stable contract
 (the Kubernetes API + Prometheus; see [`docs/integrations/`](docs/integrations/)) — for example
 [Waldur](https://waldur.com), a self-service portal, or a CI pipeline — never a dependency.
+
+**Platform tiers** (deployed by the `ansible/` roles; per-component detail in each
+[`components/platform/*/README.md`](components/platform/)):
+
+- **Observability** — Prometheus + Perses dashboards: fleet, network/security, per-VM, Access &
+  Identity, and backup/DR, plus per-tenant dashboards (data hard-scoped by prom-label-proxy).
+- **Logging & audit** — Loki + Grafana Alloy, surfaced **natively in Perses** (no Grafana):
+  an **Access Audit** view (*who accessed what, when*) and **VM Logs from inside the guests** — both a
+  fleet-wide **operator** view and **per-tenant**, with tenant/VM labels stamped by the platform so a
+  tenant can't spoof another's stream. See [`components/platform/logging/`](components/platform/logging/).
+- **Backup & DR** — Velero + node-agent (kopia) → Garage S3, with validated destroy-and-restore; plus
+  `talosctl etcd snapshot` and KubeVirt `VirtualMachineSnapshot`. See
+  [`docs/operations/backup-restore.md`](docs/operations/backup-restore.md).
 
 > Status: **early scaffold.** The architecture is settled (see `docs/architecture/`); the
 > component manifests are being implemented per the single-node pilot plan. The
