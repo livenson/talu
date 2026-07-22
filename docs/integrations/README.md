@@ -23,7 +23,10 @@ architecture in [`../architecture/`](../architecture/). This page is the integra
    (VM count, allocated vCPU/memory, egress, storage, quota utilisation), keyed on `namespace` and
    joinable to `talu.io/project-uuid` via `talu:tenant_project_uuid:info`. The **same** series render
    the per-tenant Perses dashboards — the dashboard *is* the invoice. €-conversion/billing stays in the
-   orchestrator; Talu only exposes usage. See [`../../components/platform/monitoring/`](../../components/platform/monitoring/).
+   orchestrator; Talu only exposes usage. Operational **alerts** are consumable the same way: read the
+   Prometheus `ALERTS` series, or have Alertmanager push to your intake by setting `alerting_webhook_url`
+   (Talu ships the rules + Alertmanager with a null default receiver; it never assumes a destination).
+   See [`../../components/platform/monitoring/`](../../components/platform/monitoring/).
 4. **Delegate** identity to the shared **OIDC IdP** (generic — Dex/Keycloak/ZITADEL) and express
    authorization as **group membership** (a per-project group). Talu consumes the OIDC claims; it never
    calls back to the orchestrator.

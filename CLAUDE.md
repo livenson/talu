@@ -27,7 +27,7 @@ you hit a wall. Update whichever file fits when you burn time on a non-obvious i
 
 ## Critical gotchas (full catalog + access plane + versions in docs/development/lab-notes.md)
 
-Know these before touching the lab — they lock you out or cost hours. The full 25-entry catalog
+Know these before touching the lab — they lock you out or cost hours. The full catalog (#1–#37)
 (stable #IDs, cross-referenced from roles/scripts), the identity & access-plane build, and audited
 component versions live in [`docs/development/lab-notes.md`](docs/development/lab-notes.md).
 

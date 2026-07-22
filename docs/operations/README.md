@@ -17,9 +17,10 @@ kit — and for single-node incidents.
   build → flat apt repo → the in-cluster `pkg-repo` → mutable-guest auto-update (or baked into bootc
   images). Validated end-to-end (install + reboot-less v1→v2 upgrade).
 - **[`backup-restore.md`](backup-restore.md)** — the three backup tiers (Talos etcd snapshot ·
-  KubeVirt `VirtualMachineSnapshot` · Velero + file-system backup to S3/MinIO) with **explicit
+  KubeVirt `VirtualMachineSnapshot` · Velero + file-system backup to S3, **Garage**) with **explicit
   backup and restore flows**, validated end-to-end on the lab including a destroy-and-restore that
-  recovered volume **data**. Read the `hostPath`/`local-path` gotcha before trusting a backup.
+  recovered volume **data**, plus an automated weekly **DR drill** (`restore-test.yaml`). Read the
+  `hostPath`/`local-path` gotcha before trusting a backup.
 - **Host lockout recovery** (the Docker/network/MTU lockout): the failure mode and the
   cloud-console recovery are documented in
   [`../development/lab-notes.md`](../development/lab-notes.md) gotcha #1 — host MTU must be 1400
@@ -34,5 +35,3 @@ kit — and for single-node incidents.
 - `ceph-recovery.md` — MON/OSD loss, `size 2` single-node caveats, re-add and rebalance
   (production Rook; the lab uses external MicroCeph — see `../../dev/lab/microceph-setup.sh`).
   The full-OSD case is already covered by lab-notes #26 (above).
-- Promote Velero + MinIO from the lab install into `components/platform/backup/` so Tier 3 is
-  part of the product, not a manual step.

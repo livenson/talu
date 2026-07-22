@@ -49,8 +49,10 @@ graph TD
     end
 
     subgraph OBS["Observability & accounting"]
-        PROM["Prometheus<br/>talu:tenant_* recording rules"]
+        PROM["Prometheus<br/>talu:tenant_* rules + alert rules"]
+        ALERT["Alertmanager<br/>(null receiver → webhook)"]
         PERSES["Perses dashboards<br/>(operator + per-tenant, via Pomerium)"]
+        PROM --> ALERT
     end
 
     ORCH -->|"1. write labelled objects<br/>(HelmRelease / VMs)"| FLUX
@@ -81,7 +83,9 @@ graph TD
 - **Access plane = the only ingress.** All human and machine access enters through **Pomerium**,
   which is both the HTTP identity-aware proxy *and* the native SSH proxy + SSH User CA. Authentication
   is delegated to a **generic OIDC IdP** (Dex on the lab; Keycloak/ZITADEL in production — a values
-  swap). There is no public `:22` and no static VM password.
+  swap). There is no public `:22` and no static VM password. Guests trust the User CA via cloud-init by
+  default, or — so the CA can be **rotated without re-provisioning** — via the OS-native `talu-ca-trust`
+  package (`caTrust.package`; `dev/lab/ca-rotate.sh`), the platform never SSHing into a guest to do it.
 - **Tenancy = the tenant API.** A tenant is a set of values rendered by the **`talu-tenant` chart**.
   The chart's `values.schema.json` *is* the API. Applying a `HelmRelease` (directly to the K8s API, or
   from Git) makes Flux's helm-controller render the per-tenant bundle; deleting it garbage-collects the
@@ -89,12 +93,15 @@ graph TD
 - **Substrate is standard and swappable.** Talos immutable nodes, Cilium (network policy + LB-IPAM,
   no kube-proxy), CephFS for RWX storage. The no-KVM validation lab runs this same stack nested; real
   deployments run it on KVM nodes — a values change, not a rebuild.
-- **Observability & accounting = one PromQL set.** Prometheus scrapes KubeVirt/Cilium/kube-state-metrics
-  and computes the per-namespace **`talu:tenant_*`** recording rules — the *same* series feed the operator
-  Perses dashboards (fleet, network/security, per-VM detail, **Access & Identity** for Pomerium, backup/DR),
-  the per-tenant dashboards, and the orchestrator's usage read (verb 3). Per-tenant data isolation is
-  enforced by **prom-label-proxy** (hard-scopes every query to the tenant's namespace); all dashboards are
-  fronted by Pomerium. Billing/€-conversion is the orchestrator's job — Talu only meters.
+- **Observability & accounting = one PromQL set.** Prometheus scrapes KubeVirt/Cilium/kube-state-metrics/
+  cert-manager and computes the per-namespace **`talu:tenant_*`** recording rules — the *same* series feed the
+  operator Perses dashboards (fleet, network/security, per-VM detail, **Access & Identity** for Pomerium,
+  backup/DR, **alerts**, **certs/PKI**, **alert-ops**), the per-tenant dashboards, and the orchestrator's usage
+  read (verb 3). Prometheus alert rules (`resource-rules`/`node-rules`/`backup-rules`) fire into **Alertmanager**,
+  which runs with a **null default receiver** — alerts are visible in its UI + the Alerts dashboard and notify
+  externally once `alerting_webhook_url` (or a Slack/email/PagerDuty receiver) is wired. Per-tenant data
+  isolation is enforced by **prom-label-proxy** (hard-scopes every query to the tenant's namespace); all
+  dashboards are fronted by Pomerium. Billing/€-conversion is the orchestrator's job — Talu only meters.
 - **Audit = metrics answer *how much / where*; logs answer *who*.** The access-plane **audit tier** —
   Loki (store) + Grafana Alloy (collects pod logs via the K8s API) — ships Pomerium's access decisions to
   Loki, surfaced as an **Access Audit** dashboard **natively in Perses** (Loki datasource + `LogsTable`;
@@ -109,7 +116,9 @@ graph TD
   trusted with the tenant label). Details: [the logging component](../../components/platform/logging/).
 - **Backup & DR = three tiers.** `talosctl etcd snapshot` (system), KubeVirt `VirtualMachineSnapshot`
   (per-VM), and **Velero + node-agent (kopia) → Garage S3** (platform/off-cluster), with validated
-  destroy-and-restore. Full flows: [`../operations/backup-restore.md`](../operations/backup-restore.md).
+  destroy-and-restore **and an automated weekly DR drill** (`restore-test.yaml` — canary backup→restore→
+  verify, with `TaluRestoreTestStale`/`TaluRestoreTestFailed` alerts). Full flows:
+  [`../operations/backup-restore.md`](../operations/backup-restore.md).
 - **Golden images are bootc, delivery is automatic.** Images are built as **bootc** (image-mode) OCI
   containerDisks (CI or an in-cluster Job, no KVM needed) and pushed to **zot**. A CDI **`DataImportCron`**
   rolls a **`DataSource`** on each new digest; a tenant VM with `source: dataSource` clones from it, so a
@@ -141,7 +150,7 @@ Talu is an assembly of standard components — the authoritative reference for e
 | Images / patching | bootc (image mode) · bootc-image-builder · CDI DataImportCron · zot | <https://bootc-dev.github.io/bootc/> · <https://github.com/osbuild/bootc-image-builder> · <https://zotregistry.dev/> |
 | Tenancy | Flux (helm-controller) | <https://fluxcd.io/flux/components/helm/helmreleases/> |
 | Access | Pomerium (Native SSH) · Dex · cert-manager | <https://www.pomerium.com/docs/capabilities/native-ssh-access> · <https://dexidp.io/docs/> · <https://cert-manager.io/docs/> |
-| Observability / accounting | Prometheus (kube-prometheus-stack) · Perses · prom-label-proxy | <https://prometheus-operator.dev/> · <https://perses.dev/> · <https://github.com/prometheus-community/prom-label-proxy> |
+| Observability / accounting | Prometheus (kube-prometheus-stack) · Alertmanager · Perses · prom-label-proxy | <https://prometheus-operator.dev/> · <https://prometheus.io/docs/alerting/latest/alertmanager/> · <https://perses.dev/> · <https://github.com/prometheus-community/prom-label-proxy> |
 | Logging / audit | Loki · Grafana Alloy · Perses (Loki datasource + LogsTable) | <https://grafana.com/oss/loki/> · <https://grafana.com/docs/alloy/latest/> · <https://perses.dev/> |
 | Backup / DR | Talos etcd snapshot · KubeVirt snapshot/restore · Velero (+ kubevirt-velero-plugin) · Garage (S3 target) | <https://www.talos.dev/v1.11/advanced/disaster-recovery/> · <https://kubevirt.io/user-guide/storage/snapshot_restore_api/> · <https://velero.io/docs/main/> · <https://github.com/kubevirt/kubevirt-velero-plugin> · <https://garagehq.deuxfleurs.fr/> |
 | Platform | Kubernetes (Pod Security Admission) | <https://kubernetes.io/docs/concepts/security/pod-security-admission/> |

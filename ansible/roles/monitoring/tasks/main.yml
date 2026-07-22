@@ -1,7 +1,8 @@
 ---
-# Monitoring: Prometheus (kube-prometheus-stack, Prometheus-only) + Perses dashboards + the
-# talu:tenant_*/talu:backup_* recording rules and ServiceMonitors. Deployed with helm/kubectl (the
-# rocky-sandbox lab does NOT run flux helm-controller — it's flaky on the nested node), mirroring
+# Monitoring: Prometheus + Alertmanager (kube-prometheus-stack) + Perses dashboards + the
+# talu:tenant_*/talu:backup_* recording rules, alert rules and ServiceMonitors. The PLATFORM tiers are
+# deployed with helm/kubectl directly (not the flux helm-controller — it needs a nested-node probe
+# workaround, handled only for the tenant tier; see the tenancy role), mirroring
 # components/platform/monitoring/. See that component's README for the design.
 - name: Monitoring component dir (on the lab, from the synced repo)
   ansible.builtin.set_fact:

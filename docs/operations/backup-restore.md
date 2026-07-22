@@ -364,8 +364,20 @@ classic failure), `TaluBackupFailing`, `TaluBackupHasWarnings` (Velero reports a
 a warning, which is how the hostPath trap shows up), `TaluBackupStoreNearFull`, and
 `TaluBackupStoreUnhealthy`.
 
-> Alertmanager is **disabled** in this stack, so these evaluate into Prometheus `/alerts` and the
-> dashboards only. Wire an Alertmanager (or route to the orchestrator) before relying on them to page.
+> Alertmanager runs with a **null default receiver** — these show in the Alertmanager UI and the
+> Perses **Alerts** dashboard, but notify nowhere until you wire a receiver: set `alerting_webhook_url`
+> (the orchestrator's alert intake) or swap in a Slack/email/PagerDuty receiver in `monitoring/values.yaml`.
+
+### Automated DR drill
+
+An untested backup is a hypothesis. [`restore-test.yaml`](../../components/platform/backup/restore-test.yaml)
+is a weekly CronJob (`17 3 * * 1`) that proves the whole path without a human: it seeds a canary
+namespace, backs it up, restores it into a scratch namespace, **verifies the sentinel data actually came
+back** (a Completed restore that restored nothing would still be a lie), then cleans up. A successful run
+increments Velero's `velero_restore_success_total`; `TaluRestoreTestStale` (no restore in 8 days) and
+`TaluRestoreTestFailed` alert if the drill stops or a restore fails. The canary asserts *object* restore
+(a ConfigMap) — extend it to a PVC canary to also prove volume-data restore once a non-hostPath
+StorageClass is in play (see the `hostPath` gotcha above). Validated end-to-end on the lab.
 
 ---
 
