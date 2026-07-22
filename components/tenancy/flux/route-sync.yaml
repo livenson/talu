@@ -99,6 +99,15 @@ spec:
                       allow_websockets: true"
                   done < <(kubectl get svc -A -l talu.io/dashboard-expose=true \
                     -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.namespace}{" "}{.metadata.annotations.talu\.io/allowed-users}{"\n"}{end}')
+                  # optional apex landing (https://<domain>, public) from talu.io/landing-expose Services
+                  while read -r svc ns _; do
+                    [ -z "$svc" ] && continue
+                    CFG="${CFG}
+                    - from: https://${D}
+                      to: http://${svc}.${ns}.svc.cluster.local:80
+                      allow_public_unauthenticated_access: true"
+                  done < <(kubectl get svc -A -l talu.io/landing-expose=true \
+                    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.namespace}{"\n"}{end}')
                   OLD=$(kubectl -n pomerium get cm pomerium-config -o jsonpath='{.data.config\.yaml}' 2>/dev/null || true)
                   if [ "$CFG" != "$OLD" ]; then
                     kubectl -n pomerium create cm pomerium-config --from-literal=config.yaml="$CFG" \

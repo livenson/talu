@@ -1,0 +1,16 @@
+# The label talu.io/landing-expose=true is what the Pomerium route renderer (dev/lab/expose-vm.sh and
+# components/tenancy/flux/route-sync.yaml) turns into the apex route `https://<domain>` → this Service,
+# public. Deleting the portal removes the label, and the apex route disappears on the next render — so
+# the landing page is genuinely optional.
+apiVersion: v1
+kind: Service
+metadata:
+  name: talu-portal
+  labels:
+    app: talu-portal
+    talu.io/landing-expose: "true"
+    app.kubernetes.io/part-of: talu
+spec:
+  selector: { app: talu-portal }
+  ports:
+    - { name: http, port: 80, targetPort: 8080 }
