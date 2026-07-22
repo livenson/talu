@@ -187,6 +187,22 @@ spec:
                 plugin:
                   kind: PrometheusTimeSeriesQuery
                   spec: { query: "sum by (tenant_namespace) (talu_velero_pvr_bytes)" }
+      drill8d:
+        kind: Panel
+        spec:
+          display:
+            name: DR drill — successful restores (8d window)
+            description: >-
+              The weekly restore-test drill (components/platform/backup/restore-test.yaml) restores a
+              canary and verifies the data actually came back. sum(increase(velero_restore_success_total
+              [8d])) — should stay >= 1; TaluRestoreTestStale fires when it hits 0 (the drill stopped).
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(increase(velero_restore_success_total[8d]))" }
     layouts:
       - kind: Grid
         spec:
@@ -213,5 +229,6 @@ spec:
         spec:
           display: { title: Restore }
           items:
-            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/restores" } }
-            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/restorebytes" } }
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/restores" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/restorebytes" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/drill8d" } }

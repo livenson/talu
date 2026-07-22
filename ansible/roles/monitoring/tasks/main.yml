@@ -79,5 +79,7 @@
     - dashboard-backup.yaml
     - dashboard-pomerium.yaml
     - dashboard-alerts.yaml
+    - dashboard-certs.yaml
+    - dashboard-alertops.yaml
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true

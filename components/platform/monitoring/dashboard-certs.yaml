@@ -1,0 +1,114 @@
+# Operator PKI / Certificates dashboard — the visual companion to the TaluCertExpiringSoon alert
+# (resource-rules.yaml), built on the cert-manager scrape (servicemonitors.yaml, :9402). Every metric
+# verified on the lab. NOTE: cert-manager labels the CERT's own namespace as `exported_namespace`
+# (the plain `namespace` label is always cert-manager, the scrape target); ready_status emits one series
+# per `condition` (True/False/Unknown), so we filter condition="True". Admin-only, via Pomerium.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-certs
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — Certificates (PKI)
+    duration: 24h
+    panels:
+      expiry:
+        kind: Panel
+        spec:
+          display:
+            name: Days until expiry per certificate
+            description: >-
+              The headline: (expiration - now) in days, per cert. cert-manager auto-renews; a line
+              trending toward zero without resetting means renewal is stuck. TaluCertExpiringSoon warns
+              at 14d, TaluCertExpiringCritical pages at 3d.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "(certmanager_certificate_expiration_timestamp_seconds - time()) / 86400" }
+      ready:
+        kind: Panel
+        spec:
+          display:
+            name: "Certificate ready (1 = ready)"
+            description: >-
+              certmanager_certificate_ready_status for condition=True. A cert dropping to 0 is failing to
+              issue/renew — check the Certificate's events and its issuer below.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "certmanager_certificate_ready_status{condition=\"True\"}" }
+      renewal:
+        kind: Panel
+        spec:
+          display:
+            name: Hours until next renewal
+            description: When cert-manager will next attempt renewal for each cert (renewal - now, hours).
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "(certmanager_certificate_renewal_timestamp_seconds - time()) / 3600" }
+      issuers:
+        kind: Panel
+        spec:
+          display:
+            name: "Issuer / ClusterIssuer ready (1 = ready)"
+            description: >-
+              Is the CA itself healthy — including the `talu-ca` ClusterIssuer that signs the internal
+              dev CA. If an issuer is 0, every cert it signs will fail to renew.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "certmanager_clusterissuer_ready_status{condition=\"True\"}" }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "certmanager_issuer_ready_status{condition=\"True\"}" }
+      syncerrors:
+        kind: Panel
+        spec:
+          display:
+            name: Controller reconcile error rate
+            description: >-
+              rate(certmanager_controller_sync_error_count). Sustained errors mean the controller can't
+              reconcile Certificates/issuers — renewals stall regardless of expiry.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(rate(certmanager_controller_sync_error_count[5m]))" }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: Expiry & renewal }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/expiry" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/renewal" } }
+      - kind: Grid
+        spec:
+          display: { title: Health }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/ready" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/issuers" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/syncerrors" } }

@@ -27,6 +27,8 @@ resources:
   - dashboard-backup.yaml
   - dashboard-pomerium.yaml
   - dashboard-alerts.yaml
+  - dashboard-certs.yaml
+  - dashboard-alertops.yaml
 configMapGenerator:
   - name: kube-prometheus-stack-values
     files:

@@ -46,6 +46,12 @@ accounting (the § READ verb). Billing/€-conversion is *not* here — it lives
   - `dashboard-alerts.yaml` — **Alerts**: the primary "what's on fire now" view — a firing-alerts table
     plus severity/name/pending trends off the Prometheus `ALERTS` series. The Perses-native counterpart
     to the Alertmanager UI (which owns silences/notification).
+  - `dashboard-certs.yaml` — **Certificates (PKI)**: days-to-expiry + next-renewal per cert, certificate
+    and issuer/ClusterIssuer ready status (incl. the `talu-ca` root), and controller reconcile errors —
+    off the cert-manager scrape. The visual companion to `TaluCertExpiringSoon`.
+  - `dashboard-alertops.yaml` — **Alert Operations**: health of the alerting *pipeline* — active vs
+    suppressed alerts, notifications sent/failed + latency, active silences, config-reload success, and
+    the Prometheus→Alertmanager send-side. (Answers "is paging actually working", vs "what's firing".)
 - **`resource-rules.yaml`** — platform health alerts (metrics all verified on the lab): cert expiry
   (`certmanager_*`, needs the cert-manager ServiceMonitor), tenant quota exhaustion (`kube_resourcequota`),
   KubeVirt component health + failed VMIs (`kubevirt_virt_*_ready_status`, `kubevirt_vmi_info`). PVC-full
