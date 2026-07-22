@@ -57,3 +57,8 @@ emits the full per-VM bundle (cloud-init Secret + VM + Service + pinning) for an
 orchestrator to apply. `dev/lab/gc-orphans.sh [--delete]` detects (and cleans) orphaned plumbing —
 a Service/pin/Secret/`ssh://` route left behind when a manually-exposed VM is deleted (chart-managed
 tenants never orphan, since Flux GCs the bundle together); dry-run by default.
+
+**Rotating the User CA:** the CA is generated once by the `identity_pomerium` role; rotate it without
+locking guests out via `dev/lab/ca-rotate.sh` (dual-trust: `prepare` → roll the `talu-ca-trust` package
+→ `switch` → `retire`). VMs get the new trust through the package/ConfigMap — the platform never SSHes
+into a guest. See [`docs/operations/rotation.md`](../../../docs/operations/rotation.md).

@@ -1,0 +1,72 @@
+# pkg-repo — an in-cluster package repository (the OS-package analog of zot's image registry). It serves
+# the `talu-ca-trust` package to MUTABLE guests over HTTP, so they auto-update the SSH User CA trust
+# (unattended-upgrades) without the platform ever touching them. bootc guests don't need it (they bake
+# the package into the image). Populated by images/ca-trust/publish.sh (or a build Job); guests point at
+# `deb [trusted=yes] http://pkg-repo.golden-images.svc/deb/ ./`.
+#
+# Lives in the golden-images namespace (with zot) — that Namespace is created by the golden-image
+# catalog (components/infrastructure/cdi/catalog.yaml), so apply that first.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pkg-repo-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 2Gi } }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pkg-repo-nginx
+data:
+  default.conf: |
+    server {
+      listen 8080 default_server;   # unprivileged nginx (non-root) listens high; Service maps :80 → :8080
+      root /srv/repo;
+      autoindex on;            # browsable; apt fetches Packages.gz / Release / *.deb by path
+      location = /healthz { return 200 "ok\n"; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pkg-repo
+  labels: { app: pkg-repo, app.kubernetes.io/part-of: talu }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: pkg-repo } }
+  template:
+    metadata:
+      labels: { app: pkg-repo, app.kubernetes.io/part-of: talu }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        fsGroup: 101            # so publish.sh (kubectl cp/exec as uid 101) can write the repo PVC
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: nginx
+          image: docker.io/nginxinc/nginx-unprivileged:1.27-alpine
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          volumeMounts:
+            - { name: conf, mountPath: /etc/nginx/conf.d }
+            - { name: data, mountPath: /srv/repo }
+      volumes:
+        - { name: conf, configMap: { name: pkg-repo-nginx } }
+        - { name: data, persistentVolumeClaim: { claimName: pkg-repo-data } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pkg-repo
+  labels: { app: pkg-repo, app.kubernetes.io/part-of: talu }
+spec:
+  selector: { app: pkg-repo }
+  ports: [{ name: http, port: 80, targetPort: 8080 }]

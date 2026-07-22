@@ -526,3 +526,19 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     Debugging aid: a `000`/connection-refused from a test curl is often a **short-name DNS miss**
     (`svc:3100` vs `svc.cluster.local:3100`) or **no ready Service endpoints**, NOT a policy drop — always
     retest with the FQDN and confirm the target pod is Ready before blaming the policy.
+
+35. **SSH User CA trust must be PACKAGE-owned to be rotatable — cloud-init hand-writing it is a dead end.**
+    Trust lives in `/etc/ssh/talu_ca.pub` (`TrustedUserCAKeys`). If cloud-init *writes* that file, you can
+    never rotate the CA on a running VM without either SSHing in (which the platform refuses to do) or
+    recreating the VM: (a) on **bootc/ostree** guests a file modified after provisioning is a local `/etc`
+    override that the image update WON'T overwrite; (b) on mutable guests it's an unmanaged file nothing
+    updates. The fix is the **`talu-ca-trust` package** (`images/ca-trust/`): dpkg/rpm own the file, so a
+    CA rotation is just a package upgrade (`unattended-upgrades` on mutable guests, reboot-less; the bootc
+    image update on ostree guests). The package's `postinst` **reloads** sshd (never `restart` — that would
+    drop the live session, including the platform's own). Rotation is dual-trust: `TrustedUserCAKeys` accepts
+    multiple CA keys, so the file carries CA1+CA2 during the window (`dev/lab/ca-rotate.sh prepare` →
+    `switch` → `retire`). Opt in per tenant with `caTrust.package=true` (needs an apt/rpm repo the guests can
+    reach); the default still hand-writes the file (simplest, but the CA is then only rotatable by recreating
+    the VM — fine for ephemeral containerDisk VMs). Build the .deb with only coreutils+tar+ar (no dpkg-deb),
+    so it builds on the rpm-based lab host too; validated installing on Ubuntu 24.04 (`dpkg -S` shows it owns
+    the file).

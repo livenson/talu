@@ -23,7 +23,18 @@
     },
     "sshUserCaPubKey": {
       "type": "string",
-      "description": "Pomerium SSH User CA public key the VMs trust (injected via valuesFrom cm pomerium-user-ca)."
+      "description": "Pomerium SSH User CA public key the VMs trust (injected via valuesFrom cm pomerium-user-ca). Not needed when caTrust.package=true."
+    },
+    "caTrust": {
+      "type": "object",
+      "description": "How SSH User CA trust reaches guests: hand-written file (default) or the rotatable talu-ca-trust package.",
+      "properties": {
+        "package": { "type": "boolean", "description": "Install the talu-ca-trust package (rotatable, auto-updating) instead of hand-writing the trust file." },
+        "baked": { "type": "boolean", "description": "The bootc golden image already carries the talu-ca-trust rpm — write no trust in cloud-init." },
+        "aptRepoLine": { "type": "string", "description": "apt source line for the talu-ca-trust repo (required when package=true)." },
+        "aptOrigin": { "type": "string", "description": "unattended-upgrades Origins-Pattern origin= match." }
+      },
+      "additionalProperties": false
     },
     "defaults": {
       "type": "object",

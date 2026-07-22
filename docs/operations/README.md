@@ -10,6 +10,12 @@ kit — and for single-node incidents.
   `evictionStrategy: LiveMigrate` + the `kubevirt.io/drain` taint). `make node-drain` / `node-uncordon`
   / `talos-upgrade` (dry-run by default). Single-node lab caveat: it refuses to evacuate (nowhere to
   migrate) rather than powering VMs off.
+- **[`rotation.md`](rotation.md)** — rotating the **SSH User CA** (dual-trust, zero lockout, via the
+  `talu-ca-trust` package — the platform never SSHes into guests) with `dev/lab/ca-rotate.sh`, plus
+  platform-secret rotation (`secret-rotate.sh`) and the cert-manager auto-renewal note.
+- **[`packages.md`](packages.md)** — how cluster-specific config reaches guests as **OS packages**:
+  build → flat apt repo → the in-cluster `pkg-repo` → mutable-guest auto-update (or baked into bootc
+  images). Validated end-to-end (install + reboot-less v1→v2 upgrade).
 - **[`backup-restore.md`](backup-restore.md)** — the three backup tiers (Talos etcd snapshot ·
   KubeVirt `VirtualMachineSnapshot` · Velero + file-system backup to S3/MinIO) with **explicit
   backup and restore flows**, validated end-to-end on the lab including a destroy-and-restore that
