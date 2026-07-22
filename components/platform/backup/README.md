@@ -19,6 +19,11 @@ diagrams, and the validated round-trips are in
 - **`servicemonitors.yaml`** — scrape Velero (`:8085`) and Garage (`:3903`). The `talu:backup_*`
   recording rules, the kube-state-metrics CustomResourceState that yields **true per-tenant backup
   size**, and the Backup & DR dashboard live in `components/platform/monitoring/`.
+- **`restore-test.yaml`** — the **DR drill**: a weekly, self-contained CronJob that seeds a canary
+  namespace, backs it up, restores it into a scratch namespace, and **verifies the data came back**
+  (a Completed restore that restored nothing would still be a lie). Success bumps
+  `velero_restore_success_total`; `TaluRestoreTestStale`/`TaluRestoreTestFailed` (in the monitoring
+  component's `backup-rules.yaml`) alert if the drill stops or fails. Validated on the lab end-to-end.
 - **`helmrepository.yaml` / `helmrelease.yaml` / `values.yaml`** — Velero, chart **`12.1.0`**
   (app **`v1.18.1`**), with `velero-plugin-for-aws v1.11.1` and `kubevirt-velero-plugin v0.7.1` as
   plugin initContainers, `deployNodeAgent: true`, and `defaultVolumesToFsBackup: true`.

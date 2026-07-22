@@ -1,0 +1,67 @@
+# Platform resource/health alerts: certificate expiry, tenant quota exhaustion, KubeVirt health. Every
+# metric was verified present on the running lab (kube_resourcequota + kubevirt_virt_*_ready_status +
+# kubevirt_vmi_info from KubeVirt; certmanager_* once the cert-manager ServiceMonitor scrapes :9402) —
+# nothing here is guessed.
+#
+# NOT YET (need a scrape first, so no dead rules): PVC-fullness (kubelet_volume_stats_* isn't exposed on
+# this Talos kubelet) and Ceph capacity/health (external MicroCeph mgr prometheus module isn't scraped).
+# Add a scrape config for each, then the standard rules.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: talu-resources
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  groups:
+    - name: talu.certs.alerts
+      rules:
+        # cert-manager auto-renews, but a renewal that's stuck/failing is silent until the cert expires
+        # and TLS breaks. Warn with two weeks' runway, page with three days'.
+        - alert: TaluCertExpiringSoon
+          expr: (certmanager_certificate_expiration_timestamp_seconds - time()) < (14 * 24 * 3600)
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: "TLS cert {{ $labels.namespace }}/{{ $labels.name }} expires in <14d"
+            description: "cert-manager should auto-renew — if this fires, renewal is stuck."
+        - alert: TaluCertExpiringCritical
+          expr: (certmanager_certificate_expiration_timestamp_seconds - time()) < (3 * 24 * 3600)
+          for: 15m
+          labels: { severity: critical }
+          annotations:
+            summary: "TLS cert {{ $labels.namespace }}/{{ $labels.name }} expires in <3d — renewal is stuck"
+    - name: talu.quota.alerts
+      rules:
+        # A tenant hitting its ResourceQuota can't create VMs — the orchestrator should raise it (or the
+        # tenant should clean up). Surface it before it blocks provisioning.
+        - alert: TaluTenantQuotaNearFull
+          expr: |
+            kube_resourcequota{type="used"} / ignoring(type)
+            (kube_resourcequota{type="hard"} > 0) > 0.90
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "Tenant {{ $labels.namespace }} is >90% of its {{ $labels.resource }} quota"
+            description: "{{ $value | humanizePercentage }} used. New VMs may be rejected — raise the quota or reclaim."
+    - name: talu.kubevirt.alerts
+      rules:
+        # If a virt component has no Ready pod, VM lifecycle operations (start/stop/migrate) stall.
+        - alert: TaluKubeVirtComponentDown
+          expr: |
+            (max by (job) (kubevirt_virt_api_ready_status) == 0)
+            or (max by (job) (kubevirt_virt_controller_ready_status) == 0)
+            or (max by (job) (kubevirt_virt_handler_ready_status) == 0)
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: "A KubeVirt control component has no Ready instance ({{ $labels.job }})"
+            description: "VM start/stop/migrate will stall until it recovers."
+        # A VMI stuck in Failed is a broken VM the tenant probably can't see.
+        - alert: TaluVMIFailed
+          expr: kubevirt_vmi_info{phase="Failed"} == 1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "VM {{ $labels.namespace }}/{{ $labels.name }} is in the Failed phase"

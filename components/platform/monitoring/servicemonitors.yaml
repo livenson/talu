@@ -43,3 +43,25 @@ spec:
     - port: metrics
       interval: 30s
       path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cert-manager
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  # cert-manager's controller Service exposes certmanager_* on :9402 (port `http-metrics`) — verified
+  # on the lab. Without this scrape the TaluCertExpiringSoon alert (resource-rules.yaml) has no series.
+  # Select the CONTROLLER only (cainjector/webhook share :9402 but don't publish cert-expiry metrics).
+  namespaceSelector:
+    matchNames: [cert-manager]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/component: controller
+  endpoints:
+    - port: http-metrics
+      interval: 60s
+      path: /metrics

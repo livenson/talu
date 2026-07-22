@@ -33,8 +33,13 @@ kubevirt_use_emulation: true      # no /dev/kvm
 cdi_scratch_storageclass: local-path
 
 # Observability + backup (deployed via helm/kubectl — no flux helm-controller on the nested node)
-kube_prometheus_stack_version: "87.17.0"   # app v0.92.1; Prometheus-only (Grafana/Alertmanager off)
+kube_prometheus_stack_version: "87.17.0"   # app v0.92.1; Prometheus + Alertmanager (Grafana off — Perses is the UI)
 perses_operator_version: "0.4.0"           # dashboards-as-code operator
+# Alerting destination. Empty → Alertmanager runs with a null receiver: alerts are visible in the
+# Alertmanager UI + the Perses "Alerts" dashboard but notify nowhere. Set to an incoming-webhook URL
+# (the orchestrator's alert intake, a chat webhook, etc.) and the monitoring role wires it to both the
+# default and critical receivers. Slack/email/PagerDuty are values swaps (see monitoring/README.md).
+alerting_webhook_url: ""
 velero_chart_version: "12.1.0"             # app v1.18.1
 garage_capacity: "50G"                     # Garage layout capacity for the single lab node
 loki_chart_version: "7.1.0"                # app 3.6.8 — the audit log store (SingleBinary); the

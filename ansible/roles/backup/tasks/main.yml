@@ -103,6 +103,11 @@
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
 
+- name: Apply the DR-drill restore-test CronJob (weekly self-contained restore assurance)
+  ansible.builtin.command: "kubectl apply -f {{ bk_dir }}/restore-test.yaml"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
 - name: Wait for the BackupStorageLocation to become Available
   ansible.builtin.command: >
     kubectl -n velero wait backupstoragelocation/default

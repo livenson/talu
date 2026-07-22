@@ -18,6 +18,8 @@ resources:
   - helmrelease.yaml
   # scrape velero (:8085) + garage (:3903); rules/dashboard live in the monitoring component
   - servicemonitors.yaml
+  # DR drill: weekly self-contained restore test (canary → backup → restore → verify)
+  - restore-test.yaml
 configMapGenerator:
   - name: velero-values
     namespace: velero

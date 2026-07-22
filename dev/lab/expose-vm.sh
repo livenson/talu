@@ -80,6 +80,10 @@ routes:
     to: http://hubble-ui.kube-system.svc.cluster.local:80
     allowed_users: [${ALLOWED_USERS}]
     allow_websockets: true
+  - from: https://alertmanager.${DOMAIN}
+    to: http://kube-prometheus-stack-alertmanager.monitoring.svc.cluster.local:9093
+    allowed_users: [${ALLOWED_USERS}]
+    allow_websockets: true
 "
 # one ssh:// route per exposed VM (declarative). Each route's allow-list comes from the
 # Service's talu.io/allowed-users annotation (per-tenant policy), not a global default.

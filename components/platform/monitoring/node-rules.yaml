@@ -1,8 +1,8 @@
 # Node maintenance & live-migration rules. Every metric below was verified present on the running lab
 # (KubeVirt exports kubevirt_vmi_* ; kube-state-metrics exports kube_node_*) — nothing here is guessed.
 #
-# NOTE: Alertmanager is disabled in this stack (monitoring/values.yaml), so these fire into Prometheus'
-# /alerts and the dashboards only. Wire an Alertmanager (or route to the orchestrator) before paging.
+# NOTE: Alertmanager is enabled (monitoring/values.yaml) with a null default receiver — these fire into
+# the Alertmanager UI + the Perses "Alerts" dashboard, and notify externally once a receiver is wired.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:

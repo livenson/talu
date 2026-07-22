@@ -1,0 +1,107 @@
+# Operator Alerts dashboard — the primary "what's on fire right now" view, built on the Prometheus
+# `ALERTS` series (every PrometheusRule alert — kube-prometheus-stack defaults + Talu's backup/node/
+# cert/quota/kubevirt rules — surfaces here the moment it fires). This is the Perses-native counterpart
+# to the Alertmanager UI: Alertmanager owns silences/grouping/notification, this owns at-a-glance triage.
+# Admin-only, via Pomerium.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — Alerts
+    duration: 6h
+    panels:
+      firing:
+        kind: Panel
+        spec:
+          display:
+            name: Firing alerts
+            description: >-
+              Every alert currently firing, with its severity and the object it fires on. Empty table =
+              nothing firing. Manage silences in the Alertmanager UI (alertmanager.<domain>).
+          plugin:
+            kind: Table
+            spec:
+              columnSettings:
+                - name: alertname
+                  header: Alert
+                - name: severity
+                  header: Severity
+                - name: namespace
+                  header: Namespace
+                - name: value
+                  hide: true
+                - name: timestamp
+                  hide: true
+                - name: __name__
+                  hide: true
+                - name: alertstate
+                  hide: true
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "ALERTS{alertstate=\"firing\"}" }
+      bysev:
+        kind: Panel
+        spec:
+          display:
+            name: Firing alerts by severity
+            description: Count of firing alerts grouped by severity — the trend of overall alert load.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (severity) (ALERTS{alertstate=\"firing\"})" }
+      byname:
+        kind: Panel
+        spec:
+          display:
+            name: Firing alerts by name
+            description: Which alerts are firing over time — a flapping alert shows as a dashed-in-and-out line.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (alertname) (ALERTS{alertstate=\"firing\"})" }
+      pending:
+        kind: Panel
+        spec:
+          display:
+            name: Pending alerts by name
+            description: >-
+              Alerts whose condition is true but haven't held for their `for:` duration yet — the
+              early-warning lane. These become firing if the condition persists.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (alertname) (ALERTS{alertstate=\"pending\"})" }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: What's firing now }
+          items:
+            - { x: 0, y: 0, width: 24, height: 10, content: { $ref: "#/spec/panels/firing" } }
+      - kind: Grid
+        spec:
+          display: { title: Trends }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/bysev" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/byname" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/pending" } }

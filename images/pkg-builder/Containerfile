@@ -1,0 +1,29 @@
+# talu-pkg-builder — the toolchain image for the in-cluster CA-trust publish Job
+# (components/platform/pkg-repo/publish-job/job.yaml). Bakes exactly what images/ca-trust/publish.sh
+# needs — git, rpm-build, createrepo_c, gnupg2, binutils (ar), tar, gzip, kubectl — so the Job runs
+# NON-ROOT with NO runtime `dnf install` (the fast-follow left after the CA-rotation work).
+#
+# WHY THIS IS A PRODUCTION ARTIFACT, NOT A LAB ONE: a Job's container image is pulled by the node's
+# CRI, which only trusts public/configured registries — NOT the in-cluster HTTP zot (verified: no pod
+# on the lab pulls its image from zot; zot is an application-level push/pull target for containerDisks).
+# So CI must publish THIS image to a registry the cluster trusts (ghcr.io/quay.io, or a zot the node's
+# Talos machineconfig lists as an insecure mirror). The lab keeps using fedora:41 + a conditional
+# install, which pulls everywhere. Build + push with images/pkg-builder/build.sh.
+ARG BASE=registry.fedoraproject.org/fedora:41
+FROM ${BASE}
+
+# The publish toolchain. kubernetes-client = kubectl (reads the CA ConfigMap, execs into the pkg-repo
+# pod to sync). No version pins here: this is a build tool, rebuilt from the current Fedora repos.
+# hadolint ignore=DL3041
+RUN dnf install -y --setopt=install_weak_deps=False \
+      git rpm-build createrepo_c gnupg2 binutils tar gzip kubernetes-client && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf
+
+# Run as a non-root, non-privileged user. publish.sh writes only under $HOME and /tmp (the emptyDir the
+# Job mounts), never system paths — so an unprivileged uid is sufficient and lets the Job satisfy PSA
+# `restricted` (runAsNonRoot). HOME is set so gpg/git have a writable home.
+RUN useradd --uid 1001 --create-home --home-dir /home/builder builder
+ENV HOME=/home/builder
+USER 1001
+WORKDIR /home/builder
