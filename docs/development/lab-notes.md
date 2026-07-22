@@ -542,3 +542,26 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     the VM — fine for ephemeral containerDisk VMs). Build the .deb with only coreutils+tar+ar (no dpkg-deb),
     so it builds on the rpm-based lab host too; validated installing on Ubuntu 24.04 (`dpkg -S` shows it owns
     the file).
+
+36. **Flux controllers crash-loop on the nested node — kubelet's host→pod probe path times out.** The
+    `source-controller`/`helm-controller` default `httpGet` liveness probe (`:9440/healthz`, `timeout=1s`)
+    gets `context deadline exceeded` on this Talos-in-Podman + Cilium node — the container is healthy
+    (logs show all controllers started) and **pod→pod works** (chart push/pull succeed), but the
+    kubelet→pod probe path is unreliable here (same nested-node probe family as #34, minus any policy).
+    Raising `timeoutSeconds` to 5 didn't help (it's not just tight timing). The controller images are
+    **distroless** — no shell — so an exec probe (which runs in the pod netns, bypassing the host→pod
+    path) isn't possible. Fix: **remove the liveness+readiness probes** on both deployments (the
+    `tenancy` role does this with a JSON-patch after `flux install`, which re-adds them each run). With
+    the probes gone the controllers are Ready, stay up, and the tenant round-trip works. Real nodes keep
+    their probes — this is lab-only. Without it, `kubectl wait --for=condition=Available` hangs forever.
+
+37. **Flux merges `spec.values` AFTER `valuesFrom`, so an inline placeholder silently overrides the
+    injection.** The tenant HelmRelease injects the Pomerium User CA via `valuesFrom`
+    (`targetPath: sshUserCaPubKey`). The environment tenant files (`environments/*/tenants/*.yaml`) carry
+    a `sshUserCaPubKey: ""` placeholder with a "leave empty, injected at reconcile" comment — but because
+    Flux applies `spec.values` last, that empty string **wins** over `valuesFrom`, and the chart fails
+    with `sshUserCaPubKey is required unless caTrust.package or caTrust.baked`. (`helmrelease.example.yaml`
+    worked precisely because it OMITS the key.) Fix: the `tenancy` role **strips any `sshUserCaPubKey`
+    line** from the tenant values before embedding them, so `valuesFrom` is the sole source. Precedence,
+    not the dotted ConfigMap key (`user_ca.pub`), was the culprit — verified by re-applying with the line
+    removed → `HelmRelease Ready`, VM `Running`.

@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# The tenant-as-HelmRelease control plane: an in-cluster OCI registry holding the talu-tenant chart, the
+# Flux OCIRepository source that pulls it, and the route-sync CronJob (renders Pomerium ssh://<vm> routes
+# from labelled Services — the one cross-cutting edit no HelmRelease can own).
+#
+# NOT here: Flux's own controllers (source-controller + helm-controller) — the ansible `tenancy` role
+# installs those via `flux install` (upstream manifests). `chart-publish-job.yaml` is applied on-demand
+# by the role (Jobs are immutable, so re-applying via kustomize would fail). `helmrelease.example.yaml`
+# is a sample tenant, not applied. Multi-namespace (flux-system + pomerium) — each resource self-labels.
+resources:
+  - oci-registry.yaml
+  - ocirepository.yaml
+  - route-sync.yaml
