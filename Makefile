@@ -21,7 +21,9 @@ SSH     = ssh -S "$$LAB_SSH_SOCKET" "$$LAB_SSH"
 KUSTOMIZE := $(shell command -v kustomize >/dev/null 2>&1 && echo 'kustomize build' || echo 'kubectl kustomize')
 
 .DEFAULT_GOAL := help
-.PHONY: help try up down trust lab-push lab-tunnel lab-down lab-sync lab-oci lab-status lab-logs lab-shell kbuild
+CHECK ?= --check   # upgrades default to dry-run; pass CHECK= (empty) to actually run
+.PHONY: help try up down trust lab-push lab-tunnel lab-down lab-sync lab-oci lab-status lab-logs lab-shell kbuild \
+        node-status node-drain node-uncordon talos-upgrade talos-upgrade-k8s
 
 help: ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort \
@@ -77,6 +79,23 @@ cilium: ## bootstrap Cilium as CNI on the lab (helm, layered base+env values)
 
 mtu-test: ## Stage 1 exit gate: large-payload pod-to-pod test under the host MTU
 	@$(LABENV); bash dev/lab/mtu-test.sh
+
+## ---- day-2: node maintenance & upgrades ----------------------------------
+
+node-status: ## show nodes + where VMs run
+	@$(LABENV); $(SSH) "cd $$LAB_REMOTE_DIR && bash dev/lab/node-maintenance.sh status"
+
+node-drain: ## live-migrate a node's VMs then drain it:  make node-drain N=<node>
+	@$(LABENV); $(SSH) "cd $$LAB_REMOTE_DIR && bash dev/lab/node-maintenance.sh drain $(N)"
+
+node-uncordon: ## return a node to service:  make node-uncordon N=<node>
+	@$(LABENV); $(SSH) "cd $$LAB_REMOTE_DIR && bash dev/lab/node-maintenance.sh uncordon $(N)"
+
+talos-upgrade: ## rolling Talos upgrade; default dry-run. Real run: make talos-upgrade CHECK=
+	@$(LABENV); $(SSH) "cd $$LAB_REMOTE_DIR && bash dev/lab/talos-upgrade.sh $(CHECK)"
+
+talos-upgrade-k8s: ## upgrade Kubernetes via Talos; default dry-run. Real run: make talos-upgrade-k8s CHECK=
+	@$(LABENV); $(SSH) "cd $$LAB_REMOTE_DIR && bash dev/lab/talos-upgrade-k8s.sh $(CHECK)"
 
 ## ---- convenience ---------------------------------------------------------
 

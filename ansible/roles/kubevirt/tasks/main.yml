@@ -17,7 +17,7 @@
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
 
-- name: KubeVirt CR (useEmulation + feature gates)
+- name: KubeVirt CR (useEmulation + feature gates + live migration)
   ansible.builtin.shell: |
     cat <<EOF | kubectl apply -f -
     apiVersion: kubevirt.io/v1
@@ -25,9 +25,19 @@
     metadata: {name: kubevirt, namespace: kubevirt}
     spec:
       configuration:
+        # Cluster-wide default so EVERY VMI live-migrates (not shut off) when its node is drained.
+        # KubeVirt auto-creates a PodDisruptionBudget per VMI with an evictionStrategy and its evacuation
+        # controller watches the kubevirt.io/drain taint (applied by dev/lab/node-maintenance.sh). Requires
+        # RWX storage (CephFS, here) + a migration target — a no-op on the single-node lab, valid config.
+        evictionStrategy: LiveMigrate
+        migrations:
+          parallelMigrationsPerCluster: {{ kubevirt_parallel_migrations | default(5) }}
+          parallelOutboundMigrationsPerNode: {{ kubevirt_parallel_outbound_migrations | default(2) }}
+          progressTimeout: {{ kubevirt_migration_progress_timeout | default(150) }}
+          completionTimeoutPerGiB: {{ kubevirt_migration_completion_timeout_per_gib | default(800) }}
         developerConfiguration:
           useEmulation: {{ kubevirt_use_emulation | lower }}
-          featureGates: [Snapshot, HotplugVolumes]
+          featureGates: [Snapshot, HotplugVolumes]   # LiveMigration is GA — no gate needed
     EOF
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
