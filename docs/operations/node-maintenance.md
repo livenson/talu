@@ -55,5 +55,6 @@ to the prior boot. For Kubernetes, pin `kubernetes_version` back and re-run `tal
 ## What to watch (alerts)
 `components/platform/monitoring/node-rules.yaml` adds: **TaluNodeNotReady**, **TaluNodeCordonedTooLong**
 (forgot to uncordon), **TaluVMINonEvictable** (a VM that *can't* migrate will stall a drain — usually an
-RWO volume), **TaluVMIMigrationStuck**. They surface in Prometheus `/alerts` and the dashboards
-(Alertmanager is not yet wired — see the monitoring component).
+RWO volume), **TaluVMIMigrationStuck**. They surface in the Alertmanager UI, the Perses **Alerts**
+dashboard, and Prometheus `/alerts` (Alertmanager runs with a null default receiver — set
+`alerting_webhook_url` to route them onward; see the monitoring component).

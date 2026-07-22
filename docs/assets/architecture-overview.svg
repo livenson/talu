@@ -87,10 +87,10 @@
 
   <!-- metrics -->
   <rect x="720" y="230" width="236" height="98" rx="8" fill="#FFFFFF" stroke="#C4D6C9"/>
-  <text x="734" y="251" font-size="13" font-weight="700" fill="#2E6A4E">Metrics</text>
-  <text x="734" y="270" font-size="11.5" fill="#26303B">Prometheus → Perses</text>
-  <text x="734" y="287" font-size="10" fill="#7C9A85" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">talu:tenant_* recording rules</text>
-  <text x="734" y="305" font-size="10.5" fill="#5A6672">fleet · per-tenant dashboards</text>
+  <text x="734" y="251" font-size="13" font-weight="700" fill="#2E6A4E">Metrics &amp; Alerts</text>
+  <text x="734" y="270" font-size="11.5" fill="#26303B">Prometheus → Perses · Alertmanager</text>
+  <text x="734" y="287" font-size="10" fill="#7C9A85" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">talu:tenant_* + alerting rules</text>
+  <text x="734" y="305" font-size="10.5" fill="#5A6672">dashboards: fleet · alerts · per-tenant</text>
   <text x="734" y="320" font-size="10.5" fill="#5A6672">usage read for the orchestrator</text>
 
   <!-- logs & audit -->
@@ -108,7 +108,7 @@
   <text x="734" y="501" font-size="13" font-weight="700" fill="#2E6A4E">Backup &amp; DR</text>
   <text x="734" y="520" font-size="11.5" fill="#26303B">Velero + kopia → Garage S3</text>
   <text x="734" y="537" font-size="10.5" fill="#5A6672">etcd snapshot · KubeVirt VM snapshots</text>
-  <text x="734" y="553" font-size="10.5" fill="#5A6672">validated destroy-and-restore</text>
+  <text x="734" y="553" font-size="10.5" fill="#5A6672">validated restore · weekly DR drill</text>
   <text x="734" y="571" font-size="10" fill="#7C9A85" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">off-cluster, three tiers</text>
 
   <!-- observes connector (rail cross-cuts the stack) -->

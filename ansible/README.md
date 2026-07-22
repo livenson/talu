@@ -32,9 +32,10 @@ Idempotent: a second full run reports `changed=0` (validated).
 | `identity_dex` | tiny OIDC IdP (issuer/clients/static user) | #16 Dex-not-Keycloak |
 | `kubevirt_manager` | VM web UI bundle (route via Pomerium) | #22 |
 | `identity_pomerium` | IAP **+ Native SSH proxy/CA** (OIDC→Dex, autocert LE, hostAlias, NodePort + host `socat`, :23) + metrics `:9902` | #17,#18,#18b,#21 |
-| `monitoring` (tag `monitoring`/`obs`) | kube-prometheus-stack (Prometheus-only) + Perses operator + all operator dashboards + `talu:tenant_*`/`talu:backup_*` rules + ServiceMonitors | Perses (not Grafana) is the dashboard layer |
-| `backup` (tag `backup`/`dr`) | Velero (+ node-agent kopia fs-backup) → **Garage** S3; idempotent Garage bootstrap (layout/bucket/key), generated secrets | #27 hostPath skipped, #28 Garage/creds-secret name |
+| `monitoring` (tag `monitoring`/`obs`) | kube-prometheus-stack (**Prometheus + Alertmanager**) + Perses operator + all operator dashboards (incl. alerts/certs/alert-ops) + `talu:tenant_*`/`talu:backup_*` rules + cert-manager/other ServiceMonitors + alert rules; webhook wired from `alerting_webhook_url` | Perses (not Grafana) is the dashboard layer; Alertmanager null receiver by default |
+| `backup` (tag `backup`/`dr`) | Velero (+ node-agent kopia fs-backup) → **Garage** S3; idempotent Garage bootstrap (layout/bucket/key), generated secrets; weekly **DR-drill** CronJob | #27 hostPath skipped, #28 Garage/creds-secret name |
 | `logging` (tag `logging`/`audit`) | Loki + Grafana Alloy (pod logs via K8s API) + the **Access Audit** view native in Perses (LokiDatasource + LogsTable) | audit = Perses, no Grafana |
+| `tenancy` (tag `tenancy`/`tenants`) | **Flux** (source + helm controllers) + in-cluster chart registry + `talu-tenant` OCIRepository + route-sync; renders a **HelmRelease per `environments/<env>/tenants/*.yaml`** | #25 pids-limit, #36 nested-node probes removed, #37 valuesFrom precedence |
 
 Stage 6 roles (tag `stage6`) carry `lab_domain` (derived from `lab_floating_ip`) so they retarget
 on VM reinstall — **keep `lab_floating_ip` in sync with the real VM IP** or Dex's issuer domain is
@@ -45,5 +46,6 @@ lab-notes #30). Ordering: `monitoring` before `backup`/`logging` (they add Perse
 server it stands up).
 
 ## Not covered (deliberate)
-Tenant workloads and RBD block storage (unreliable on the nested node — CephFS is the storage path
-here; production on real nodes/KVM uses Rook RBD).
+RBD block storage (unreliable on the nested node — CephFS is the storage path here; production on real
+nodes/KVM uses Rook RBD). Tenant *workloads* are now covered by the `tenancy` role (Flux renders a
+HelmRelease per tenant file); the sample tenants live in `environments/<env>/tenants/`.

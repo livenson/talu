@@ -9,7 +9,7 @@ the Prometheus HTTP API. See [`docs/architecture/`](docs/architecture/) for the 
 diagram and [runtime flows](docs/architecture/flows.md).
 
 <p align="center">
-  <img src="docs/assets/architecture-overview.svg" alt="Talu architecture overview: the layered stack — access plane (Pomerium as the only ingress), tenancy (Flux + the talu-tenant chart rendering per-tenant namespaces), virtualization (KubeVirt/CDI), substrate (Talos, Cilium, CephFS) — with an observability &amp; ops rail cross-cutting every layer: metrics (Prometheus + Perses), logs &amp; audit (Loki + Alloy — Access Audit and VM Logs, operator + per-tenant), and backup/DR (Velero to Garage S3)." width="920">
+  <img src="docs/assets/architecture-overview.svg" alt="Talu architecture overview: the layered stack — access plane (Pomerium as the only ingress), tenancy (Flux + the talu-tenant chart rendering per-tenant namespaces), virtualization (KubeVirt/CDI), substrate (Talos, Cilium, CephFS) — with an observability &amp; ops rail cross-cutting every layer: metrics &amp; alerting (Prometheus + Perses + Alertmanager), logs &amp; audit (Loki + Alloy — Access Audit and VM Logs, operator + per-tenant), and backup/DR (Velero to Garage S3, with a weekly restore drill)." width="920">
 </p>
 
 **Talu works standalone — no external orchestrator required.** You can operate it entirely

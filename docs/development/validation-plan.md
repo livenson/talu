@@ -1,6 +1,6 @@
 # Rocky 10 validation plan (no-KVM quick-mode)
 
-How Talu is implemented and validated end-to-end on a single remote Rocky 9 cloud VM with
+How Talu is implemented and validated end-to-end on a single remote Rocky 10.1 cloud VM with
 **no hardware virtualization**. This is the plan's documented *quick-mode / no-KVM fallback*
 instantiated as the `rocky-sandbox` overlay — a **throwaway, rebuildable** environment that
 proves **correctness**, and doubles as the project's "try it on one VM" quickstart and CI
@@ -21,9 +21,9 @@ KubeVirt-bump migration-compatibility gate. Moving to that hardware is a **value
 
 | Fact about the lab VM | Consequence |
 |---|---|
-| No `/dev/kvm`, no vmx/svm | No Talos QEMU provisioner → **Talos-in-Docker**; KubeVirt runs `useEmulation: true` (TCG) |
-| Single 100 GB disk, no spare block device | Rook Ceph OSDs on **loop devices** (`dev/loopdev`) — real block semantics, not real spindles |
-| OpenStack hosting Docker rule | `/etc/docker/daemon.json` (bridge `192.168.67.1/24`, **MTU 1400**, overlay2) **before first start**, or network lockout → whole CNI stack pinned under MTU 1400 |
+| No `/dev/kvm`, no vmx/svm | No Talos QEMU provisioner → **Talos-in-Podman** (talosctl's docker provisioner drives Podman's socket); KubeVirt runs `useEmulation: true` (TCG) |
+| Single disk, no spare block device | **MicroCeph + CephFS** OSDs on **loop devices** — real block semantics, not real spindles (Rook/RBD is a wall on the nested node — lab-notes #14/#15) |
+| Host MTU before any container engine | The host NIC MTU must be **1400 before Podman/Talos start**, or PMTU blackholes the SSH key exchange and locks out all SSH (lab-notes #1); bootstrap sets it first — no `daemon.json` (that's Docker) |
 | Behind NAT / floating IP, single NIC | Reach services via the **SSH tunnel** (`make lab-tunnel`), not routable LB IPs |
 | `ulimit -n` 1024, modules not loaded | Raised via `bootstrap/rocky/bootstrap.sh` |
 
@@ -33,7 +33,7 @@ You edit on your laptop and drive the remote lab:
 
 ```sh
 make lab-push     # Stage 0: rsync repo + run host bootstrap on the lab
-make up           # create the Talos-in-Docker cluster on the lab
+make up           # create the Talos-in-Podman cluster on the lab
 make lab-tunnel   # open the persistent SSH tunnel + fetch kubeconfig
 make lab-sync     # kustomize build environments/rocky-sandbox | kubectl apply --server-side
 make lab-status   # read reconcile/health back, rendered locally
@@ -48,27 +48,27 @@ top-to-bottom, culminating in the security acceptance test and the integration-c
 proof.
 
 ### Stage 0 — Host bootstrap · `bootstrap/rocky/bootstrap.sh` (`make lab-push`)
-Docker with the mandated `daemon.json` **before first start** (lockout checkpoint: the script
-pauses for you to confirm SSH from a second session), kernel modules
-(`overlay br_netfilter rbd nbd loop`), raised inotify/file limits, tooling
+Set the host NIC **MTU 1400 first** (lockout checkpoint: the script pauses for you to confirm SSH
+from a second session — lab-notes #1), install **Podman** (daemonless, Rocky-native), kernel modules
+(`overlay br_netfilter nbd loop`), raised inotify/file limits, tooling
 (`talosctl kubectl helm flux virtctl cosign`), SELinux left enforcing.
-**Exit:** second SSH session confirms networking survived; `docker run hello-world` OK.
+**Exit:** second SSH session confirms networking survived; `podman run hello-world` OK.
 
-### Stage 1 — Spike A: Talos-in-Docker + Cilium under MTU 1400 (`make up` + `lab-sync`)
-Single node (CP+worker), IPAM mode **pinned** (immutable later), Cilium with MTU ≤1350 and
-Hubble.
+### Stage 1 — Spike A: Talos-in-Podman + Cilium under MTU 1400 (`make up` + `lab-sync`)
+Single node (CP+worker), IPAM mode **pinned** (immutable later), Cilium (kube-proxy replacement,
+`bpf.masquerade`) with MTU 1300 and Hubble.
 **Exit:** node Ready; Hubble flows; a **large-payload pod-to-pod test passes** (proves MTU —
 the subtle host failure mode). Fix here before anything else.
 
-### Stage 2 — Spike B: Rook Ceph on loop devices (`dev/loopdev/setup.sh`)
-2 OSD / 1 MON / 1 MGR, pool `size 2 / failureDomain osd`, `ceph-block` (RWX-capable) +
-VolumeSnapshotClass.
-**Exit:** `HEALTH_OK`; PVC provisions; **CSI snapshot + clone completes**; down one OSD → I/O
-continues on the surviving replica.
+### Stage 2 — Spike B: MicroCeph + CephFS on loop devices (`dev/lab/microceph-setup.sh`)
+External **MicroCeph** (OSDs on loop devices) exposing **CephFS** via `ceph-csi-cephfs` (RWX) +
+VolumeSnapshotClass. Rook/RBD is a wall on the nested node — the node's `/dev` isolation breaks
+rbd-nbd (lab-notes #14/#15), so CephFS is the storage path here.
+**Exit:** `ceph status` healthy; a CephFS PVC provisions; **CSI snapshot + clone completes**.
 
 ### Stage 3 — Spike C: KubeVirt/CDI under emulation
 `useEmulation: true`, migration/hotplug gates on (inert but API-final); CDI scratch=local-path,
-default=ceph-block, DataImportCron source=VolumeSnapshot.
+default=CephFS (`ceph-csi-cephfs`), DataImportCron source=VolumeSnapshot.
 **Exit:** a cloned VM boots under TCG; `virtctl console` works; disk grows online; VM survives
 node restart. *Recorded n/a:* boot/migration timing; hotplug resize = reboot (single node);
 persistent-EFI VMs need RWX.
@@ -97,13 +97,17 @@ Pomerium Native SSH (`ssh <user>@<vm>@ssh.<host>` → browser OIDC → short-liv
 reach to a VM's `:22` denied, through-Pomerium allowed; Hubble shows the denied attempts.
 
 ### Stage 7 — Talu-native tenancy + **§10 integration-contract proof** (orchestrator-free)
-Prometheus (kube-prometheus-stack, Prometheus-only) + the per-namespace **`talu:tenant_*`** recording
-rules = the usage/billing set (BUILT); operator + per-tenant **Perses** dashboards behind Pomerium, with
-per-tenant data isolation via **prom-label-proxy** (`components/platform/monitoring/` + the tenant chart's
-`dashboards.enabled`). tuppr CRs for API-surface + CEL-gate validation only (real A/B upgrade deferred). The tenant chart is the tenant API: a tenant/VM
-is a values-PR under `environments/rocky-sandbox/tenants/`, every object carrying
-`talu.io/project-uuid`; Headlamp + KubeVirt plugin behind a Pomerium admin route; kubelogin
-OIDC + group-scoped RBAC.
+Prometheus **+ Alertmanager** (kube-prometheus-stack) + the per-namespace **`talu:tenant_*`** recording
+rules = the usage/billing set (BUILT); alert rules fire into Alertmanager (null default receiver);
+operator + per-tenant **Perses** dashboards behind Pomerium, with per-tenant data isolation via
+**prom-label-proxy** (`components/platform/monitoring/` + the tenant chart's `dashboards.enabled`).
+tuppr CRs for API-surface + CEL-gate validation only (real A/B upgrade deferred). The tenant chart is
+the tenant API, delivered as **tenant-as-HelmRelease**: each tenant file under
+`environments/rocky-sandbox/tenants/` is rendered by Flux's helm-controller into a `HelmRelease` (the
+`tenancy` role installs Flux + publishes the chart), every object carrying `talu.io/project-uuid`;
+Headlamp + KubeVirt plugin behind a Pomerium admin route; kubelogin OIDC + group-scoped RBAC. Adjacent
+day-2 tiers validated on the lab: **backup/DR** (Velero→Garage + weekly restore drill) and
+**node maintenance** (`make node-drain` / `talos-upgrade`).
 **Integration proof (the orchestrator-independence test):** with **no orchestrator present**, exercise all
 four §10 verbs — write a labelled tenant+VM, watch DataVolume/VMI status to readiness, read
 usage from the Prometheus HTTP API, open a console via the virt-api subresource under the
@@ -113,5 +117,5 @@ namespace under a scoped login; the four-verb flow works standalone.
 
 ## Teardown
 
-`make down` destroys the cluster and detaches loop devices, leaving Docker + `daemon.json` in
-place (removing them risks the lockout path). `make lab-down` closes the tunnel.
+`make down` destroys the cluster and detaches loop devices, leaving Podman + the host MTU-1400
+setting in place (reverting the MTU risks the lockout path). `make lab-down` closes the tunnel.

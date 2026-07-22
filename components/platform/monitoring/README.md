@@ -7,7 +7,7 @@ accounting (the § READ verb). Billing/€-conversion is *not* here — it lives
 ## What's in here
 
 - **`helmrepository.yaml` / `helmrelease.yaml` / `values.yaml`** — `kube-prometheus-stack` (pinned
-  `87.17.0`, app `v0.92.1`) **Prometheus-only**: Prometheus-operator + Prometheus + kube-state-metrics
+  `87.17.0`, app `v0.92.1`): Prometheus-operator + Prometheus + **Alertmanager** + kube-state-metrics
   + node-exporter. Grafana is **off** (Perses is the dashboard layer, exposed via Pomerium — Phase 2);
   **Alertmanager is on** with a **null default receiver** (see Alerting below). Prometheus selects all
   ServiceMonitors/Rules cluster-wide, and the Talos/Cilium-inapplicable scrapers
