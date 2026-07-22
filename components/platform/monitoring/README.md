@@ -101,5 +101,5 @@ site-specific values (retention, storage, resources) live in `environments/<site
 
 **Per-tenant** dashboards (a namespace-scoped `prom-label-proxy` + Perses, Pomerium-fronted) are rendered
 by the **tenant chart** (`components/tenancy/tenant-chart`, `dashboards.enabled`) — this operator stack and
-the tenant stacks share the same Prometheus. See
-[`../../../monitoring-accounting-plan.md`](../../../monitoring-accounting-plan.md).
+the tenant stacks share the same Prometheus. The decisions behind this design:
+[`../../../docs/architecture/README.md#design-decisions`](../../../docs/architecture/README.md#design-decisions).
