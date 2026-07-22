@@ -4,3 +4,5 @@ ARG BASE=docker.io/library/ubuntu:24.04
 FROM ${BASE}
 # TODO (Phase 6): qemu-guest-agent, cloud-init, serial console, bao-agent (disabled),
 # platform CA root, sshd TrustedUserCAKeys directive, unattended-upgrades config.
+# VM-logs: bake fluent-bit (in-guest agent for Tier 2, enabled by cloud-init only when the tenant
+# opts in); journald→ttyS0 forwarding for Tier 1 is configured at boot via cloud-init.

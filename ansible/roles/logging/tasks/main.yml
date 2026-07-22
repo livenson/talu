@@ -35,10 +35,17 @@
 
 # The audit view lives in Perses: a Loki datasource (proxy) + a LogsTable dashboard. These target the
 # operator Perses server in the monitoring namespace, so the monitoring role must have run first.
-- name: Wire the audit view into Perses (Loki datasource + LogsTable dashboard)
+- name: Wire the Perses views (Loki datasource + audit + VM-logs dashboards)
   ansible.builtin.command: "kubectl apply -f {{ log_dir }}/{{ item }}"
   loop:
     - loki-datasource.yaml
     - dashboard-audit.yaml
+    - dashboard-vmlogs.yaml        # operator VM Logs (serial-console index; $namespace/$vm pickers)
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
+
+# NOTE: loki-ingress-policy.yaml (the VM-logs Tier-2 direct-push lockdown) is deliberately NOT applied
+# here. On the nested Talos-in-Podman lab the kubelet :3100/ready probe isn't classified as `host`, so a
+# default-deny on Loki starves the probe and Loki drops out of its Service endpoints (see lab-notes #34).
+# The enforced spoof-defense is the per-tenant ingest gateway's hard-stamping; apply this policy only on
+# a real cluster (`kubectl apply -f {{ log_dir }}/loki-ingress-policy.yaml`).

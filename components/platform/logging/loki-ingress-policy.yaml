@@ -1,0 +1,39 @@
+# Loki ingress lockdown — the other half of the Tier-2 spoof-proofing. Loki has no auth/multi-tenancy
+# here, so the NETWORK is the gate: tenant VMs must NOT push to Loki directly (that would let a guest
+# inject an arbitrary namespace label, bypassing its gateway). Guest logs may only reach the per-tenant
+# gateway, which hard-stamps the namespace.
+#
+# WHY AN ALLOW-LIST (not a deny rule). In this Cilium, a deny-only policy still flips the endpoint to
+# ingress default-deny (a known footgun) — and `enableDefaultDeny.ingress:false` disables the deny's
+# enforcement too — so neither deny-only form both keeps Loki reachable AND blocks VMs. An explicit
+# allow-list is deterministic: default-deny + enumerate every legitimate source. The one that bit us
+# first time is the kubelet readiness probe (http-get :3100/ready originates from the NODE), so the
+# host/remote-node/health entities MUST be allowed or Loki flaps NotReady. Everything not listed —
+# every tenant VM — is denied.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: loki-ingress-lockdown
+  namespace: logging
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  ingress:
+    # 0) Host/kubelet health & readiness probes + node traffic. WITHOUT THIS Loki flaps NotReady.
+    - fromEntities: [host, remote-node, health]
+    # 1) Everything inside the logging namespace (Loki internals: memberlist/gRPC/http + the Alloy
+    #    collector). Kept broad so Loki's own components are never accidentally starved.
+    - fromEndpoints:
+        - matchLabels: { k8s:io.kubernetes.pod.namespace: logging }
+    # 2) Per-tenant ingest gateways (app=talu-logs-gateway, in any tenant namespace) — the ONLY path
+    #    guest-agent logs take. They don't carry kubevirt.io/vm, so VMs can't impersonate them.
+    - fromEndpoints:
+        - matchLabels: { app: talu-logs-gateway }
+      toPorts: [{ ports: [{ port: "3100", protocol: TCP }] }]
+    # 3) Dashboard reads (Perses + its Loki datasource proxy live in monitoring).
+    - fromEndpoints:
+        - matchLabels: { k8s:io.kubernetes.pod.namespace: monitoring }
+      toPorts: [{ ports: [{ port: "3100", protocol: TCP }] }]

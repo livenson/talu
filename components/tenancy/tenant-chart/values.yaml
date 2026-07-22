@@ -63,6 +63,17 @@ dashboards:
   persesImage: docker.io/persesdev/perses:v0.53.0
   proxyImage: quay.io/prometheuscommunity/prom-label-proxy:v0.11.1
   prometheusUrl: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+
+# VM internal logs. Tier 1 (serial console → guest-console-log → Alloy → Loki) is ALWAYS on: the
+# platform stamps namespace/vm from pod metadata (spoof-proof). Tier 2 (opt-in) runs an in-guest agent
+# for rich app logs, pushing to a per-tenant, Cilium-pinned ingest gateway that hard-stamps this
+# tenant's namespace (the guest is never trusted with the tenant label). See logging component README.
+logging:
+  consoleLevel: info         # Tier 1: journald→console max level (debug|info|notice|warning|err)
+  agent: false               # Tier 2: run the in-guest agent + render the per-tenant ingest gateway
+  paths: []                  # Tier 2: extra log files the in-guest agent tails (e.g. [/var/log/app/*.log])
+  lokiUrl: http://loki.logging.svc.cluster.local:3100   # gateway → Loki (VMs never reach this directly)
+  gatewayImage: docker.io/grafana/alloy:v1.17.1         # the per-tenant ingest gateway (receive+stamp)
 internalIpPool: ""         # tier-1 CiliumLoadBalancerIPPool CIDR for this tenant (empty = feature off)
 
 # Security groups: cloud-style ingress/egress allow-rules attached to VMs -> CiliumNetworkPolicy.

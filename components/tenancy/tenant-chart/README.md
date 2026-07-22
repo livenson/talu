@@ -14,7 +14,8 @@ join key any external orchestrator reconciles on.
 | `rbac.yaml` | `Role` + `RoleBinding` (tenant members) | scoped namespace access (needs apiserver OIDC to log in) |
 | `ippool.yaml` | `CiliumLoadBalancerIPPool` (when `internalIpPool` set) | tier-1 stable internal IPs |
 | `securitygroups.yaml` | `CiliumNetworkPolicy` per `securityGroups` entry | cloud-style ingress/egress rules |
-| `dashboards.yaml` | `prom-label-proxy` + per-tenant `Perses` + datasource + `PersesDashboard` + CNP (when `dashboards.enabled`) | a namespace-scoped metrics dashboard, Pomerium-fronted |
+| `dashboards.yaml` | `prom-label-proxy` + per-tenant `Perses` + datasource + `PersesDashboard` + CNP (when `dashboards.enabled`); plus a `loki-plp` + Loki datasource + **VM Logs** dashboard | namespace-scoped metrics **and logs** dashboards, Pomerium-fronted |
+| `logging.yaml` | per-tenant log **ingest gateway** (Alloy) + `Service` + `CiliumNetworkPolicy` (when `logging.agent`) | Tier-2 in-guest-agent logs, spoof-proof (see below) |
 
 The VM Service is labelled `talu.io/ssh-expose: "true"` and annotated `talu.io/allowed-users`, which
 the Pomerium route renderer (`components/platform/access/`, `dev/lab/expose-vm.sh`) turns into an
@@ -30,7 +31,23 @@ the Pomerium route renderer (`components/platform/access/`, `dev/lab/expose-vm.s
   self-update** sticks. Requires `components/infrastructure/cdi/` + `zot`. See `tenants/beta.yaml`.
 
 Set `dashboards.enabled: true` to render a per-tenant Perses + prom-label-proxy stack (overview + per-VM
-detail), reachable only via Pomerium — see the `dashboards.yaml` row above and `tenants/beta.yaml`.
+detail + **VM Logs**), reachable only via Pomerium — see the `dashboards.yaml` row above and
+`tenants/beta.yaml`. The VM Logs dashboard is hard-scoped to the tenant namespace by a Loki
+`prom-label-proxy` (`loki-plp`), the same isolation the metrics dashboards use.
+
+## VM internal logs (`logging`)
+
+Guests' own logs land in the platform Loki as a tenant-scoped index (`namespace=<slug>, vm=<name>`),
+shown in the per-tenant **VM Logs** dashboard and the operator one.
+- **Tier 1 (always on):** a `talu-console-logs.service` streams the journal (`journalctl -f`) to the
+  serial console → KubeVirt `guest-console-log` → Alloy → Loki. The `vm`/`namespace` labels are stamped
+  by the platform from pod metadata — **the guest can't forge them.** `logging.consoleLevel` sets the
+  journalctl priority filter (`-p`).
+- **Tier 2 (`logging.agent: true`):** an in-guest Fluent Bit (baked into the golden image) tails
+  journald + `logging.paths` and pushes to this tenant's **ingest gateway** (`templates/logging.yaml`),
+  which **hard-overwrites** `namespace=<slug>` and accepts only this tenant's VM endpoints (Cilium). A
+  malicious guest therefore can only mislabel its *own* logs — never write into another tenant's stream.
+  Validated on the lab: a push with a spoofed `namespace` was stored as the tenant's real namespace.
 
 ## Render / apply
 

@@ -8,8 +8,14 @@
 ARG BASE=quay.io/centos-bootc/centos-bootc:stream9
 FROM ${BASE}
 
-# Capabilities: guest agent (KubeVirt integration), cloud-init (identity injection), OpenSSH.
-RUN dnf -y install qemu-guest-agent cloud-init openssh-server && dnf clean all && \
+# Capabilities: guest agent (KubeVirt integration), cloud-init (identity injection), OpenSSH,
+# and the in-guest log agent (Fluent Bit) for VM-logs Tier 2. Fluent Bit is baked but NOT enabled —
+# cloud-init enables it only when the tenant opts in (logging.agent=true), pointing it at the tenant's
+# ingest gateway. Package name `fluent-bit` from the upstream Fluent Bit repo.
+RUN dnf -y install qemu-guest-agent cloud-init openssh-server && \
+    ( dnf -y install fluent-bit || \
+      ( curl -fsSL https://raw.githubusercontent.com/fluent/fluent-bit/master/install.sh | sh ) ) && \
+    dnf clean all && \
     systemctl enable qemu-guest-agent sshd cloud-init
 
 # Trust the Pomerium SSH User CA. The CA *public key itself* is written to /etc/ssh/talu_ca.pub at

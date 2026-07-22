@@ -1,0 +1,138 @@
+{{- if .Values.logging.agent }}
+{{- $root := . -}}
+{{- $ns := .Values.slug -}}
+# VM internal logs — Tier 2 (opt-in: logging.agent=true). Rich in-guest logs (journald + extra files)
+# without trusting the guest with the tenant identity.
+#
+# THE SPOOFING PROBLEM & THE FIX. A tenant's in-guest agent is inside a VM the tenant controls, so any
+# label it *asserts* (namespace, tenant, …) is forgeable. We never trust it. Instead every tenant gets
+# its OWN ingest gateway, rendered here with this tenant's FIXED slug ({{ $ns }}) baked into the Alloy
+# config. The gateway HARD-SETS namespace="{{ $ns }}" on every received line (drops/overwrites whatever
+# the guest sent), so a spoofed label is discarded at ingest. Two Cilium policies make the gateway the
+# ONLY path: (a) only THIS tenant's VMs may reach THIS gateway, and (b) VMs may not reach Loki directly
+# (see components/platform/logging/loki-ingress-policy.yaml). So the worst a malicious guest can do is
+# mislabel its OWN logs within its OWN namespace — it can never write into another tenant's stream.
+#
+# 1) Gateway config — receive on :3100, force the namespace label, forward to central Loki.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logs-gateway
+  namespace: {{ $ns }}
+  labels:
+    app: talu-logs-gateway
+    {{- include "talu-tenant.labels" $root | nindent 4 }}
+data:
+  config.alloy: |
+    // Receive pushes from in-guest agents (Loki push API). No auth here — the network policy is the
+    // gate: only this tenant's VMs can reach this endpoint. See the CiliumNetworkPolicy below.
+    loki.source.api "guest" {
+      http {
+        listen_address = "0.0.0.0"
+        listen_port    = 3100
+      }
+      forward_to = [loki.process.stamp.receiver]
+    }
+
+    // Hard-stamp the tenant identity. namespace is OVERWRITTEN (never trusted from the guest); tier
+    // marks these as guest-agent logs so they're distinguishable from the Tier-1 serial console.
+    loki.process "stamp" {
+      stage.static_labels {
+        values = {
+          namespace = "{{ $ns }}",
+          tier      = "guest-agent",
+        }
+      }
+      // Drop any label the guest tried to set that we don't explicitly allow through. `vm` and
+      // `unit`/`path` are kept as-is (they only scope WITHIN this tenant — harmless if mislabelled).
+      stage.label_keep {
+        values = ["namespace", "tier", "vm", "unit", "path", "job"]
+      }
+      forward_to = [loki.write.central.receiver]
+    }
+
+    loki.write "central" {
+      endpoint {
+        url = "{{ $root.Values.logging.lokiUrl }}/loki/api/v1/push"
+      }
+      // Belt-and-suspenders: even the outbound stream carries the forced namespace as an external label.
+      external_labels = { namespace = "{{ $ns }}" }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logs-gateway
+  namespace: {{ $ns }}
+  labels:
+    app: talu-logs-gateway
+    {{- include "talu-tenant.labels" $root | nindent 4 }}
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: talu-logs-gateway } }
+  template:
+    metadata:
+      labels:
+        app: talu-logs-gateway
+        {{- include "talu-tenant.labels" $root | nindent 8 }}
+    spec:
+      containers:
+        - name: alloy
+          image: {{ $root.Values.logging.gatewayImage | quote }}
+          args:
+            - run
+            - /etc/alloy/config.alloy
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --storage.path=/tmp/alloy
+          ports:
+            - { name: push, containerPort: 3100 }
+          volumeMounts:
+            - { name: config, mountPath: /etc/alloy }
+            - { name: data, mountPath: /tmp/alloy }
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { memory: 256Mi }
+      volumes:
+        - { name: config, configMap: { name: logs-gateway } }
+        - { name: data, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: logs-gateway
+  namespace: {{ $ns }}
+  labels:
+    app: talu-logs-gateway
+    {{- include "talu-tenant.labels" $root | nindent 4 }}
+spec:
+  selector: { app: talu-logs-gateway }
+  ports: [{ name: push, port: 3100, targetPort: 3100 }]
+---
+# 2) Pin the gateway: only THIS tenant's VMs may push to it. (A pod in another tenant's namespace
+# has a different Cilium identity and is denied — so it cannot even attempt to write here.)
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: logs-gateway-pin
+  namespace: {{ $ns }}
+  labels:
+    app: talu-logs-gateway
+    {{- include "talu-tenant.labels" $root | nindent 4 }}
+spec:
+  endpointSelector: { matchLabels: { app: talu-logs-gateway } }
+  # INGRESS-ONLY on purpose. The security property is "only THIS tenant's VMs may push IN". We do NOT
+  # add an egress section: doing so flips the gateway to egress-default-deny, and then its forward to
+  # Loki (a ClusterIP hop + DNS) needs fragile L7-DNS/service allowances that broke in the nested lab.
+  # The gateway is a platform-rendered component (not tenant-writable), so its outbound path is trusted.
+  ingress:
+    - fromEndpoints:
+        # any VM endpoint in THIS namespace (fromEndpoints is same-namespace unless a namespace label
+        # is added). Exists-match, NOT `kubevirt.io/vm: ""` (which would match the empty-string value).
+        - matchExpressions:
+            - { key: kubevirt.io/vm, operator: Exists }
+      toPorts: [{ ports: [{ port: "3100", protocol: TCP }] }]
+# NOTE: no egress policy is placed on the VMs themselves either. Adding one would flip them to
+# egress-default-deny (Cilium), breaking DNS / bootc pulls / app traffic. The confinement is done by
+# INGRESS rules only: the gateway accepts only this tenant's VMs (above), and loki-deny-vms refuses any
+# VM endpoint direct access to Loki — so guest logs can only travel VM → own gateway → Loki.
+{{- end }}

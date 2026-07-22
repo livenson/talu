@@ -1,0 +1,104 @@
+# Operator "VM Logs" dashboard — in PERSES. The fleet-wide view of what's happening INSIDE the guests,
+# not just who accessed them. Tier 1 (always on): each VM's journald is forwarded to its serial console,
+# which KubeVirt captures into the virt-launcher `guest-console-log` container; Alloy ships that to Loki
+# labelled `namespace=<tenant>, vm=<name>` — both stamped by the platform from pod metadata, so a guest
+# cannot forge another tenant's label. Pick a namespace + VM (real Loki labels) to scope. Admin-only,
+# via Pomerium at perses.<domain>. The per-tenant equivalent (scoped to one namespace) ships with the
+# tenant chart (templates/dashboards.yaml) so tenants see only their own VMs.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-vm-logs
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — VM Logs
+    duration: 1h
+    # namespace and vm ARE real Loki labels (Alloy stamps them from pod metadata), so a regex text box
+    # scopes cleanly: leave ".*" for the whole fleet, or type a tenant (e.g. acme) / VM (e.g. app1).
+    variables:
+      - kind: TextVariable
+        spec:
+          name: namespace
+          display: { name: "Tenant namespace (regex)" }
+          value: ".*"
+      - kind: TextVariable
+        spec:
+          name: vm
+          display: { name: "VM (regex)" }
+          value: ".*"
+    panels:
+      volume:
+        kind: Panel
+        spec:
+          display:
+            name: Log volume by VM (lines/s)
+            description: Guest console log rate per VM — a spike often means a crash loop or a chatty service.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: LokiTimeSeriesQuery
+                  spec:
+                    datasource: { kind: LokiDatasource, name: talu-loki }
+                    query: 'sum by (namespace, vm) (rate({namespace=~"$namespace", vm=~"$vm", container="guest-console-log"} |~ "\\S" [5m]))'
+      console:
+        kind: Panel
+        spec:
+          display:
+            name: VM console logs
+            description: >-
+              The in-guest journald stream (kernel + systemd units + sshd logins + anything the app logs to
+              the journal), streamed to the serial console and captured by KubeVirt. This is the "what
+              happened inside the VM" view — labelled by tenant + VM by the platform, safe per-tenant.
+          plugin: { kind: LogsTable, spec: {} }
+          queries:
+            - kind: LogQuery
+              spec:
+                plugin:
+                  kind: LokiLogQuery
+                  spec:
+                    datasource: { kind: LokiDatasource, name: talu-loki }
+                    # `|~ "\\S"` drops the blank getty lines. No line_format: the raw journal line already
+                    # carries the ISO timestamp + unit + message, and the `vm`/`namespace` labels show in
+                    # the LogsTable. (Avoid `line_format "{{.__line__}}"` — `__line__` isn't a label, so it
+                    # renders empty; that's the classic "I only see acme/app1".)
+                    query: '{namespace=~"$namespace", vm=~"$vm", container="guest-console-log"} |~ "\\S"'
+      errors:
+        kind: Panel
+        spec:
+          display:
+            name: Errors & failures
+            description: Console lines mentioning error/fail/panic/oom — the fast path to what's broken in a guest.
+          plugin: { kind: LogsTable, spec: {} }
+          queries:
+            - kind: LogQuery
+              spec:
+                plugin:
+                  kind: LokiLogQuery
+                  spec:
+                    datasource: { kind: LokiDatasource, name: talu-loki }
+                    query: '{namespace=~"$namespace", vm=~"$vm", container="guest-console-log"} |~ "(?i)(error|fail|panic|out of memory|oom)"'
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: Volume }
+          items:
+            - { x: 0, y: 0, width: 24, height: 8, content: { $ref: "#/spec/panels/volume" } }
+      - kind: Grid
+        spec:
+          display: { title: Console }
+          items:
+            - { x: 0, y: 0, width: 24, height: 12, content: { $ref: "#/spec/panels/console" } }
+      - kind: Grid
+        spec:
+          display: { title: Errors }
+          items:
+            - { x: 0, y: 0, width: 24, height: 9, content: { $ref: "#/spec/panels/errors" } }

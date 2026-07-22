@@ -478,3 +478,51 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     per-VM-name filtering is not (without a checksum→VM map or Hubble flow correlation). See the logging
     component's Access Audit dashboard + README.
 
+
+
+33. **KubeVirt's `guest-console-log` is a native-sidecar initContainer, and an idle guest is silent.**
+    The VM's serial console is captured into a container named `guest-console-log` in the virt-launcher
+    pod — but it's an **initContainer** (a `restartPolicy: Always` native sidecar), NOT in `.spec.containers`.
+    Alloy's `discovery.kubernetes role=pod` DOES discover it (with `__meta_kubernetes_pod_container_init=true`)
+    and `loki.source.kubernetes` tails it, so no special config is needed — BUT after boot an idle guest
+    writes nothing to serial, so the stream looks empty. That's why VM-logs **Tier 1 streams the journal to
+    the serial console**: it keeps runtime logs flowing, not just the boot messages.
+    **Use a `journalctl -f > /dev/console` SERVICE, not journald's `ForwardToConsole`.** Two traps here,
+    learned the hard way:
+    (a) *Write to `/dev/console`, never `/dev/ttyS0`.* `serial-getty@ttyS0` takes EXCLUSIVE ownership of
+    `/dev/ttyS0`, so anything that opens ttyS0 for log output after getty is up silently gets nothing.
+    `/dev/console` is the kernel console multiplexer — writes reach ttyS0 (via `console=ttyS0` on the guest
+    cmdline) regardless of getty. A direct `echo x > /dev/console` DOES land in guest-console-log; `> /dev/ttyS0` does not.
+    (b) *journald `ForwardToConsole=yes` is RACY under cloud-init and can't be trusted.* journald only
+    (re)attaches console forwarding at start, and cloud-init's `runcmd systemctl restart systemd-journald`
+    runs at an unpredictable point — sometimes it forwards (you see `[monotonic] unit[pid]:` lines),
+    sometimes it silently doesn't, on byte-identical config. A dedicated unit that runs
+    `journalctl -b -f -o short-iso --no-hostname -p <level> > /dev/console` (Restart=always) is
+    deterministic and getty-independent — this is what the tenant chart (`talu-console-logs.service`) ships.
+    Symptom of getting it wrong: the operator VM Logs dashboard shows the VM but no ongoing messages, even
+    though `journalctl` *inside* the guest has the events.
+    Verify the WHOLE guest path (NOT getty echo, which is a false positive — typing at the console just
+    echoes back) by firing an EXTERNAL SSH at the VM and confirming the sshd lines land in Loki:
+    `ssh -o ConnectTimeout=6 probe@<vmi-ip> true` (from a pod in the `pomerium` ns, which the ssh-pin
+    allows) → `{namespace=<ns>, vm=<name>, container="guest-console-log"} |~ "sshd"`. Note the `vm` label
+    is stamped by Alloy from `kubevirt.io/vm` pod metadata (spoof-proof) and applied to ALL of the pod's
+    containers, so scope guest logs with `container="guest-console-log"`. Also: the console stream carries
+    blank getty lines — filter them in dashboards with `|~ "\\S"`, or every row renders as just the
+    `<ns>/<vm>` prefix with no content ("I only see acme/app1").
+
+34. **Cilium on the nested lab: default-deny on a pod starves the kubelet readiness probe; deny-only
+    policies are a footgun.** Two traps hit while building the VM-logs Tier-2 Loki lockdown:
+    (a) Any `CiliumNetworkPolicy` with an `ingress:` allow-list flips the selected endpoint to
+    ingress-default-deny on ALL ports — so you must also allow Loki's own namespace (memberlist 7946,
+    gRPC 9095) AND the kubelet health probe. In this nested Talos-in-Podman cluster the `:3100/ready`
+    probe source is **not** classified as `host`/`remote-node`/`health`, so even
+    `fromEntities: [host, remote-node, health]` doesn't cover it — Loki flaps NotReady and (fatally) drops
+    out of its Service endpoints, so EVERY reader then gets connection-refused (looks like "the policy
+    blocks everyone"). (b) A **deny-only** policy (`ingressDeny` with no `ingress`) still enables
+    default-deny in this Cilium (footgun), and adding `enableDefaultDeny.ingress: false` to opt out
+    *disables enforcement of the deny itself* — so neither deny-only form both keeps Loki reachable AND
+    blocks VMs. Net: the `loki-ingress-policy.yaml` allow-list is correct on a normal cluster but is NOT
+    applied on the lab; the enforced spoof-defense is the per-tenant ingest gateway's hard-stamping.
+    Debugging aid: a `000`/connection-refused from a test curl is often a **short-name DNS miss**
+    (`svc:3100` vs `svc.cluster.local:3100`) or **no ready Service endpoints**, NOT a policy drop — always
+    retest with the FQDN and confirm the target pod is Ready before blaming the policy.

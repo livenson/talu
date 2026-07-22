@@ -93,6 +93,26 @@
         "prometheusUrl": { "type": "string" }
       },
       "additionalProperties": false
+    },
+    "logging": {
+      "type": "object",
+      "description": "VM internal logs. Tier 1 (serial console) is always on; Tier 2 (agent) is opt-in per tenant, pushing to a Cilium-pinned per-tenant ingest gateway that stamps this tenant's namespace.",
+      "properties": {
+        "consoleLevel": {
+          "type": "string",
+          "enum": ["debug", "info", "notice", "warning", "err"],
+          "description": "Tier 1: journald→console max level."
+        },
+        "agent": { "type": "boolean", "description": "Tier 2: run the in-guest agent + render the per-tenant ingest gateway." },
+        "paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tier 2: extra log files the in-guest agent tails."
+        },
+        "lokiUrl": { "type": "string" },
+        "gatewayImage": { "type": "string" }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
