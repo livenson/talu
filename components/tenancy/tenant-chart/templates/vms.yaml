@@ -28,14 +28,31 @@ stringData:
         sudo: ALL=(ALL) NOPASSWD:ALL
         shell: /bin/bash
         lock_passwd: true
+    {{- if $root.Values.caTrust.package }}
+    # SSH User CA trust via the talu-ca-trust PACKAGE (rotatable — see dev/lab/ca-rotate.sh). dpkg owns
+    # /etc/ssh/talu_ca.pub, so a CA rotation is just a package upgrade (unattended-upgrades pulls it),
+    # never a re-provision. The guest fetches it from the tenant's configured apt repo.
+    apt:
+      sources:
+        talu-ca-trust:
+          source: {{ required "caTrust.aptRepoLine is required when caTrust.package=true" $root.Values.caTrust.aptRepoLine | quote }}
+    package_update: true
+    packages:
+      - talu-ca-trust
+      - unattended-upgrades
+    {{- end }}
     write_files:
+    {{- if not $root.Values.caTrust.package }}
+      # Fallback (default): hand-write the trust file from the current CA pubkey. Simple + repo-free, but
+      # a CA rotation then needs the VM recreated. For rotatable, no-recreate trust set caTrust.package=true.
       - path: /etc/ssh/talu_ca.pub
-        content: {{ required "sshUserCaPubKey is required (Pomerium User CA)" $root.Values.sshUserCaPubKey | trim | quote }}
+        content: {{ required "sshUserCaPubKey is required (Pomerium User CA) unless caTrust.package=true" $root.Values.sshUserCaPubKey | trim | quote }}
         permissions: "0644"
       - path: /etc/ssh/sshd_config.d/60-talu-ca.conf
         content: |
           TrustedUserCAKeys /etc/ssh/talu_ca.pub
           PasswordAuthentication no
+    {{- end }}
       # VM logs Tier 1 (default): stream the journal to the serial console. KubeVirt captures ttyS0 into
       # the virt-launcher guest-console-log container, which Alloy ships to Loki — labelled
       # namespace=<tenant>, vm=<name> by the platform (not the guest). Nothing to spoof.
@@ -96,6 +113,11 @@ stringData:
       - systemctl restart ssh
       - systemctl daemon-reload
       - systemctl enable --now talu-console-logs.service
+    {{- if $root.Values.caTrust.package }}
+      # Auto-update the CA-trust package (reboot-less rotation): enable unattended-upgrades on this repo.
+      - printf 'Unattended-Upgrade::Origins-Pattern { "site=%s"; };\n' "{{ $root.Values.caTrust.aptOrigin | default "talu" }}" > /etc/apt/apt.conf.d/51talu-ca
+      - systemctl enable --now unattended-upgrades || true
+    {{- end }}
     {{- if $root.Values.logging.agent }}
       # Enable the baked-in agent. `|| true` so a base image without Fluent Bit still boots (Tier 1
       # keeps working); the golden image (images/*/Containerfile) bakes fluent-bit for full Tier 2.

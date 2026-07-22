@@ -18,6 +18,14 @@ allowedUsers: []           # e.g. [alice@talu.local]
 sshUserCaPubKey: ""
 
 # Defaults applied to each VM unless the per-VM entry overrides them.
+# SSH User CA trust delivery. Default (package: false) hand-writes the trust file from sshUserCaPubKey
+# at boot — simple + repo-free, but a CA rotation needs the VM recreated. package: true installs the
+# rotatable `talu-ca-trust` package from an apt repo and auto-updates it (see dev/lab/ca-rotate.sh).
+caTrust:
+  package: false             # true → install the talu-ca-trust package instead of hand-writing the file
+  aptRepoLine: ""            # e.g. "deb [trusted=yes] http://talu-apt.<domain> stable main" (mutable/deb guests)
+  aptOrigin: "talu"          # unattended-upgrades Origins-Pattern site= match for auto-updates
+
 defaults:
   # Root disk source (standalone-first: default is containerDisk, which needs no catalog):
   #   containerDisk -> ephemeral, boots straight from a registry image; reset on restart. Works out of

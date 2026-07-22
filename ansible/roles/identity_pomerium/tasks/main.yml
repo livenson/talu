@@ -41,7 +41,7 @@
   changed_when: false
   failed_when: false
 
-- name: Generate Pomerium SSH User CA + host keys (only if absent — VMs trust the CA, never rotate)
+- name: Generate Pomerium SSH User CA + host keys (only if absent; rotate via dev/lab/ca-rotate.sh)
   ansible.builtin.shell: |
     set -e
     T=$(mktemp -d); cd "$T"
