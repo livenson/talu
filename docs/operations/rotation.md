@@ -30,10 +30,17 @@ publishes each new package version to it automatically. Full package pipeline: [
 (`caTrust.package=false`) only adopt a rotated CA when their VMs are **recreated** — fine for ephemeral
 `containerDisk` VMs, but you can't safely `retire` the old CA until every VM has the new trust.
 
-*Validated on the lab:* `prepare` stages CA2, publishes the dual-trust ConfigMap + a 2-CA package, and
-leaves the signer on CA1 (no disruption). The package installs on Ubuntu 24.04 and is dpkg-owned.
-`switch`/`retire` are not exercised on the single-node lab because its `app1` still uses the default
-hand-written (CA1-only) trust — switching would lock it out, which is exactly the point of the package.
+Package versions increase monotonically (a counter on the `pomerium-user-ca` ConfigMap annotation
+`talu.io/ca-pkg-version`), so repeated rotations always publish a *higher* version than guests have —
+otherwise dpkg/rpm (which install the highest) would never pick the new one up. (The in-cluster Job
+takes an explicit `VERSION` the operator/CI bumps.)
+
+*Validated on the lab (the money shot):* a running Ubuntu guest with the package installed, then a CA
+rotation published as a new package version → `apt update && apt upgrade` moved the guest to the new
+version and its `/etc/ssh/talu_ca.pub` **gained the new CA** (v1→v2, 1→2 keys, the rotated key present) —
+**reboot-less**. Also verified: `prepare` stages CA2 + publishes dual-trust without disrupting the signer.
+`switch`/`retire` aren't run on the single-node lab because its `app1` still uses the default CA1-only
+trust — switching would lock it out, which is exactly the point of the package path.
 
 ## Platform secrets — update + restart
 

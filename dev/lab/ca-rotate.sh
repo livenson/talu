@@ -37,6 +37,16 @@ publish_trust() {  # $1 = pubkey file (1 or 2 keys), $2 = package version
   fi
 }
 
+# Monotonically-increasing package version — stored on the ConfigMap. Hardcoded versions would make a
+# SECOND rotation republish a version BELOW what guests already have, so they'd never update. (dpkg/rpm
+# install the highest version.)
+next_version() {
+  local cur; cur=$(kubectl -n $NS get cm $CM -o jsonpath='{.metadata.annotations.talu\.io/ca-pkg-version}' 2>/dev/null)
+  cur=${cur:-0}; local nxt=$(( cur + 1 ))
+  kubectl -n $NS annotate cm $CM "talu.io/ca-pkg-version=$nxt" --overwrite >/dev/null 2>&1 || true
+  echo "$nxt"
+}
+
 status() {
   echo "secret $SEC keys: $(kubectl -n $NS get secret $SEC -o jsonpath='{range .data}{.}{end}' >/dev/null 2>&1; kubectl -n $NS get secret $SEC -o go-template='{{range $k,$v := .data}}{{$k}} {{end}}')"
   echo "trusted CA pubkeys (ConfigMap $CM):"; kubectl -n $NS get cm $CM -o jsonpath='{.data.user_ca\.pub}' | sed 's/^/   /'
@@ -49,9 +59,10 @@ prepare() {
   echo "== generate CA2 and stage it =="
   local T; T=$(mktemp -d); ssh-keygen -t ed25519 -N "" -f "$T/ca2" -C "Pomerium User CA (rotated)" -q
   set_key user_ca_next "$T/ca2"; rm -rf "$T"
-  echo "== trust BOTH CAs (ConfigMap + package v2); signer stays CA1 =="
+  local ver; ver=$(next_version)
+  echo "== trust BOTH CAs (ConfigMap + package v$ver); signer stays CA1 =="
   local BOTH; BOTH=$(mktemp); { pub_of user_ca; pub_of user_ca_next; } > "$BOTH"
-  publish_trust "$BOTH" 2; rm -f "$BOTH"
+  publish_trust "$BOTH" "$ver"; rm -f "$BOTH"
   echo "== DONE prepare. Roll the package to guests + re-render tenants, confirm all trust BOTH, then: switch =="
 }
 
@@ -71,9 +82,10 @@ switch() {
 
 retire() {
   have user_ca_prev || { echo "nothing to retire (not switched) — run 'switch' first." >&2; exit 1; }
-  echo "== trust CA2 ONLY (ConfigMap + package v3); drop CA1 =="
+  local ver; ver=$(next_version)
+  echo "== trust CA2 ONLY (ConfigMap + package v$ver); drop CA1 =="
   local ONLY; ONLY=$(mktemp); pub_of user_ca > "$ONLY"
-  publish_trust "$ONLY" 3; rm -f "$ONLY"
+  publish_trust "$ONLY" "$ver"; rm -f "$ONLY"
   del_key user_ca_prev
   echo "== DONE retire. Roll the CA2-only package to guests; CA1 is gone. Rotation complete. =="
 }
