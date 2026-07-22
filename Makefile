@@ -18,7 +18,7 @@ SHELL := /usr/bin/env bash
 LABENV := set -a && source ./$$([ -f env.sh ] && echo env.sh || echo env.sh.example) && set +a
 SSH     = ssh -S "$$LAB_SSH_SOCKET" "$$LAB_SSH"
 # Prefer standalone kustomize; fall back to the one built into kubectl.
-KUSTOMIZE := $(shell command -v kustomize >/dev/null 2>&1 && echo kustomize || echo 'kubectl kustomize')
+KUSTOMIZE := $(shell command -v kustomize >/dev/null 2>&1 && echo 'kustomize build' || echo 'kubectl kustomize')
 
 .DEFAULT_GOAL := help
 .PHONY: help try up down trust lab-push lab-tunnel lab-down lab-sync lab-oci lab-status lab-logs lab-shell kbuild

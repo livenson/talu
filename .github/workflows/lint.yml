@@ -68,18 +68,19 @@ jobs:
             | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
 
   # ---- Containerfiles (golden images) ----------------------------------------------------------
+  # Install hadolint directly (pinned) rather than the action: the action bundles hadolint 2.12, which
+  # (unlike 2.14) doesn't resolve the `ARG BASE=…:tag` default and false-positives DL3006 on `FROM
+  # ${BASE}`. Pinning keeps local == CI.
   hadolint:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        file: [images/centos-bootc/Containerfile, images/ubuntu-lts/Containerfile]
     steps:
       - uses: actions/checkout@v4
-      - uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: ${{ matrix.file }}
-          failure-threshold: warning
+      - name: install hadolint (pinned)
+        run: |
+          sudo curl -sSLf -o /usr/local/bin/hadolint \
+            https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-Linux-x86_64
+          sudo chmod +x /usr/local/bin/hadolint
+      - run: hadolint --config .hadolint.yaml --failure-threshold warning images/*/Containerfile
 
   # ---- Ansible install roles/playbooks ---------------------------------------------------------
   ansible-lint:
