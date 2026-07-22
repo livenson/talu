@@ -77,7 +77,7 @@ spec:
                       to: http://hubble-ui.kube-system.svc.cluster.local:80
                       allowed_users: [alice@talu.local]
                       allow_websockets: true
-"
+                  "
                   # ssh://<vm> routes from talu.io/ssh-expose Services
                   while read -r vm svc ns au _; do
                     [ -z "$vm" ] && continue

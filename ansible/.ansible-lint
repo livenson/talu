@@ -1,0 +1,8 @@
+# ansible-lint starts at the `min` profile: it enforces the checks that catch REAL breakage
+# (syntax-check, load/parse failures, internal errors) — complementing yamllint's YAML-validity pass.
+#
+# The roles don't yet follow ansible-lint's stricter *conventions* (role var-name prefixes, task
+# naming, pipefail on shell pipes, explicit file modes — ~97 findings at the `basic` profile). Those
+# are a cleanup backlog, not bugs. Ratchet this up over time: min -> basic -> moderate -> production,
+# fixing findings as you go. Some (risky-shell-pipe, risky-file-permissions) are worth prioritizing.
+profile: min

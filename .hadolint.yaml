@@ -1,0 +1,9 @@
+# hadolint config for the golden-image Containerfiles (bootc / image-mode).
+ignored:
+  # DL3041/DL3040: bootc images pin the base by digest in CI, not package versions — the packages we
+  # install (cloud-init, fluent-bit, ...) intentionally track the base stream. Don't force version pins.
+  - DL3040
+  - DL3041
+  # DL3059: multiple consecutive RUNs are fine here (readability over layer-count in a golden image).
+  - DL3059
+failure-threshold: warning
