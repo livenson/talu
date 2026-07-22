@@ -13,6 +13,7 @@ resources:
   - servicemonitors.yaml
   - recording-rules.yaml
   - backup-rules.yaml
+  - node-rules.yaml
   # dashboards (Perses, behind Pomerium). The Perses/PersesDashboard/PersesDatasource CRs depend on
   # the operator's CRDs — under Flux the kustomize-controller retries until they exist (or split into
   # a dependent Kustomization for strict ordering).

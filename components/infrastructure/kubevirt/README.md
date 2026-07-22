@@ -20,7 +20,14 @@ kind: KubeVirt
 metadata: {name: kubevirt, namespace: kubevirt}
 spec:
   configuration:
+    evictionStrategy: LiveMigrate        # cluster default: drains live-migrate VMs (node maintenance)
+    migrations: { parallelMigrationsPerCluster: 5, parallelOutboundMigrationsPerNode: 2 }
     developerConfiguration:
       useEmulation: true                 # rocky-sandbox only; real hardware uses KVM
-      featureGates: [Snapshot, HotplugVolumes]
+      featureGates: [Snapshot, HotplugVolumes]   # LiveMigration is GA — no gate needed
 ```
+
+**Live migration / node maintenance:** `evictionStrategy: LiveMigrate` makes every VM migrate (not shut
+off) when its node is drained. Requires RWX storage (CephFS) + a migration target — inert on the
+single-node lab. Operate it with `make node-drain`/`node-uncordon` and the rolling `talos-upgrade`; see
+[`docs/operations/node-maintenance.md`](../../../docs/operations/node-maintenance.md).

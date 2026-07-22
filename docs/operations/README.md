@@ -5,6 +5,11 @@ kit — and for single-node incidents.
 
 **Available today:**
 
+- **[`node-maintenance.md`](node-maintenance.md)** — take a node out of / back into service and do
+  **rolling Talos / Kubernetes upgrades**, **live-migrating each node's VMs off first** (KubeVirt
+  `evictionStrategy: LiveMigrate` + the `kubevirt.io/drain` taint). `make node-drain` / `node-uncordon`
+  / `talos-upgrade` (dry-run by default). Single-node lab caveat: it refuses to evacuate (nowhere to
+  migrate) rather than powering VMs off.
 - **[`backup-restore.md`](backup-restore.md)** — the three backup tiers (Talos etcd snapshot ·
   KubeVirt `VirtualMachineSnapshot` · Velero + file-system backup to S3/MinIO) with **explicit
   backup and restore flows**, validated end-to-end on the lab including a destroy-and-restore that

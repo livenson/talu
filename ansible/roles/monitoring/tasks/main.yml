@@ -51,6 +51,7 @@
     - servicemonitors.yaml
     - recording-rules.yaml
     - backup-rules.yaml
+    - node-rules.yaml
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
 

@@ -1,0 +1,49 @@
+# Node maintenance & live-migration rules. Every metric below was verified present on the running lab
+# (KubeVirt exports kubevirt_vmi_* ; kube-state-metrics exports kube_node_*) — nothing here is guessed.
+#
+# NOTE: Alertmanager is disabled in this stack (monitoring/values.yaml), so these fire into Prometheus'
+# /alerts and the dashboards only. Wire an Alertmanager (or route to the orchestrator) before paging.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: talu-nodes
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  groups:
+    - name: talu.nodes.alerts
+      rules:
+        # A node the scheduler can't use — down, or forgotten in maintenance.
+        - alert: TaluNodeNotReady
+          expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: "Node {{ $labels.node }} is NotReady (>10m)"
+            description: "VMs on it can't be scheduled; evacuate/repair. See docs/operations/node-maintenance.md."
+        # Cordoned and left that way — the classic "forgot to uncordon after maintenance".
+        - alert: TaluNodeCordonedTooLong
+          expr: kube_node_spec_unschedulable == 1
+          for: 2h
+          labels: { severity: warning }
+          annotations:
+            summary: "Node {{ $labels.node }} has been cordoned for >2h"
+            description: "Run `make node-uncordon N={{ $labels.node }}` if maintenance is done."
+        # A VMI that CANNOT live-migrate (e.g. an RWO volume, or evictionStrategy None) — it will BLOCK
+        # a node drain. This is the thing that turns a routine upgrade into an incident.
+        - alert: TaluVMINonEvictable
+          expr: kubevirt_vmi_non_evictable > 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} VMI(s) cannot be live-migrated — a node drain will stall"
+            description: "Check the VM's evictionStrategy and that its disks are RWX (CephFS)."
+        # A migration that isn't progressing (stuck pending/scheduling) — capacity or policy problem.
+        - alert: TaluVMIMigrationStuck
+          expr: (kubevirt_vmi_migrations_in_pending_phase + kubevirt_vmi_migrations_in_scheduling_phase) > 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "VMI migration(s) stuck pending/scheduling for >15m"
+            description: "No target node with room, or a scheduling constraint. Check node capacity."

@@ -7,6 +7,15 @@ podman_socket: "unix:///run/podman/podman.sock"   # talosctl docker provisioner 
 lab_home: /home/rocky
 kubeconfig_path: /home/rocky/.talu/kubeconfig
 
+# Day-2 upgrades (used by dev/lab/talos-upgrade*.sh — pin these, don't float). The lab is a single
+# Podman-provisioned node that can't be upgraded in place; use `talos-upgrade.sh --check` there.
+talos_version: "v1.11.2"                                    # talosctl + node OS version to roll to
+talos_installer_image: "ghcr.io/siderolabs/installer:{{ talos_version }}"
+kubernetes_version: "v1.34.1"                               # target for `talosctl upgrade-k8s`
+# KubeVirt live-migration tunables (kubevirt role → the KubeVirt CR migrations config)
+kubevirt_parallel_migrations: 5                             # max concurrent migrations cluster-wide
+kubevirt_parallel_outbound_migrations: 2                    # max concurrent OUTBOUND per node
+
 cilium_version: "1.19.6"          # multi-pool IPAM GA; bump via -f values (NOT --reuse-values, gotcha #24)
 cilium_mtu: 1300                 # 1300 + VXLAN 50 < host 1400
 # Cilium/Hubble values enable ServiceMonitors, so the prometheus-operator CRDs must exist BEFORE
