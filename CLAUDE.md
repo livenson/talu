@@ -52,9 +52,11 @@ component versions live in [`docs/development/lab-notes.md`](docs/development/la
   first failure (`kubectl -n <ns> logs deploy/<operator> | grep -iE 'error|fail|reconcile'`), check
   the CR `.status.message`, and use `kubectl wait --timeout=Ns`. Surface the latest error line every
   tick and break early on a repeating error.
-- For Ceph specifically: the chain is operator → mon → mgr → `osd-prepare` **Job** → `osd` Deployments.
-  If there are no `osd-prepare` pods, the operator hasn't reached OSD orchestration — read operator
-  logs, not OSD pods. Read the osd-prepare pod log for per-device decisions.
+- For storage specifically: Ceph here is **MicroCeph** (a host snap), not Rook — there is no operator,
+  no `osd-prepare` Job, no OSD Deployments to read. Debug the two layers separately: the Ceph cluster on
+  the host (`microceph.ceph status`/`health`, `snap logs microceph`; full-OSD recovery is lab-notes #26),
+  and the K8s consumer (`ceph-csi-cephfs` provisioner/nodeplugin pods). A PVC stuck Pending →
+  `kubectl describe pvc` then the `ceph-csi-cephfs-provisioner` logs, not any operator.
 
 ## Repo conventions
 
