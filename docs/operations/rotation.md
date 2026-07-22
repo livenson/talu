@@ -23,8 +23,10 @@ dev/lab/ca-rotate.sh retire               # 3. trust CA2 ONLY (package v3); drop
 
 **Why the package matters:** a *running* VM's trust file can only change if something updates it. We
 refuse to have the platform SSH in, so trust rides the OS update channel — hence
-`caTrust.package=true` on tenants whose CA you intend to rotate (mutable guests auto-update reboot-less;
-bootc guests pick it up on their next image update). Tenants left on the default hand-written trust
+`caTrust.package=true` on tenants whose CA you intend to rotate (mutable guests auto-update reboot-less
+from the in-cluster [`pkg-repo`](../../components/platform/pkg-repo/); bootc guests pick it up on their
+next image update). Deploy the repo once (`kubectl apply -k components/platform/pkg-repo`); `ca-rotate.sh`
+publishes each new package version to it automatically. Full package pipeline: [packages.md](packages.md). Tenants left on the default hand-written trust
 (`caTrust.package=false`) only adopt a rotated CA when their VMs are **recreated** — fine for ephemeral
 `containerDisk` VMs, but you can't safely `retire` the old CA until every VM has the new trust.
 

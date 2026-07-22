@@ -26,9 +26,15 @@ del_key()   { kubectl -n $NS patch secret $SEC --type=json -p="[{\"op\":\"remove
 pub_of()    { local p; p=$(priv "$1"); ssh-keygen -y -f "$p"; rm -f "$p"; }
 
 publish_trust() {  # $1 = pubkey file (1 or 2 keys), $2 = package version
+  # New VMs read the ConfigMap at boot; running package-mode VMs auto-update from the pkg-repo.
   kubectl -n $NS create configmap $CM --from-file=user_ca.pub="$1" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  bash "$HERE/../../images/ca-trust/build-deb.sh" "$1" "$2" "$REPO"
-  echo "  trust published: ConfigMap $CM + talu-ca-trust_${2}_all.deb (push $REPO/*.deb to your guest repo)."
+  if kubectl -n "${PKG_REPO_NS:-golden-images}" get deploy pkg-repo >/dev/null 2>&1; then
+    CA_REPO_DIR="$REPO" bash "$HERE/../../images/ca-trust/publish.sh" "$2"   # build + index + push to pkg-repo
+  else
+    bash "$HERE/../../images/ca-trust/build-deb.sh" "$1" "$2" "$REPO/deb"
+    echo "  trust: ConfigMap $CM updated + talu-ca-trust_${2}_all.deb built. (pkg-repo not deployed →"
+    echo "  guests won't auto-update; deploy components/platform/pkg-repo, or bake it into the bootc image.)"
+  fi
 }
 
 status() {

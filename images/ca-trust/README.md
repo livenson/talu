@@ -28,7 +28,9 @@ the resulting `.deb` installs on Ubuntu 24.04 and `dpkg -S /etc/ssh/talu_ca.pub`
 | **mutable** (ubuntu containerDisk, package-mode) | tenant chart `caTrust.package=true` → cloud-init `packages: [talu-ca-trust]` from your apt repo | `unattended-upgrades` (reboot-less) |
 | **bootc** (centos-bootc golden image) | `dnf install talu-ca-trust` baked into the image | the bootc image update (reboot) |
 
-Host the built package on a repo the guests can reach and point `caTrust.aptRepoLine` at it.
+The in-cluster repo is [`components/platform/pkg-repo/`](../../components/platform/pkg-repo/); build +
+index + publish to it with `apt-reindex.sh` + `publish.sh`. Point `caTrust.aptRepoLine` at it (default:
+`http://pkg-repo.golden-images.svc/deb/`). Full pipeline: [`docs/operations/packages.md`](../../docs/operations/packages.md).
 
 ## Rotate
 Drive the dual-trust rotation with [`dev/lab/ca-rotate.sh`](../../dev/lab/ca-rotate.sh)
@@ -36,6 +38,7 @@ Drive the dual-trust rotation with [`dev/lab/ca-rotate.sh`](../../dev/lab/ca-rot
 [`docs/operations/rotation.md`](../../docs/operations/rotation.md).
 
 ## Not yet built (fast-follow)
-An **rpm** (for the bootc/CentOS side) and a hosted **apt/rpm repo** in-cluster. The `.deb` + the
-rotation logic are here; the rpm is symmetric (`build-rpm.sh` via `fpm`/`rpmbuild`) and the repo is a
-static file server over `images/apt-repo/`.
+An **rpm** for the bootc/CentOS side (`build-rpm.sh` via `fpm`/`rpmbuild` + `createrepo`), an in-cluster
+**build/publish Job** (so it doesn't need a host with the tooling), and **GPG-signing** the repo for
+production. The `.deb` path, the flat-repo index, the in-cluster repo, and the rotation logic are done
+and lab-validated.

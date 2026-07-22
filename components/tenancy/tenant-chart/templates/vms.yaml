@@ -114,8 +114,9 @@ stringData:
       - systemctl daemon-reload
       - systemctl enable --now talu-console-logs.service
     {{- if $root.Values.caTrust.package }}
-      # Auto-update the CA-trust package (reboot-less rotation): enable unattended-upgrades on this repo.
-      - printf 'Unattended-Upgrade::Origins-Pattern { "site=%s"; };\n' "{{ $root.Values.caTrust.aptOrigin | default "talu" }}" > /etc/apt/apt.conf.d/51talu-ca
+      # Auto-update the CA-trust package (reboot-less rotation): allow unattended-upgrades from this repo.
+      # `origin=` matches the Release `Origin:` field the apt-reindex.sh writes (default talu).
+      - printf 'Unattended-Upgrade::Origins-Pattern { "origin=%s"; };\nAPT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' "{{ $root.Values.caTrust.aptOrigin | default "talu" }}" > /etc/apt/apt.conf.d/51talu-ca
       - systemctl enable --now unattended-upgrades || true
     {{- end }}
     {{- if $root.Values.logging.agent }}

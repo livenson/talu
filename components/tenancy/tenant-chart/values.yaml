@@ -23,8 +23,8 @@ sshUserCaPubKey: ""
 # rotatable `talu-ca-trust` package from an apt repo and auto-updates it (see dev/lab/ca-rotate.sh).
 caTrust:
   package: false             # true → install the talu-ca-trust package instead of hand-writing the file
-  aptRepoLine: ""            # e.g. "deb [trusted=yes] http://talu-apt.<domain> stable main" (mutable/deb guests)
-  aptOrigin: "talu"          # unattended-upgrades Origins-Pattern site= match for auto-updates
+  aptRepoLine: "deb [trusted=yes] http://pkg-repo.golden-images.svc/deb/ ./"   # the in-cluster pkg-repo (flat repo)
+  aptOrigin: "talu"          # unattended-upgrades Origins-Pattern origin= match (the Release Origin field)
 
 defaults:
   # Root disk source (standalone-first: default is containerDisk, which needs no catalog):
