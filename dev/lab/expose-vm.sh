@@ -113,6 +113,17 @@ while read -r svc ns au _; do
 done < <(kubectl get svc -A -l talu.io/dashboard-expose=true \
            -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.namespace}{" "}{.metadata.annotations.talu\.io/allowed-users}{"\n"}{end}')
 
+# optional apex landing page: one public route on https://<domain> per talu.io/landing-expose Service
+# (the route portal, components/platform/portal). Absent unless that component is deployed.
+while read -r svc ns _; do
+  [ -z "$svc" ] && continue
+  CFG="${CFG}
+  - from: https://${DOMAIN}
+    to: http://${svc}.${ns}.svc.cluster.local:80
+    allow_public_unauthenticated_access: true"
+done < <(kubectl get svc -A -l talu.io/landing-expose=true \
+           -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.namespace}{"\n"}{end}')
+
 kubectl -n "$POM_NS" create configmap pomerium-config --from-literal=config.yaml="$CFG" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n "$POM_NS" rollout restart deploy/pomerium >/dev/null

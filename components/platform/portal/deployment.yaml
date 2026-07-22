@@ -1,0 +1,55 @@
+# Talu route portal — an OPTIONAL, read-only landing page that lists every route Pomerium exposes.
+# Runs in the `pomerium` namespace so it can mount the live `pomerium-config` ConfigMap (the route
+# renderer writes it) read-only — the page is generated from that on every request, so it never drifts.
+# No cluster API access, no writable filesystem, no runtime dependencies (stdlib-only parser).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: talu-portal
+  labels:
+    app: talu-portal
+    app.kubernetes.io/part-of: talu
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: talu-portal } }
+  template:
+    metadata:
+      labels:
+        app: talu-portal
+        app.kubernetes.io/part-of: talu
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: portal
+          image: docker.io/library/python:3.12-slim
+          command: ["python3", "/app/portal.py"]
+          env:
+            - { name: PORT, value: "8080" }
+            - { name: POMERIUM_CONFIG, value: /config/config.yaml }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          volumeMounts:
+            - { name: app, mountPath: /app, readOnly: true }
+            - { name: pomerium-config, mountPath: /config, readOnly: true }
+      volumes:
+        - name: app
+          configMap: { name: talu-portal-app }
+        # the routes source of truth; optional so the pod still starts before the config is first written
+        - name: pomerium-config
+          configMap: { name: pomerium-config, optional: true }
