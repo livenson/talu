@@ -1,0 +1,43 @@
+# In-cluster Job that publishes the talu-tenant Helm chart to the in-cluster OCI registry, so Flux's
+# OCIRepository (ocirepository.yaml) can pull it. Mirrors the pkg-repo publish-job: clone the repo,
+# `helm package` the chart, `helm push --plain-http`. helm tags the push with the chart version, so the
+# result is charts/talu-tenant:<Chart.version> — matching the OCIRepository ref tag.
+#
+# Re-run on a chart bump: `kubectl -n flux-system delete job chart-publish; kubectl apply -f` (Jobs are
+# immutable). The ansible tenancy role does this. NOT part of the flux kustomization for that reason.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: chart-publish, namespace: flux-system }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chart-publish
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: chart-publish
+      restartPolicy: Never
+      containers:
+        - name: publish
+          image: alpine/helm:latest        # helm + apk (git added at start); pulls from Docker Hub
+          env:
+            - { name: HOME, value: /tmp }
+            - { name: REGISTRY, value: "registry.flux-system.svc:5000/charts" }
+            - { name: REPO_URL, value: "https://github.com/livenson/talu.git" }
+            - { name: REPO_REF, value: "main" }
+            - { name: CHART_PATH, value: "components/tenancy/tenant-chart" }
+          command: ["sh", "-ceu"]
+          args:
+            - |
+              apk add --no-cache git >/dev/null
+              git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" /tmp/src
+              helm package "/tmp/src/$CHART_PATH" -d /tmp
+              helm push /tmp/talu-tenant-*.tgz "oci://$REGISTRY" --plain-http
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]

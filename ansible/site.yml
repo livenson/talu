@@ -23,3 +23,5 @@
     - { role: monitoring, tags: [monitoring, obs] }          # Prometheus + Perses dashboards + rules
     - { role: backup,     tags: [backup, dr] }               # Velero (+kopia) -> Garage; validated round-trip
     - { role: logging,    tags: [logging, audit] }           # Loki + Alloy + Grafana; per-user access audit
+    # Tenant control plane — tenant-as-HelmRelease (Flux source+helm controllers render talu-tenant).
+    - { role: tenancy,    tags: [tenancy, tenants] }         # Flux + chart registry + per-tenant HelmReleases

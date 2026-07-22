@@ -46,6 +46,13 @@ loki_chart_version: "7.1.0"                # app 3.6.8 — the audit log store (
                                            # audit VIEW is native Perses (LokiDatasource+LogsTable), no Grafana
 alloy_chart_version: "1.10.1"              # app v1.17.1 — log collector (reads pod logs via K8s API)
 
+# Tenant control plane (tenant-as-HelmRelease). Flux's source + helm controllers render the talu-tenant
+# chart (published to the in-cluster registry) — one HelmRelease per tenant file, applied directly to the
+# API by the orchestrator. See components/tenancy/flux/README.md.
+tenant_env: rocky-sandbox                  # the environments/<dir> whose tenants/*.yaml are reconciled
+tenant_release_namespace: tenants          # management ns holding the HelmRelease objects + mirrored CA
+tenant_chart_version: "0.1.0"              # talu-tenant Chart.yaml version == OCIRepository ref tag
+
 # --- Stage 6: identity & access plane (Dex + Pomerium Native SSH + kubevirt-manager) ---
 lab_floating_ip: "193.40.155.97"                         # OpenStack floating IP — MUST match the real VM
                                                          # (was the 203.0.113.10 example placeholder; a stale

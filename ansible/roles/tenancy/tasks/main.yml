@@ -1,0 +1,108 @@
+---
+# Tenant control plane — tenant-as-HelmRelease (Cozystack-style: chart + HelmRelease, no aggregation
+# apiserver, no Git). Installs Flux's source + helm controllers, stands up the in-cluster chart registry
+# + OCIRepository source + route-sync, publishes the talu-tenant chart, and reconciles each
+# environments/<tenant_env>/tenants/*.yaml as a HelmRelease. A tenant is then ONE object the orchestrator
+# applies to the API; Flux renders the whole bundle (namespace, VMs, quota, RBAC, netpol, routes).
+# Design + validated round-trip: components/tenancy/flux/README.md.
+- name: Tenancy dirs (on the lab, from the synced repo)
+  ansible.builtin.set_fact:
+    flux_dir: "{{ playbook_dir }}/../components/tenancy/flux"
+    tenants_dir: "{{ playbook_dir }}/../environments/{{ tenant_env }}/tenants"
+
+# --- Flux (minimal: only what the tenant pattern needs) --------------------------------------------
+# source-controller serves the OCIRepository/HelmChart; helm-controller renders HelmReleases. No
+# kustomize/notification controllers — the orchestrator applies HelmReleases directly to the API.
+- name: Install Flux controllers (source-controller + helm-controller)
+  ansible.builtin.command: >
+    flux install --components=source-controller,helm-controller --namespace=flux-system
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+# Nested-node workaround (lab-notes #36): on the Talos-in-Podman lab the kubelet's host->pod probe to the
+# Flux controllers times out (Cilium eBPF on the nested node) and the default httpGet liveness probe
+# crash-loops them — even though the controllers are healthy and pod->pod (chart fetch) works fine. The
+# images are distroless (no shell, so no exec-probe alternative), so remove the probes. `flux install`
+# re-adds them each run, so this runs every time; real nodes never need it. Without this the wait below
+# hangs forever. See docs/development/lab-notes.md.
+- name: "Nested-node: remove the Flux controllers' host->pod probes (they crash-loop otherwise)"
+  ansible.builtin.command: >
+    kubectl -n flux-system patch deploy {{ item }} --type=json
+    -p=[{"op":"remove","path":"/spec/template/spec/containers/0/livenessProbe"},{"op":"remove","path":"/spec/template/spec/containers/0/readinessProbe"}]
+  loop: [source-controller, helm-controller]
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: flux_probe_patch
+  changed_when: '"patched" in flux_probe_patch.stdout'
+  failed_when: flux_probe_patch.rc != 0 and 'does not exist' not in flux_probe_patch.stderr
+
+- name: Wait for the Flux controllers to be Available
+  ansible.builtin.command: >
+    kubectl -n flux-system wait --for=condition=Available
+    deploy/source-controller deploy/helm-controller --timeout=180s
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+# --- control plane: registry + OCIRepository source + route-sync -----------------------------------
+- name: Apply the tenant control plane (chart registry + OCIRepository + route-sync)
+  ansible.builtin.command: "kubectl apply -k {{ flux_dir }}"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Wait for the chart registry to be Ready
+  ansible.builtin.command: "kubectl -n flux-system rollout status deploy/registry --timeout=120s"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+# --- publish the chart, then pull it -----------------------------------------------------------------
+- name: (Re)publish the talu-tenant chart to the in-cluster registry
+  ansible.builtin.shell: |
+    set -e
+    kubectl -n flux-system delete job chart-publish --ignore-not-found
+    kubectl apply -f {{ flux_dir }}/chart-publish-job.yaml
+    kubectl -n flux-system wait --for=condition=complete job/chart-publish --timeout=240s
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Reconcile the OCIRepository so it pulls the freshly-published chart
+  ansible.builtin.command: "flux reconcile source oci talu-tenant --namespace flux-system"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+# --- tenants: management namespace + mirrored CA + a HelmRelease per tenant file ---------------------
+- name: Ensure the tenants management namespace exists
+  ansible.builtin.shell: |
+    kubectl create namespace {{ tenant_release_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+# valuesFrom reads the CA from a ConfigMap in the HelmRelease's namespace — mirror it (value only, so
+# there's no stale metadata) so it's never duplicated into tenant values. Re-runs keep it fresh.
+- name: Mirror the Pomerium User CA ConfigMap into the tenants namespace
+  ansible.builtin.shell: |
+    CA=$(kubectl -n pomerium get cm pomerium-user-ca -o jsonpath='{.data.user_ca\.pub}')
+    kubectl -n {{ tenant_release_namespace }} create configmap pomerium-user-ca \
+      --from-literal=user_ca.pub="$CA" --dry-run=client -o yaml | kubectl apply -f -
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Discover tenant definitions for this environment
+  ansible.builtin.find:
+    paths: "{{ tenants_dir }}"
+    patterns: "*.yaml"
+  register: tenant_files
+
+- name: Render a HelmRelease per tenant
+  ansible.builtin.template:
+    src: tenant-helmrelease.yaml.j2
+    dest: "/tmp/talu-hr-{{ item.path | basename }}"
+    mode: "0644"
+  vars:
+    tenant_name: "{{ item.path | basename | splitext | first }}"
+    tenant_values: "{{ lookup('file', item.path) }}"
+  loop: "{{ tenant_files.files }}"
+
+- name: Apply the tenant HelmReleases (Flux renders each into its own namespace)
+  ansible.builtin.command: "kubectl apply -f /tmp/talu-hr-{{ item.path | basename }}"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  loop: "{{ tenant_files.files }}"
+  changed_when: true
