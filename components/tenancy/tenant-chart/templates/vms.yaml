@@ -42,11 +42,13 @@ stringData:
       - unattended-upgrades
     {{- end }}
     write_files:
-    {{- if not $root.Values.caTrust.package }}
+    {{- if and (not $root.Values.caTrust.package) (not $root.Values.caTrust.baked) }}
       # Fallback (default): hand-write the trust file from the current CA pubkey. Simple + repo-free, but
-      # a CA rotation then needs the VM recreated. For rotatable, no-recreate trust set caTrust.package=true.
+      # a CA rotation then needs the VM recreated. Rotatable options: caTrust.package=true (mutable guests,
+      # apt), or caTrust.baked=true (bootc golden image already carries the talu-ca-trust rpm — write
+      # NOTHING here, or cloud-init's file becomes an /etc override that blocks image updates, lab-notes #35).
       - path: /etc/ssh/talu_ca.pub
-        content: {{ required "sshUserCaPubKey is required (Pomerium User CA) unless caTrust.package=true" $root.Values.sshUserCaPubKey | trim | quote }}
+        content: {{ required "sshUserCaPubKey is required unless caTrust.package or caTrust.baked" $root.Values.sshUserCaPubKey | trim | quote }}
         permissions: "0644"
       - path: /etc/ssh/sshd_config.d/60-talu-ca.conf
         content: |

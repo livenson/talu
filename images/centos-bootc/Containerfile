@@ -22,8 +22,20 @@ RUN dnf -y install qemu-guest-agent cloud-init openssh-server && \
     dnf clean all && \
     systemctl enable qemu-guest-agent sshd cloud-init
 
-# Trust the Pomerium SSH User CA. The CA *public key itself* is written to /etc/ssh/talu_ca.pub at
-# boot by cloud-init (from the tenant's userdata Secret) — this only bakes the sshd directive.
+# Trust the Pomerium SSH User CA. Default: only the sshd directive is baked; the CA *public key* is
+# written to /etc/ssh/talu_ca.pub at boot by cloud-init (caTrust default).
 RUN install -d -m0755 /etc/ssh/sshd_config.d && \
     printf 'TrustedUserCAKeys /etc/ssh/talu_ca.pub\nPasswordAuthentication no\n' \
       > /etc/ssh/sshd_config.d/60-talu-ca.conf
+
+# Optionally BAKE the trust as the talu-ca-trust rpm (rotatable via a new image build — rpm OWNS the
+# file, so an image update replaces it cleanly; no ostree /etc override, lab-notes #35). Tenants using
+# this image then set caTrust.baked=true (cloud-init writes no trust). Build with
+#   --build-arg CA_TRUST_REPO=http://pkg-repo.golden-images.svc/rpm/   (the in-cluster pkg-repo).
+# gpgcheck=0 here for the lab; production sets gpgcheck=1 + imports the repo's talu-ca.asc key first.
+ARG CA_TRUST_REPO=""
+RUN if [ -n "$CA_TRUST_REPO" ]; then \
+      printf '[talu]\nname=talu\nbaseurl=%s\nenabled=1\ngpgcheck=0\n' "$CA_TRUST_REPO" \
+        > /etc/yum.repos.d/talu.repo && \
+      dnf -y install talu-ca-trust && dnf clean all; \
+    fi

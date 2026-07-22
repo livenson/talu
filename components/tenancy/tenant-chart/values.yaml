@@ -22,7 +22,8 @@ sshUserCaPubKey: ""
 # at boot — simple + repo-free, but a CA rotation needs the VM recreated. package: true installs the
 # rotatable `talu-ca-trust` package from an apt repo and auto-updates it (see dev/lab/ca-rotate.sh).
 caTrust:
-  package: false             # true → install the talu-ca-trust package instead of hand-writing the file
+  package: false             # true → install the talu-ca-trust package (mutable/apt guests)
+  baked: false               # true → bootc golden image already carries the rpm; write no trust in cloud-init
   aptRepoLine: "deb [trusted=yes] http://pkg-repo.golden-images.svc/deb/ ./"   # the in-cluster pkg-repo (flat repo)
   aptOrigin: "talu"          # unattended-upgrades Origins-Pattern origin= match (the Release Origin field)
 
