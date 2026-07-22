@@ -37,8 +37,12 @@ Drive the dual-trust rotation with [`dev/lab/ca-rotate.sh`](../../dev/lab/ca-rot
 (`prepare` → roll the package → `switch` → grace → `retire`). Full flow:
 [`docs/operations/rotation.md`](../../docs/operations/rotation.md).
 
-## Not yet built (fast-follow)
-An **rpm** for the bootc/CentOS side (`build-rpm.sh` via `fpm`/`rpmbuild` + `createrepo`), an in-cluster
-**build/publish Job** (so it doesn't need a host with the tooling), and **GPG-signing** the repo for
-production. The `.deb` path, the flat-repo index, the in-cluster repo, and the rotation logic are done
-and lab-validated.
+## Scripts
+`build-deb.sh` / `build-rpm.sh` (build), `apt-reindex.sh` / `rpm-reindex.sh` (index + optional GPG sign),
+`publish.sh` (build both + index + sign + sync to pkg-repo). Run host-side by `ca-rotate.sh`, or
+in-cluster by [`components/platform/pkg-repo/publish-job/`](../../components/platform/pkg-repo/publish-job/).
+Full pipeline + validation: [`docs/operations/packages.md`](../../docs/operations/packages.md).
+
+## Optimization (fast-follow)
+Bake a **builder image** so the publish Job runs non-root without a runtime `dnf install`. Everything
+else (deb + rpm, flat-repo index, `createrepo`, GPG signing, the in-cluster repo + publish Job) is done.

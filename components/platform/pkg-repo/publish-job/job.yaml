@@ -1,0 +1,73 @@
+# In-cluster publish Job — the production way to (re)build + sign + publish the talu-ca-trust package(s)
+# to pkg-repo, WITHOUT a host that has the toolchain. Mirrors the image-builds CronJob: clone the repo,
+# run the SAME images/ca-trust/publish.sh in a fedora container — read the CA pubkey (pomerium-user-ca),
+# build the deb + rpm, index + GPG-sign both, sync into the pkg-repo pod. Bump VERSION and re-apply on
+# each publish (delete the old Job first — Jobs are immutable). ca-rotate.sh does this host-side on the lab.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: pkg-publish }
+---
+# cross-namespace read of just the CA pubkey ConfigMap (cluster-scoped, but pinned to that one name)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: talu-pkg-publish-read-ca }
+rules:
+  - { apiGroups: [""], resources: [configmaps], verbs: [get], resourceNames: [pomerium-user-ca] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: talu-pkg-publish-read-ca }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: talu-pkg-publish-read-ca }
+subjects: [{ kind: ServiceAccount, name: pkg-publish, namespace: golden-images }]
+---
+# sync into the pkg-repo pod (same namespace)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: pkg-publish-sync }
+rules:
+  - { apiGroups: [""], resources: [pods], verbs: [get, list] }
+  - { apiGroups: [""], resources: [pods/exec], verbs: [create] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: pkg-publish-sync }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: pkg-publish-sync }
+subjects: [{ kind: ServiceAccount, name: pkg-publish, namespace: golden-images }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata: { name: pkg-publish }
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: pkg-publish
+      restartPolicy: Never
+      # Runs as root: it dnf-installs the build toolchain at start (like the privileged image-builds
+      # CronJob). golden-images enforces PSA baseline, so root is fine (a `restricted` warn is cosmetic).
+      # Optimization: bake a builder image so this runs non-root with no runtime install.
+      containers:
+        - name: publish
+          image: registry.fedoraproject.org/fedora:41
+          env:
+            - { name: KUBECONFIG, value: "" }        # empty → kubectl uses the pod ServiceAccount
+            - { name: HOME, value: /tmp }
+            - { name: VERSION, value: "1" }          # bump per publish / CA-rotation phase
+            - { name: GPG_SIGN, value: "true" }
+            - { name: GPG_KEY_FILE, value: /keys/private.asc }
+            - { name: CA_REPO_DIR, value: /tmp/carepo }
+            - { name: REPO_URL, value: "https://github.com/livenson/talu.git" }
+            - { name: REPO_REF, value: "main" }
+          command: ["bash", "-ceu"]
+          args:
+            - |
+              dnf install -y -q git rpm-build createrepo_c gnupg2 binutils tar gzip kubernetes-client >/dev/null
+              git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" /tmp/src
+              exec bash /tmp/src/images/ca-trust/publish.sh "$VERSION"
+          volumeMounts:
+            - { name: signing-key, mountPath: /keys, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: signing-key, secret: { secretName: talu-pkg-signing, optional: true } }
+        - { name: tmp, emptyDir: {} }

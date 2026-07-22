@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# On-demand publish Job (NOT part of the base pkg-repo kustomization). Apply to (re)build + sign +
+# publish the talu-ca-trust package. The signing key comes from Secret talu-pkg-signing (key
+# private.asc); create it once:  kubectl -n golden-images create secret generic talu-pkg-signing \
+#   --from-file=private.asc=<your-armored-private-key>
+#   kubectl delete -k components/platform/pkg-repo/publish-job 2>/dev/null; \
+#   kubectl apply  -k components/platform/pkg-repo/publish-job
+namespace: golden-images
+resources:
+  - job.yaml

@@ -25,17 +25,18 @@ pkg-repo  (components/platform/pkg-repo — nginx serving a PVC over HTTP, in go
 guests    (two delivery paths, by OS model — below)
 ```
 
-### 1. Build — `images/ca-trust/build-deb.sh`
-Renders the `.deb` from a CA pubkey file. The package installs `/etc/ssh/talu_ca.pub` (one CA key per
-line — two during a rotation's dual-trust window) + `/etc/ssh/sshd_config.d/60-talu-ca.conf`, and its
-`postinst` **reloads** sshd (never restart — a live session, including the platform's own, is never
-dropped). Built with only coreutils + tar + ar (no `dpkg-deb`), so it builds on the rpm-based lab host.
+### 1. Build — `build-deb.sh` + `build-rpm.sh`
+Renders the package from a CA pubkey file, in **both** formats: `.deb` (pure coreutils+tar+ar, no
+`dpkg-deb`) and `.rpm` (`rpmbuild`). Each installs `/etc/ssh/talu_ca.pub` (one CA key per line — two
+during a rotation's dual-trust window) + `/etc/ssh/sshd_config.d/60-talu-ca.conf`, and the post-install
+**reloads** sshd (never restart — a live session, including the platform's own, is never dropped).
 
-### 2. Index — `images/ca-trust/apt-reindex.sh`
-Generates a **flat apt repo** (`Packages`, `Packages.gz`, `Release`) over a dir of `.debs`, in pure
-shell. Guests use `deb [trusted=yes] http://<repo>/ ./`. `[trusted=yes]` skips the GPG *signature*, but
-apt still verifies the `Release` hashes against `Packages`, which the indexer computes — so the repo
-works unsigned. **Production: GPG-sign the `Release`** (and drop `trusted=yes`).
+### 2. Index + sign — `apt-reindex.sh` + `rpm-reindex.sh`
+`apt-reindex.sh` generates a **flat apt repo** (`Packages`, `Packages.gz`, `Release`) in pure shell;
+`rpm-reindex.sh` runs `createrepo_c`. With `GPG_SIGN=true` both are **signed** — apt gets `InRelease` +
+`Release.gpg`, rpm gets `repomd.xml.asc`, and the pubkey is published at `/talu-ca.asc`. Guests then pin
+it (`signed-by=…` for apt, `repo_gpgcheck=1` for dnf) and drop `[trusted=yes]`. Unsigned still works on a
+lab (`[trusted=yes]` skips the signature; apt still checks the `Release` hashes the indexer computes).
 
 ### 3. Repo — `components/platform/pkg-repo/`
 A tiny **nginx** (unprivileged) serving a PVC over HTTP, in the `golden-images` namespace next to zot.
@@ -44,11 +45,16 @@ Guests on the pod network reach it at `http://pkg-repo.golden-images.svc/deb/`. 
 kubectl apply -k components/platform/pkg-repo      # golden-images ns comes from the image catalog
 ```
 
-### 4. Publish — `images/ca-trust/publish.sh <version>`
-Reads the current CA pubkey (`pomerium-user-ca`), builds the `.deb`, re-indexes, and syncs the repo into
-the `pkg-repo` PVC. On the lab it builds on the host and `kubectl cp`s in; **in production run the same
-steps as an in-cluster Job** (reads the ConfigMap, writes the PVC) — the way the image pipeline uses a
-build Job. `dev/lab/ca-rotate.sh` calls `publish.sh` automatically when `pkg-repo` is deployed.
+### 4. Publish — `publish.sh <version>` (host) or the in-cluster Job (production)
+`publish.sh` reads the current CA pubkey, builds deb **and** rpm (when the toolchain is present),
+indexes + signs both, and syncs into the `pkg-repo` pod. `dev/lab/ca-rotate.sh` calls it host-side on the
+lab. **In production**, `components/platform/pkg-repo/publish-job/` runs the *same* `publish.sh` in-cluster
+(clones the repo, `dnf`-installs the toolchain, GPG-signs from the `talu-pkg-signing` Secret) — mirroring
+the golden-image build CronJob, so no host needs the tooling:
+```sh
+kubectl -n golden-images create secret generic talu-pkg-signing --from-file=private.asc=<armored-key>
+kubectl apply -k components/platform/pkg-repo/publish-job     # bump VERSION in the Job per publish
+```
 
 ## Delivery to guests — two paths, by OS model
 
@@ -66,8 +72,12 @@ VMs).
 from `http://pkg-repo.golden-images.svc/deb/`, and a later `apt upgrade` moves it v1→v2 **reboot-less**
 (`dpkg -l` confirms), with the file dpkg-owned throughout.
 
-## Not yet built (fast-follow)
-- An **rpm** (`build-rpm.sh` via `fpm`/`rpmbuild`) + `createrepo` for the bootc/CentOS side. The `.deb`
-  path and the repo are done; the rpm is symmetric.
-- The **in-cluster build/publish Job** (so publishing doesn't need a host with the tooling), and
-  **GPG-signing** the repo for production.
+## Validated on the lab
+Both formats install from the in-cluster repo — Ubuntu 24.04 via apt, CentOS Stream 9 via dnf — the file
+is package-owned (`dpkg -S` / `rpm -qf`), a v1→v2 `apt upgrade` is **reboot-less**, and with signing on, a
+guest **verifies** the `InRelease` signature (`signed-by`, no `trusted=yes`).
+
+## Optimization (fast-follow)
+Bake a **builder image** (toolchain pre-installed) so the publish Job runs non-root with no runtime
+`dnf install`. Everything else — deb + rpm build, flat-repo index, `createrepo`, GPG signing, the
+in-cluster repo, and the in-cluster publish Job — is built and lab-validated.
