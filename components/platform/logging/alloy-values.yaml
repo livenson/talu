@@ -33,6 +33,13 @@ alloy:
           source_labels = ["__meta_kubernetes_pod_node_name"]
           target_label  = "node"
         }
+        // VM logs (Tier 1, serial console): KubeVirt's virt-launcher pod carries the label
+        // kubevirt.io/vm=<name>, so its guest-console-log stream gets a clean `vm` label. This is
+        // stamped by ALLOY from pod metadata — the guest cannot influence it (spoof-proof by design).
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_kubevirt_io_vm"]
+          target_label  = "vm"
+        }
       }
 
       // Tail container logs through the API server (works on Talos without hostPath).

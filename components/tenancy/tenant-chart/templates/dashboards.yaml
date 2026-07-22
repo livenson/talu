@@ -297,4 +297,148 @@ spec:
     - fromEndpoints:
         - matchLabels: { app.kubernetes.io/name: perses }
       toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]
+---
+# 6) VM LOGS for this tenant — the same "separate, tenant-scoped index" as the operator VM Logs view,
+# but hard-scoped to {{ $ns }}. Loki has no per-tenant auth, so we enforce isolation exactly like the
+# metrics path: a prom-label-proxy pinned to `namespace={{ $ns }}` fronts Loki (it rewrites every LogQL
+# query to add namespace="{{ $ns }}"), so nothing the tenant can do reaches another tenant's logs.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki-plp
+  namespace: {{ $ns }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: loki-plp } }
+  template:
+    metadata:
+      labels:
+        app: loki-plp
+        {{- include "talu-tenant.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: plp
+          image: {{ .Values.dashboards.proxyImage | quote }}
+          args:
+            - --label=namespace
+            - --label-value={{ $ns }}
+            - --upstream={{ .Values.logging.lokiUrl }}
+            - --insecure-listen-address=0.0.0.0:8080
+            - --enable-label-apis                 # /label/*/values so the log dashboards can enumerate
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki-plp
+  namespace: {{ $ns }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  selector: { app: loki-plp }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: perses.dev/v1alpha2
+kind: PersesDatasource
+metadata:
+  name: tenant-loki
+  namespace: {{ $ns }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: {{ $ns }}
+  config:
+    default: false
+    display: { name: {{ printf "%s logs" $ns | quote }} }
+    plugin:
+      kind: LokiDatasource
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: http://loki-plp.{{ $ns }}.svc.cluster.local:8080
+---
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: vm-logs
+  namespace: {{ $ns }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: {{ $ns }}
+  config:
+    display: { name: {{ printf "%s — VM Logs" $ns | quote }} }
+    duration: 1h
+    variables:
+      - kind: TextVariable
+        spec:
+          name: vm
+          display: { name: "VM (regex)" }
+          value: ".*"
+    panels:
+      volume:
+        kind: Panel
+        spec:
+          display: { name: Log volume by VM (lines/s) }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: LokiTimeSeriesQuery
+                  spec:
+                    datasource: { kind: LokiDatasource, name: tenant-loki }
+                    # namespace is enforced by loki-plp; the vm filter scopes within this tenant.
+                    query: 'sum by (vm) (rate({namespace="{{ $ns }}", vm=~"$vm"} |~ "\\S" [5m]))'
+      console:
+        kind: Panel
+        spec:
+          display: { name: VM logs (serial console + guest agent) }
+          plugin: { kind: LogsTable, spec: {} }
+          queries:
+            - kind: LogQuery
+              spec:
+                plugin:
+                  kind: LokiLogQuery
+                  spec:
+                    datasource: { kind: LokiDatasource, name: tenant-loki }
+                    # No line_format: the raw journal line is self-descriptive and `vm` shows as a label.
+                    query: '{namespace="{{ $ns }}", vm=~"$vm"} |~ "\\S"'
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: Volume }
+          items:
+            - { x: 0, y: 0, width: 24, height: 8, content: { $ref: "#/spec/panels/volume" } }
+      - kind: Grid
+        spec:
+          display: { title: Logs }
+          items:
+            - { x: 0, y: 0, width: 24, height: 12, content: { $ref: "#/spec/panels/console" } }
+---
+# Defense in depth: only this tenant's Perses may reach its Loki label-proxy.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: loki-plp-pin
+  namespace: {{ $ns }}
+  labels:
+    {{- include "talu-tenant.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels: { app: loki-plp }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: perses }
+      toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]
 {{- end }}

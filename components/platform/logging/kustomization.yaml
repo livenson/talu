@@ -7,4 +7,6 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - loki-datasource.yaml
+  - loki-ingress-policy.yaml
   - dashboard-audit.yaml
+  - dashboard-vmlogs.yaml

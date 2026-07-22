@@ -98,9 +98,27 @@ stringData:
         content: |
           TrustedUserCAKeys /etc/ssh/talu_ca.pub
           PasswordAuthentication no
+      # VM logs Tier 1: stream the journal to the serial console; KubeVirt's guest-console-log sidecar
+      # captures it and Alloy ships it to Loki labelled namespace/vm. (Mirrors the tenant chart.)
+      # A `journalctl -f > /dev/console` service, NOT journald ForwardToConsole — the latter is racy
+      # under cloud-init (getty owns ttyS0; a late journald restart drops forwarding). See lab-notes #33.
+      - path: /etc/systemd/system/talu-console-logs.service
+        permissions: "0644"
+        content: |
+          [Unit]
+          Description=Talu: stream the journal to the serial console (KubeVirt guest-console-log capture)
+          After=systemd-journald.service
+          [Service]
+          ExecStart=/bin/sh -c "exec journalctl -b -f -o short-iso --no-hostname -p ${CONSOLE_LEVEL:-info} > /dev/console 2>&1"
+          Restart=always
+          RestartSec=2
+          [Install]
+          WantedBy=multi-user.target
 ${GUEST_BLOCK}
     runcmd:
       - systemctl restart ssh
+      - systemctl daemon-reload
+      - systemctl enable --now talu-console-logs.service
 ---
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine

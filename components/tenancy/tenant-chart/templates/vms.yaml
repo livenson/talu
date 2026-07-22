@@ -36,14 +36,71 @@ stringData:
         content: |
           TrustedUserCAKeys /etc/ssh/talu_ca.pub
           PasswordAuthentication no
+      # VM logs Tier 1 (default): stream the journal to the serial console. KubeVirt captures ttyS0 into
+      # the virt-launcher guest-console-log container, which Alloy ships to Loki — labelled
+      # namespace=<tenant>, vm=<name> by the platform (not the guest). Nothing to spoof.
+      # We use a tiny `journalctl -f > /dev/console` SERVICE rather than journald's own ForwardToConsole:
+      # the latter needs journald (re)started with the console attached, which is racy under cloud-init
+      # (getty grabs /dev/ttyS0 first, and a late `systemctl restart systemd-journald` silently drops
+      # forwarding). Writing to /dev/console (the kernel console multiplexer → ttyS0 via `console=ttyS0`)
+      # from a dedicated service is deterministic and getty-independent. (See lab-notes #33.)
+      - path: /etc/systemd/system/talu-console-logs.service
+        permissions: "0644"
+        content: |
+          [Unit]
+          Description=Talu: stream the journal to the serial console (KubeVirt guest-console-log capture)
+          After=systemd-journald.service
+          [Service]
+          ExecStart=/bin/sh -c "exec journalctl -b -f -o short-iso --no-hostname -p {{ $root.Values.logging.consoleLevel | default "info" }} > /dev/console 2>&1"
+          Restart=always
+          RestartSec=2
+          [Install]
+          WantedBy=multi-user.target
     {{- if $vm.guestSecrets }}
       - path: /etc/talu/app.env
         permissions: "0600"
         content: |
           {{- $vm.guestSecrets | nindent 10 }}
     {{- end }}
+    {{- if $root.Values.logging.agent }}
+      # VM logs Tier 2 (opt-in): the in-guest agent (Fluent Bit, baked into the golden image) tails
+      # journald + any extra paths and PUSHES to this tenant's ingest gateway — never to Loki directly.
+      # The gateway (not the guest) stamps the tenant namespace, so nothing here is trust-bearing.
+      - path: /etc/fluent-bit/talu.conf
+        permissions: "0644"
+        content: |
+          [SERVICE]
+              flush        5
+              daemon       off
+              log_level    info
+              parsers_file parsers.conf
+          [INPUT]
+              name         systemd
+              tag          host.journal
+              read_from_tail on
+          {{- range $i, $p := ($root.Values.logging.paths | default list) }}
+          [INPUT]
+              name         tail
+              tag          host.file
+              path         {{ $p }}
+          {{- end }}
+          [OUTPUT]
+              name         loki
+              match        *
+              host         logs-gateway.{{ $ns }}.svc.cluster.local
+              port         3100
+              # vm scopes WITHIN this tenant only; the gateway overwrites namespace regardless.
+              labels       vm={{ $name }}, job=guest-agent
+    {{- end }}
     runcmd:
       - systemctl restart ssh
+      - systemctl daemon-reload
+      - systemctl enable --now talu-console-logs.service
+    {{- if $root.Values.logging.agent }}
+      # Enable the baked-in agent. `|| true` so a base image without Fluent Bit still boots (Tier 1
+      # keeps working); the golden image (images/*/Containerfile) bakes fluent-bit for full Tier 2.
+      - systemctl enable --now fluent-bit --no-block || true
+    {{- end }}
 ---
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
