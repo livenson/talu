@@ -1,11 +1,45 @@
-# Talu monitoring — Prometheus only. Grafana is off (Perses is the dashboard layer, exposed via
-# Pomerium); Alertmanager is off (alerting deferred). This Prometheus selects ALL ServiceMonitors,
-# PodMonitors and PrometheusRules cluster-wide, so component ServiceMonitors (KubeVirt, …) and the
-# per-namespace usage recording rules are scraped without release-label wiring.
+# Talu monitoring — Prometheus + Alertmanager. Grafana is off (Perses is the dashboard layer, exposed
+# via Pomerium). This Prometheus selects ALL ServiceMonitors, PodMonitors and PrometheusRules
+# cluster-wide, so component ServiceMonitors (KubeVirt, …) and the usage recording rules are scraped
+# without release-label wiring.
 grafana:
   enabled: false
+
+# Alertmanager: the destination for the 34+ rule-sets (kube-prometheus-stack defaults + Talu's
+# backup/node/cert/quota/kubevirt rules). The default receiver is NULL — alerts fire, group, and show
+# in the Alertmanager UI + the Perses "Alerts" dashboard, but notify nowhere until you wire a receiver.
+# To notify: set `alerting_webhook_url` (ansible injects it as a webhook), or add slack_configs/
+# email_configs/pagerduty_configs to the receivers below (a values swap — orchestrator-agnostic).
 alertmanager:
-  enabled: false
+  enabled: true
+  alertmanagerSpec:
+    retention: 120h
+    resources:
+      requests: { cpu: 10m, memory: 48Mi }
+      limits: { memory: 128Mi }
+  config:
+    route:
+      receiver: default
+      group_by: [alertname, namespace]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        - matchers: ['severity = "critical"']
+          receiver: critical
+          repeat_interval: 1h
+    receivers:
+      - name: default        # null by default (no *_configs) → visible, but no external notification
+      - name: critical
+    inhibit_rules:
+      # a down node makes its per-VM/pod alerts noise — suppress them while it's NotReady
+      - source_matchers: ['alertname = "TaluNodeNotReady"']
+        target_matchers: ['severity =~ "warning|info"']
+        equal: [node]
+      # a critical alert suppresses the matching warning for the same alertname/namespace
+      - source_matchers: ['severity = "critical"']
+        target_matchers: ['severity = "warning"']
+        equal: [alertname, namespace]
 
 # Talos runs its own control plane behind KubePrism and Cilium replaces kube-proxy — the default
 # etcd/scheduler/controller-manager/kube-proxy scrapers don't apply here and would just show as down.

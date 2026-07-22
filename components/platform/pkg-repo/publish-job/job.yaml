@@ -44,12 +44,24 @@ spec:
     spec:
       serviceAccountName: pkg-publish
       restartPolicy: Never
-      # Runs as root: it dnf-installs the build toolchain at start (like the privileged image-builds
-      # CronJob). golden-images enforces PSA baseline, so root is fine (a `restricted` warn is cosmetic).
-      # Optimization: bake a builder image so this runs non-root with no runtime install.
+      # DEFAULT (works everywhere, incl. the lab): fedora:41 + a CONDITIONAL toolchain install — the Job
+      # runs as root and installs the toolchain only if it's missing. golden-images enforces PSA baseline,
+      # so root is fine (a `restricted` warn is cosmetic).
+      # PRODUCTION optimization: publish images/pkg-builder to a registry the node trusts, then override
+      # this image via kustomize `images:` (name `talu-pkg-builder`). That image bakes the toolchain, so
+      # the conditional install is a no-op AND the Job can run non-root — uncomment the securityContext
+      # below. (The in-cluster HTTP zot is NOT a CRI pull source here, so the builder image is a CI/
+      # public-registry artifact, not a lab one — see images/pkg-builder/Containerfile.)
+      # securityContext:
+      #   runAsNonRoot: true
+      #   runAsUser: 1001
+      #   seccompProfile: { type: RuntimeDefault }
       containers:
         - name: publish
-          image: registry.fedoraproject.org/fedora:41
+          image: talu-pkg-builder                     # base=fedora:41 (kustomize images: remaps in prod)
+          # securityContext:
+          #   allowPrivilegeEscalation: false
+          #   capabilities: { drop: [ALL] }
           env:
             - { name: KUBECONFIG, value: "" }        # empty → kubectl uses the pod ServiceAccount
             - { name: HOME, value: /tmp }
@@ -62,7 +74,11 @@ spec:
           command: ["bash", "-ceu"]
           args:
             - |
-              dnf install -y -q git rpm-build createrepo_c gnupg2 binutils tar gzip kubernetes-client >/dev/null
+              # Conditional: on the baked talu-pkg-builder image the toolchain is present → no-op (and no
+              # root needed). On plain fedora:41 it installs at start. `createrepo_c` is the sentinel.
+              if ! command -v createrepo_c >/dev/null; then
+                dnf install -y -q git rpm-build createrepo_c gnupg2 binutils tar gzip kubernetes-client >/dev/null
+              fi
               git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" /tmp/src
               exec bash /tmp/src/images/ca-trust/publish.sh "$VERSION"
           volumeMounts:

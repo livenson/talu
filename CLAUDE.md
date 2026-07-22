@@ -13,7 +13,10 @@ you hit a wall. Update whichever file fits when you burn time on a non-obvious i
   drives it via `DOCKER_HOST=unix:///run/podman/podman.sock` (needs `sudo`; socket is root-owned).
 - Cluster: `talosctl cluster create docker` (v1.13: it's a subcommand, no `--controlplanes`/`--wait`).
 - Operate from the lab host over SSH (kubeconfig at `~/.talu/kubeconfig`, talosconfig at
-  `/root/.talos/config`). Laptop-tunnel workflow is a TODO (talos-docker API is on a random port).
+  `/root/.talos/config`), or from a laptop via `make lab-tunnel` (`dev/lab/tunnel.sh`): it forwards the
+  k8s API + zot and — since the talos-docker API is on a random host port — discovers that port from the
+  controlplane container, forwards it to `LAB_TALOS_PORT`, and writes a rewritten talosconfig so
+  `talosctl` works locally too.
 
 ## Workflow
 

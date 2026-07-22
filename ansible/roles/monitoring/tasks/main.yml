@@ -19,13 +19,26 @@
     helm repo update prometheus-community perses >/dev/null
   changed_when: false
 
-# The values.yaml (Prometheus-only, selects all SMs/Rules) + ksm-velero-crs.yaml (the kube-state-metrics
-# CustomResourceState that yields TRUE per-tenant backup size — see lab-notes/backup-restore.md).
-- name: Install/upgrade kube-prometheus-stack (Prometheus-only)
+# Alertmanager is enabled in values.yaml with a null default receiver (visible, no external notify).
+# When alerting_webhook_url is set, inject it as a webhook on BOTH receivers (default + critical) so
+# alerts actually notify — orchestrator-agnostic (empty → unset → visible-only). Slack/email/PagerDuty
+# are values swaps documented in the component README.
+- name: Build the Alertmanager webhook override (only when a URL is configured)
+  ansible.builtin.set_fact:
+    alertmanager_webhook_args: >-
+      {% if alerting_webhook_url | default('') | length > 0 %}
+      --set-string alertmanager.config.receivers[0].webhook_configs[0].url={{ alerting_webhook_url }}
+      --set-string alertmanager.config.receivers[1].webhook_configs[0].url={{ alerting_webhook_url }}
+      {% endif %}
+
+# The values.yaml (Prometheus + Alertmanager, selects all SMs/Rules) + ksm-velero-crs.yaml (the
+# kube-state-metrics CustomResourceState that yields TRUE per-tenant backup size — see lab-notes).
+- name: Install/upgrade kube-prometheus-stack (Prometheus + Alertmanager)
   ansible.builtin.command: >
     helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack
     --version {{ kube_prometheus_stack_version }} --namespace monitoring
     -f {{ mon_dir }}/values.yaml -f {{ mon_dir }}/ksm-velero-crs.yaml
+    {{ alertmanager_webhook_args | trim }}
     --wait --timeout 8m
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
@@ -52,6 +65,7 @@
     - recording-rules.yaml
     - backup-rules.yaml
     - node-rules.yaml
+    - resource-rules.yaml
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
 
@@ -64,5 +78,8 @@
     - dashboard-vmdetail.yaml
     - dashboard-backup.yaml
     - dashboard-pomerium.yaml
+    - dashboard-alerts.yaml
+    - dashboard-certs.yaml
+    - dashboard-alertops.yaml
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true

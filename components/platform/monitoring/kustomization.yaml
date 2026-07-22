@@ -14,6 +14,7 @@ resources:
   - recording-rules.yaml
   - backup-rules.yaml
   - node-rules.yaml
+  - resource-rules.yaml
   # dashboards (Perses, behind Pomerium). The Perses/PersesDashboard/PersesDatasource CRs depend on
   # the operator's CRDs — under Flux the kustomize-controller retries until they exist (or split into
   # a dependent Kustomization for strict ordering).
@@ -25,6 +26,9 @@ resources:
   - dashboard-vmdetail.yaml
   - dashboard-backup.yaml
   - dashboard-pomerium.yaml
+  - dashboard-alerts.yaml
+  - dashboard-certs.yaml
+  - dashboard-alertops.yaml
 configMapGenerator:
   - name: kube-prometheus-stack-values
     files:

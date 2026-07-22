@@ -1,0 +1,141 @@
+# Operator Alert-Operations dashboard — the health of the ALERTING PIPELINE itself. The "Alerts"
+# dashboard answers *what's firing*; this answers *is the pipeline actually working* — the thing you
+# must trust before relying on paging. Built on Alertmanager's own metrics + Prometheus' notification
+# send-side (all verified on the lab). Admin-only, via Pomerium.
+#
+# EXPECT ZEROS UNTIL A RECEIVER IS WIRED: the default receiver is null (see monitoring/values.yaml), so
+# notifications sent/failed stay at 0 until alerting_webhook_url (or a slack/email/pagerduty receiver)
+# is set. Active/suppressed alert counts and config-reload health are meaningful immediately.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-alertops
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — Alert Operations
+    duration: 6h
+    panels:
+      alertstate:
+        kind: Panel
+        spec:
+          display:
+            name: Alerts by state (active vs suppressed)
+            description: >-
+              alertmanager_alerts by state. `suppressed` = inhibited/silenced — a healthy number here
+              means the inhibit rules (node-down, critical-over-warning) are doing their job, not that
+              alerts are being lost.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (state) (alertmanager_alerts)" }
+      notify:
+        kind: Panel
+        spec:
+          display:
+            name: Notifications sent vs failed (per second)
+            description: >-
+              "Are pages actually getting out?" sent = rate(alertmanager_notifications_total),
+              failed = rate(alertmanager_notifications_failed_total). A non-zero failed line means the
+              receiver (webhook/Slack/…) is rejecting — alerts fire but nobody is told.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(rate(alertmanager_notifications_total[5m]))" }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(rate(alertmanager_notifications_failed_total[5m]))" }
+      notifylatency:
+        kind: Panel
+        spec:
+          display:
+            name: Notification latency p99 (seconds)
+            description: 99th-percentile time to deliver a notification, per integration. Rising = a slow receiver.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "histogram_quantile(0.99, sum by (le, integration) (rate(alertmanager_notification_latency_seconds_bucket[5m])))" }
+      configreload:
+        kind: Panel
+        spec:
+          display:
+            name: "Alertmanager config reload OK (1 = ok)"
+            description: >-
+              alertmanager_config_last_reload_successful. Drops to 0 if a bad receiver config (e.g. a
+              malformed webhook/Slack block) is pushed — the alerting pipeline is then running on the
+              last-good config. Catch it here, not when a page fails to arrive.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "alertmanager_config_last_reload_successful" }
+      silences:
+        kind: Panel
+        spec:
+          display:
+            name: Active silences
+            description: >-
+              alertmanager_silences{state="active"}. A forgotten silence is how a real alert gets muted
+              indefinitely — keep an eye on the count.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "alertmanager_silences{state=\"active\"}" }
+      pipeline:
+        kind: Panel
+        spec:
+          display:
+            name: "Prometheus → Alertmanager send-side"
+            description: >-
+              The delivery from Prometheus TO Alertmanager (before AM even routes). dropped = alerts
+              Prometheus failed to hand off; queue length approaching capacity means AM is unreachable
+              or too slow. Non-zero drops = alerts silently lost upstream of everything else here.
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(rate(prometheus_notifications_dropped_total[5m]))" }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(prometheus_notifications_queue_length)" }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: Alerts & delivery }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/alertstate" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/notify" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/notifylatency" } }
+      - kind: Grid
+        spec:
+          display: { title: Pipeline health }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/configreload" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/silences" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/pipeline" } }

@@ -1,0 +1,136 @@
+# DR drill — a scheduled, self-contained restore test. An untested backup is a hypothesis; this proves
+# the whole backup→restore→object-recreation path still works, weekly, without a human. Each run:
+#   1. seeds a tiny canary namespace (talu-dr-canary) with a sentinel ConfigMap stamped with the run id
+#   2. takes a Velero Backup of it (ttl 6h → Velero's gc-controller reaps CR + object-store data)
+#   3. Restores into a fresh scratch namespace via namespaceMapping
+#   4. VERIFIES the sentinel came back with the exact stamp — a Completed restore that restored nothing
+#      would still be a lie, so we assert the data, not just the phase
+#   5. cleans up (scratch ns + Restore CR; canary ns is kept and reused)
+# A successful run increments Velero's own velero_restore_success_total → TaluRestoreTestStale clears;
+# a failure increments velero_restore_failed_total → TaluRestoreTestFailed fires (backup-rules.yaml).
+#
+# Scope note: the canary asserts OBJECT restore (ConfigMap). Extending it to a PVC canary would also
+# prove VOLUME-data restore — but on this lab hostPath-backed volumes are skipped silently (lab-notes
+# #27), so a PVC canary needs a real CSI StorageClass first. Object restore is the reliable core here.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: restore-test
+  namespace: velero
+---
+# Backup/Restore CRs live in the velero namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: restore-test
+  namespace: velero
+rules:
+  - apiGroups: [velero.io]
+    resources: [backups, restores]
+    verbs: [get, list, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: restore-test
+  namespace: velero
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: restore-test }
+subjects: [{ kind: ServiceAccount, name: restore-test, namespace: velero }]
+---
+# The drill creates/deletes its own canary + scratch namespaces and the sentinel ConfigMap inside them.
+# Scoped to just what it needs; namespace names are dynamic so this is necessarily cluster-scoped.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: talu-restore-test
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: talu-restore-test
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: talu-restore-test }
+subjects: [{ kind: ServiceAccount, name: restore-test, namespace: velero }]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: restore-test
+  namespace: velero
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  schedule: "17 3 * * 1"          # 03:17 every Monday — off-peak, weekly DR assurance
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          serviceAccountName: restore-test
+          restartPolicy: Never
+          containers:
+            - name: drill
+              image: registry.fedoraproject.org/fedora:41   # proven-pullable on the lab (as publish-job)
+              env:
+                - { name: KUBECONFIG, value: "" }            # empty → in-cluster ServiceAccount
+                - { name: HOME, value: /tmp }
+                - { name: CANARY_NS, value: talu-dr-canary }
+                - { name: BSL, value: default }              # the Velero BackupStorageLocation
+              command: ["bash", "-ceu"]
+              args:
+                - |
+                  dnf install -y -q kubernetes-client >/dev/null   # kubectl (weekly job; runtime install is fine)
+                  TS=$(date +%Y%m%d%H%M%S)
+                  RESTORE_NS=talu-dr-restore-$TS
+                  BK=dr-canary-$TS
+                  RS=dr-restore-$TS
+
+                  wait_phase() {   # <kind> <name>  → 0 on Completed, 1 on any terminal failure/timeout
+                    for _ in $(seq 1 60); do
+                      p=$(kubectl -n velero get "$1" "$2" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+                      echo "  $1/$2 phase=${p:-<pending>}"
+                      case "$p" in
+                        Completed) return 0 ;;
+                        PartiallyFailed|Failed|FailedValidation) echo "!! $1/$2 terminal: $p"; return 1 ;;
+                      esac
+                      sleep 10
+                    done
+                    echo "!! timeout waiting for $1/$2"; return 1
+                  }
+
+                  echo "== 1. seed canary $CANARY_NS (sentinel=$TS) =="
+                  kubectl create namespace "$CANARY_NS" --dry-run=client -o yaml | kubectl apply -f -
+                  kubectl -n "$CANARY_NS" create configmap dr-sentinel \
+                    --from-literal=canary="$TS" --dry-run=client -o yaml | kubectl apply -f -
+
+                  echo "== 2. backup $BK =="
+                  # printf, not a heredoc: a heredoc terminator can't sit at column 0 inside this YAML block scalar
+                  printf 'apiVersion: velero.io/v1\nkind: Backup\nmetadata:\n  name: %s\n  namespace: velero\nspec:\n  includedNamespaces: [%s]\n  storageLocation: %s\n  ttl: 6h0m0s\n' \
+                    "$BK" "$CANARY_NS" "$BSL" | kubectl apply -f -
+                  wait_phase backup "$BK"
+
+                  echo "== 3. restore into $RESTORE_NS =="
+                  printf 'apiVersion: velero.io/v1\nkind: Restore\nmetadata:\n  name: %s\n  namespace: velero\nspec:\n  backupName: %s\n  includedResources: [configmaps]\n  namespaceMapping:\n    %s: %s\n' \
+                    "$RS" "$BK" "$CANARY_NS" "$RESTORE_NS" | kubectl apply -f -
+                  wait_phase restore "$RS"
+
+                  echo "== 4. verify sentinel data actually came back =="
+                  got=$(kubectl -n "$RESTORE_NS" get configmap dr-sentinel -o jsonpath='{.data.canary}' 2>/dev/null || true)
+                  if [ "$got" != "$TS" ]; then
+                    echo "!! DR DRILL FAILED: restored sentinel='$got' expected='$TS'"; exit 1
+                  fi
+                  echo "== DR drill OK: canary restored intact ($got) =="
+
+                  echo "== 5. cleanup (keep canary ns; backup GCs via ttl) =="
+                  kubectl delete namespace "$RESTORE_NS" --wait=false --ignore-not-found
+                  kubectl -n velero delete restore "$RS" --ignore-not-found

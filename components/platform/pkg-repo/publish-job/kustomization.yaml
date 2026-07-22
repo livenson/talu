@@ -9,3 +9,11 @@ kind: Kustomization
 namespace: golden-images
 resources:
   - job.yaml
+# The Job names its container image `talu-pkg-builder` (a logical name). Here in the base it resolves to
+# fedora:41 — which pulls anywhere (incl. the lab) and installs the toolchain at start. A production
+# overlay remaps it to a published images/pkg-builder (toolchain baked → non-root, no runtime install):
+#   images: [{ name: talu-pkg-builder, newName: ghcr.io/you/talu-pkg-builder, newTag: latest }]
+images:
+  - name: talu-pkg-builder
+    newName: registry.fedoraproject.org/fedora
+    newTag: "41"

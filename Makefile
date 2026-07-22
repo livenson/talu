@@ -103,7 +103,7 @@ try: lab-push up lab-tunnel lab-sync ## one-shot: bring the lab up and sync from
 	@echo "try: lab is up and synced. 'make lab-status' to watch it reconcile."
 
 trust: ## import the cluster's dev CA into the local trust store (TLS without warnings)
-	@echo "TODO (Stage 6): fetch cert-manager dev CA over the tunnel and add to the OS/browser trust store."
+	@$(LABENV); bash dev/lab/trust.sh add
 
 kbuild: ## verify the overlays build (structure-integrity / customization-boundary check)
 	@for e in environments/*/; do echo "== $(KUSTOMIZE) $$e =="; $(KUSTOMIZE) "$$e" >/dev/null && echo OK; done
