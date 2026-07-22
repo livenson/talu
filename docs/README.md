@@ -11,7 +11,9 @@
 
 **Platform tiers** (deployed by `ansible/` roles; per-component detail in each `components/platform/*/README.md`):
 observability (Prometheus + Perses dashboards — fleet, network/security, per-VM, **Access & Identity**, backup/DR),
-**audit** (Loki + Alloy → the **Access Audit** dashboard *in Perses*, "who accessed what, when"), and
+**logging & audit** (Loki + Alloy → Perses: the **Access Audit** dashboard — "who accessed what, when" — plus
+**VM Logs** from *inside* the guests, both a fleet-wide **operator** view and **per-tenant**, with tenant/VM
+labels stamped by the platform so tenants can't spoof each other — see [the logging component](../components/platform/logging/)), and
 **backup/DR** (Velero + node-agent → Garage — see [operations/backup-restore.md](operations/backup-restore.md)).
 
 **Start here:** [architecture/](architecture/) for the component diagram, then
