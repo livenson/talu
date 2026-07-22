@@ -95,8 +95,8 @@ orchestrator at all** — never design objects that require one to exist.
 How an OS image is built, catalogued, and delivered — to **new** VMs and to **already-running** ones.
 The design goal is *patching as automatic as possible*; the lever that makes it work is **bootc
 (image mode)**: the OS *is* an OCI container, so **one signed artifact serves both** new-VM
-provisioning *and* running-VM self-update. Design/decision detail and phasing live in
-[`../../image-automation-plan.md`](../../image-automation-plan.md); the components are
+provisioning *and* running-VM self-update. The decisions behind it:
+[README.md#design-decisions](README.md#design-decisions); the components are
 [`images/`](../../images/), [`components/infrastructure/zot`](../../components/infrastructure/zot/) and
 [`components/infrastructure/cdi`](../../components/infrastructure/cdi/).
 

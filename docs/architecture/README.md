@@ -125,7 +125,7 @@ graph TD
   *new* VM always gets the latest patched image, and a *running* VM self-updates from the registry via
   bootc. The default `source: containerDisk` needs no catalog (standalone-first); `dataSource` is the
   opt-in auto-patching path. Sequence + why-bootc: [`flows.md`](flows.md#golden-image-lifecycle-and-patching);
-  design/phasing: [`../../image-automation-plan.md`](../../image-automation-plan.md).
+  the decisions behind it: [Design decisions](#design-decisions).
 
 ## Design rules (the invariants)
 
@@ -136,6 +136,39 @@ graph TD
 3. **Labels are truth, names are handles.** Nothing joins on names; `talu.io/project-uuid` is the key.
 4. **Declarative only.** No imperative side channels — the orchestrator writes objects and watches status.
 5. **Standalone-first.** No object requires an orchestrator to exist.
+
+## Design decisions
+
+The load-bearing choices behind the layers above — the *why*, distilled now that the work is built.
+(The invariants are in "Design rules"; these are the decisions that shaped them.)
+
+**Golden images & patching**
+- **Build = bootc image mode.** One signed containerDisk serves both new-VM provisioning *and*
+  running-VM self-update — atomic stage→(soft-)reboot→activate with rollback; `download-only` + a
+  maintenance window for controlled apply.
+- **New-VM root disk = persistent `DataVolume` (`sourceRef`→`DataSource`), by default.** *Forced* by
+  self-update: bootc writes the new image to disk and it must survive reboot, so an ephemeral
+  `containerDisk` would drop the update. `containerDisk` stays an opt-in for stateless/cattle VMs
+  (patched by re-roll, not self-update).
+- **zot in-cluster** is the golden-image registry + `DataImportCron` source; **image freshness is a
+  Prometheus signal** (`kubevirt_cdi_dataimportcron_outdated` → `talu:image_outdated`) on the operator
+  dashboard.
+- **Supply-chain gates are togglable** — cosign-verify + Trivy scan are values flags (warn/off by
+  default; enforce in production). The catalog starts minimal from an **upstream bootc base** (an
+  OpenSSH guest, so Pomerium cert-auth works); channels `testing`→`stable`.
+- Lab feasibility: `bootc-image-builder` needs **privileged + loop, not KVM** — the build runs rootful
+  on the Rocky host and the imported containerDisk boots under KubeVirt TCG like any other lab VM.
+
+**Monitoring & accounting**
+- **Visualization = Perses, every dashboard behind Pomerium** — the access plane is the only ingress;
+  no public dashboard endpoint.
+- **Per-tenant isolation key = `namespace`** (== tenant `slug`), hard-scoped for tenant dashboards by
+  prom-label-proxy.
+- **Accounting = usage recording rules only; billing is external.** Talu emits the per-namespace
+  `talu:tenant_*` series (the § READ verb) and the orchestrator does €-conversion/invoicing — no
+  OpenCost, keeping Talu orchestrator-agnostic.
+- **ResourceQuota is a chart default** (was opt-in) — an always-present metering envelope.
+- **Single Prometheus now**; Thanos/Mimir are the documented scale path (retention / multi-cluster).
 
 ## The building blocks (upstream docs)
 

@@ -14,8 +14,8 @@ cluster node. Two homes, one shared core:
 
 **Flow:** build → push signed containerDisk to **zot** (`components/infrastructure/zot/`) → a CDI
 `DataImportCron` (`components/infrastructure/cdi/`) rolls the `DataSource` → new VMs get it via the tenant
-chart `sourceRef`; running VMs self-update via bootc. Promote `testing`→`stable` after acceptance. Full
-design: [`../image-automation-plan.md`](../image-automation-plan.md).
+chart `sourceRef`; running VMs self-update via bootc. Promote `testing`→`stable` after acceptance. The
+decisions behind it: [`docs/architecture/README.md#design-decisions`](../docs/architecture/README.md#design-decisions).
 
 The second CI pipeline — plugin/chart tests from committed state, `rocky-sandbox` as the e2e gate — is
 still a stub (fork-and-track).
