@@ -45,7 +45,7 @@ while read -r ns vm svc _; do
     echo "  ok     $ns/$vm ($svc)"
   else
     echo "  ORPHAN $ns/$vm ($svc + ${vm}-ssh-pin + ${vm}-userdata) — no VirtualMachine"
-    ORPHAN_OBJS+=("$ns $vm $svc"); DROP["$vm"]=svc-without-vm; found_a=true
+    ORPHAN_OBJS+=("$ns $vm $svc"); DROP["$vm"]="svc-without-vm"; found_a=true
   fi
 done < <(kubectl get svc -A -l talu.io/ssh-expose=true \
   -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.spec.selector.kubevirt\.io/vm}{" "}{.metadata.name}{"\n"}{end}')
@@ -60,7 +60,7 @@ while read -r vm svc ns; do
     echo "  ok     ssh://$vm -> $svc.$ns"
   else
     echo "  ORPHAN ssh://$vm -> $svc.$ns — upstream Service missing"
-    DROP["$vm"]=route-without-svc; found_b=true
+    DROP["$vm"]="route-without-svc"; found_b=true
   fi
 done < <(awk '
   /^[[:space:]]*- from: ssh:\/\// { vm=$0; sub(/.*ssh:\/\//,"",vm); next }

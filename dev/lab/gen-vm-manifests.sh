@@ -100,8 +100,8 @@ stringData:
           PasswordAuthentication no
       # VM logs Tier 1: stream the journal to the serial console; KubeVirt's guest-console-log sidecar
       # captures it and Alloy ships it to Loki labelled namespace/vm. (Mirrors the tenant chart.)
-      # A `journalctl -f > /dev/console` service, NOT journald ForwardToConsole — the latter is racy
-      # under cloud-init (getty owns ttyS0; a late journald restart drops forwarding). See lab-notes #33.
+      # A journalctl-follow service writing to /dev/console, NOT journald ForwardToConsole -- the latter
+      # is racy under cloud-init (getty owns ttyS0; a late journald restart drops forwarding). lab-notes #33.
       - path: /etc/systemd/system/talu-console-logs.service
         permissions: "0644"
         content: |

@@ -8,6 +8,10 @@
 ARG BASE=quay.io/centos-bootc/centos-bootc:stream9
 FROM ${BASE}
 
+# pipefail so a failed `curl … | sh` (the Fluent Bit fallback below) aborts the build instead of
+# being masked by the piped shell's exit code. (hadolint DL4006)
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # Capabilities: guest agent (KubeVirt integration), cloud-init (identity injection), OpenSSH,
 # and the in-guest log agent (Fluent Bit) for VM-logs Tier 2. Fluent Bit is baked but NOT enabled —
 # cloud-init enables it only when the tenant opts in (logging.agent=true), pointing it at the tenant's

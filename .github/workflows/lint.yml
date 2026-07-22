@@ -1,0 +1,103 @@
+# Lint & sanity checks — fast, parallel, per-tool. Runs on PRs and pushes to main.
+#
+# Design: focused single-purpose jobs (not Super-Linter) so each gets exactly the right config —
+# crucial here because Helm Go-templates and Perses "{{ }}" strings break naive YAML/K8s linters.
+# Tools are pinned and installed explicitly (few third-party actions) to keep the supply chain small.
+name: lint
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+permissions:
+  contents: read
+
+env:
+  KUBECONFORM_VERSION: "0.6.7"
+  KUSTOMIZE_VERSION: "5.4.3"
+
+jobs:
+  # ---- shell: 18 *.sh scripts (bootstrap, dev/lab, ci) -----------------------------------------
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ludeeus/action-shellcheck@2.0.0
+        env:
+          SHELLCHECK_OPTS: -e SC1091   # don't follow sourced files that only exist on the lab host
+        with:
+          severity: warning
+
+  # ---- YAML style: everything EXCEPT the Helm chart templates (Go templates aren't valid YAML) --
+  yamllint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install "yamllint==1.35.1"
+      # No --strict: real errors (duplicate keys, tabs, bad flow braces) fail the job; style warnings
+      # (e.g. long lines) print but don't block. Tighten to --strict once the tree is clean.
+      - run: yamllint .
+
+  # ---- Kubernetes manifests: build integrity (kbuild) + schema validation (kubeconform) ---------
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with: { version: v3.15.4 }
+      - name: install kustomize + kubeconform (pinned)
+        run: |
+          curl -sSLf "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" | sudo tar xz -C /usr/local/bin kustomize
+          curl -sSLf "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | sudo tar xz -C /usr/local/bin kubeconform
+      - name: kbuild (every overlay must kustomize build)
+        run: make kbuild
+      - name: kubeconform (schema-validate rendered overlays)
+        # -ignore-missing-schemas: skip CRDs we don't have schemas for (Cilium/Perses/KubeVirt/Flux/
+        # Velero/CDI) rather than fail; core resources (Deployment/Service/etc.) are still validated.
+        run: |
+          for e in environments/*/; do
+            echo "== kubeconform $e =="
+            kustomize build "$e" | kubeconform -strict -summary -ignore-missing-schemas \
+              -kubernetes-version 1.30.0
+          done
+      - name: helm lint + template (tenant chart, against values.schema.json)
+        run: |
+          helm lint components/tenancy/tenant-chart -f components/tenancy/tenant-chart/ci/lint-values.yaml
+          helm template t components/tenancy/tenant-chart -f components/tenancy/tenant-chart/ci/lint-values.yaml \
+            | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
+
+  # ---- Containerfiles (golden images) ----------------------------------------------------------
+  hadolint:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        file: [images/centos-bootc/Containerfile, images/ubuntu-lts/Containerfile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ matrix.file }}
+          failure-threshold: warning
+
+  # ---- Ansible install roles/playbooks ---------------------------------------------------------
+  ansible-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install ansible-lint ansible-core   # profile is pinned in ansible/.ansible-lint (min)
+      - run: ansible-lint
+        working-directory: ansible
+
+  # ---- The workflows themselves (injection/typo/label bugs) ------------------------------------
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: run actionlint
+        run: |
+          bash <(curl -sSLf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color

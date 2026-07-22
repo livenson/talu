@@ -1,0 +1,31 @@
+# yamllint config tuned for this repo's Kubernetes/kustomize style.
+# Key exclusions: the Helm chart TEMPLATES are Go templates (not valid YAML) and the gitlab CI stub.
+extends: default
+
+yaml-files:
+  - "*.yaml"
+  - "*.yml"
+
+ignore: |
+  components/tenancy/tenant-chart/templates/
+  ci/gitlab/
+  *.template.yaml
+
+rules:
+  # This repo uses compact flow style heavily: `{ requests: { cpu: 10m } }`, `[{ port: 22 }]`.
+  braces: { min-spaces-inside: 0, max-spaces-inside: 1 }
+  brackets: { min-spaces-inside: 0, max-spaces-inside: 1 }
+  # Extra spaces after commas/colons are used for column alignment (Perses grid coords `{ x: 0,  y: 0 }`,
+  # aligned `requests:`/`limits:` blocks, role/tag lists). Require a space, but allow more than one.
+  commas: { max-spaces-after: -1 }
+  colons: { max-spaces-after: -1 }
+  # k8s manifests + long PromQL/LogQL one-liners run long; keep it a warning, not an error.
+  line-length: { max: 160, level: warning, allow-non-breakable-words: true }
+  # Manifests mix indented and non-indented sequences; don't fight it.
+  indentation: { spaces: 2, indent-sequences: consistent }
+  # `on:` in workflow files, and no forced document-start `---`.
+  truthy: { check-keys: false }
+  document-start: disable
+  # Aligned trailing comments are intentional throughout.
+  comments: { min-spaces-from-content: 1 }
+  comments-indentation: disable

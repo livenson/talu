@@ -26,6 +26,7 @@ echo "mtu-test: pod-b at $IP_B"
 
 # 1) DF ping near the MTU (payload 1322 = 1350 - 28 for IP+ICMP headers). Must PASS.
 echo "== DF ping, 1322-byte payload (must pass) =="
+# shellcheck disable=SC1010  # `-M do` is ping's PMTU-discovery mode, not a shell 'do' keyword
 kubectl -n "$NS" exec pod-a -- ping -c 3 -M do -s 1322 "$IP_B"
 
 # 2) Bulk TCP transfer — the real large-payload signal (catches silent MTU blackholes).
