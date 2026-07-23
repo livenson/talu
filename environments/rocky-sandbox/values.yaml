@@ -15,3 +15,8 @@ replicas:
   pomerium: 1
 hostnames:
   scheme: sslip.io            # resolved via the make lab-tunnel forward
+security:
+  kyverno:
+    enforce: false            # Audit-only on the throwaway lab (dev/lab/kyverno-install.sh)
+  tetragon:
+    enabled: false            # real-hardware ONLY — nested Talos node has no BTF/tracing (lab-notes #14/#15 class)

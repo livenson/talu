@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Tetragon (CNCF, Cilium umbrella) — eBPF runtime security & enforcement. Node-level DaemonSet that
+# pairs with the existing Cilium eBPF dataplane. Ships observability (JSON events -> Loki via Alloy)
+# plus ONE enforcing TracingPolicy. REAL HARDWARE ONLY — the nested Talos-in-Podman lab has no BTF /
+# /sys/kernel/tracing (same wall class as rbd-nbd #14/#15), so it is not wired into rocky-sandbox.
+#
+# NOTE: no top-level `namespace:` — the DaemonSet/operator live in `tetragon`, the ServiceMonitors in
+# `monitoring`, and TracingPolicies are cluster-scoped. namespace.yaml is listed first (PSA label).
+resources:
+  - namespace.yaml
+  - helmrepository.yaml
+  - helmrelease.yaml
+  - servicemonitors.yaml
+  # runtime policies (observe + one enforce)
+  - tracingpolicies/observe-exec-virt-launcher.yaml
+  - tracingpolicies/observe-sensitive-files.yaml
+  - tracingpolicies/enforce-block-core-pattern.yaml
+configMapGenerator:
+  - name: tetragon-values
+    namespace: tetragon
+    files:
+      - values.yaml
+generatorOptions:
+  disableNameSuffixHash: true

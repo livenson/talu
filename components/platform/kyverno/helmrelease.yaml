@@ -1,0 +1,32 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kyverno
+  namespace: kyverno
+spec:
+  interval: 1h
+  install:
+    crds: CreateReplace
+    createNamespace: false          # namespace.yaml owns it
+    remediation: { retries: 3 }
+  upgrade:
+    crds: CreateReplace
+    remediation: { retries: 3 }
+  chart:
+    spec:
+      chart: kyverno
+      version: "3.8.2"              # Kyverno chart 3.8.2
+      sourceRef:
+        kind: HelmRepository
+        name: kyverno
+        namespace: kyverno
+  # Base defaults live in values.yaml; environment overlays deep-merge kyverno-values-env on top
+  # via their own configMapGenerator (optional: absent in envs that keep the defaults).
+  valuesFrom:
+    - kind: ConfigMap
+      name: kyverno-values
+      valuesKey: values.yaml
+    - kind: ConfigMap
+      name: kyverno-values-env
+      valuesKey: values.yaml
+      optional: true

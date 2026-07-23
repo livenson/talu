@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Kyverno (CNCF, Graduated) — the admission/policy engine. Installs the engine that the
+# pre-existing access/kyverno-guardrails.yaml (and the policies below) rely on. Doctrine:
+# "Kyverno = enforce invariants, NOT generate" (the tenant chart generates). All Talu policies
+# ship Audit-first; promote to Enforce per-environment. See README.md.
+#
+# NOTE: no top-level `namespace:` — the HelmRelease/HelmRepository target `kyverno`, but the
+# ClusterPolicies are cluster-scoped (no namespace). namespace.yaml is listed first so the label
+# exists before the chart schedules.
+resources:
+  - namespace.yaml
+  - helmrepository.yaml
+  - helmrelease.yaml
+  # platform-wide policies (Audit)
+  - policies/require-project-uuid.yaml
+  - policies/restrict-privileged.yaml
+  - policies/verify-images-cosign.yaml
+configMapGenerator:
+  - name: kyverno-values
+    namespace: kyverno
+    files:
+      - values.yaml
+generatorOptions:
+  disableNameSuffixHash: true

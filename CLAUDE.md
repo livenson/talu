@@ -41,6 +41,8 @@ component versions live in [`docs/development/lab-notes.md`](docs/development/la
 - **CoreDNS forwards to an unusable upstream** — patch to public forwarders or pod DNS SERVFAILs. (#12)
 - **Storage is CephFS, not RBD** — the nested node's `/dev` isolation breaks rbd-nbd; Rook is a wall here. (#14/#15)
 - **SSH is Pomerium Native SSH** (Pomerium is the SSH CA) — no OpenBao, no tunnel, no static password. (#21)
+- **Tetragon is real-hardware only** — needs kernel BTF + `/sys/kernel/tracing` the nested lab lacks;
+  wired into `example` only, omitted from `rocky-sandbox`. Kyverno runs anywhere (Audit-first). (#38/#39)
 
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the

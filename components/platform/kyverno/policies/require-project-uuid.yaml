@@ -1,0 +1,50 @@
+# Every tenant VirtualMachine must carry the join key the platform correlates on
+# (metrics, logs, billing, RBAC all key off talu.io/project-uuid). Audit-first: violations
+# surface as PolicyReports (`kubectl get polr -A`) without blocking. Promote to Enforce per-env.
+#
+# Complements access/kyverno-guardrails.yaml (which requires the label on SSH-exposed *Services*);
+# this widens the invariant to the VM object itself.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: talu-require-project-uuid
+  labels:
+    app.kubernetes.io/part-of: talu
+  annotations:
+    policies.kyverno.io/description: >-
+      Tenant VirtualMachines must carry the talu.io/project-uuid join key.
+spec:
+  validationFailureAction: Audit        # env flip -> Enforce (security.kyverno.enforce)
+  background: true
+  rules:
+    - name: vm-has-project-uuid
+      match:
+        any:
+          - resources:
+              kinds: ["kubevirt.io/v1/VirtualMachine"]
+      exclude:
+        any:
+          - resources:
+              namespaces: &platform-namespaces
+                - kube-system
+                - kube-node-lease
+                - kube-public
+                - kyverno
+                - tetragon
+                - kubevirt
+                - cdi
+                - rook-ceph
+                - velero
+                - garage
+                - monitoring
+                - logging
+                - flux-system
+                - cert-manager
+                - pomerium
+                - talu-system
+      validate:
+        message: "VirtualMachine {{ request.object.metadata.name }} must set metadata.labels['talu.io/project-uuid']"
+        pattern:
+          metadata:
+            labels:
+              talu.io/project-uuid: "?*"

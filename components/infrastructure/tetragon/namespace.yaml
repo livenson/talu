@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tetragon
+  labels:
+    app.kubernetes.io/part-of: talu
+    # Tetragon runs a privileged DaemonSet that loads eBPF programs and mounts host paths
+    # (/sys/kernel/tracing, /proc). Talos enforces PSA `baseline` cluster-wide, which forbids that —
+    # without this label the DaemonSet silently schedules 0 pods. Same pattern as velero/monitoring.
+    # See docs/development/lab-notes.md gotcha #5.
+    pod-security.kubernetes.io/enforce: privileged

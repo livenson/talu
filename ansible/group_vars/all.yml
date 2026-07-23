@@ -32,6 +32,11 @@ enable_host_dev_nbd: false        # partial fix only; CephFS is the reliable pat
 kubevirt_use_emulation: true      # no /dev/kvm
 cdi_scratch_storageclass: local-path
 
+# Security — policy + runtime. Kyverno runs on the nested node (plain admission Deployments); all
+# Talu policies ship Audit-first (`kubectl get polr -A`). Tetragon is NOT installed on the lab — it
+# needs kernel BTF + /sys/kernel/tracing the nested node lacks (real-hardware only, gotcha #38).
+kyverno_version: "3.8.2"          # Kyverno chart 3.8.2 (helm)
+
 # Observability + backup (deployed via helm/kubectl — no flux helm-controller on the nested node)
 kube_prometheus_stack_version: "87.17.0"   # app v0.92.1; Prometheus + Alertmanager (Grafana off — Perses is the UI)
 perses_operator_version: "0.4.0"           # dashboards-as-code operator

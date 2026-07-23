@@ -1,0 +1,38 @@
+# ENFORCE (the one blocking policy): kill any process that writes /proc/sys/kernel/core_pattern —
+# a well-known container-escape primitive (overwrite it to run an attacker binary on the host on the
+# next core dump). This is unambiguously malicious, so Sigkill is justified. Tenant namespaces are
+# EXCLUDED from the podSelector blast radius via a NotIn on the k8s namespace label, so a mis-scoped
+# rule can never take down a tenant VM. (Override -> deny-without-kill is the less-disruptive
+# alternative if you prefer; swap action Sigkill for action Override with argError -1.)
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: talu-enforce-block-core-pattern
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  podSelector:
+    matchExpressions:
+      # never arm enforcement inside tenant VM namespaces (they carry talu.io/project-uuid)
+      - key: "talu.io/project-uuid"
+        operator: DoesNotExist
+  kprobes:
+    - call: "security_file_permission"
+      syscall: false
+      args:
+        - index: 0
+          type: "file"
+        - index: 1
+          type: "int"
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: "Equal"
+              values:
+                - "/proc/sys/kernel/core_pattern"
+            - index: 1
+              operator: "Equal"
+              values:
+                - "2"        # MAY_WRITE
+          matchActions:
+            - action: Sigkill

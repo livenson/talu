@@ -1,0 +1,10 @@
+# Lab override — single replicas on the throwaway one-node cluster. Layered over
+# components/platform/kyverno/values.yaml by dev/lab/kyverno-install.sh (values, not structure).
+admissionController:
+  replicas: 1
+backgroundController:
+  replicas: 1
+reportsController:
+  replicas: 1
+cleanupController:
+  replicas: 1

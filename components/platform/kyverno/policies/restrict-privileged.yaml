@@ -1,0 +1,61 @@
+# Defence-in-depth: a tenant with namespace access must not run a rogue privileged *container*
+# pod. Platform namespaces (which legitimately run privileged DaemonSets) are excluded, and so are
+# KubeVirt virt-launcher pods — those carry kubevirt.io=virt-launcher and legitimately need elevated
+# caps (NET_ADMIN etc.), so flagging them would be pure noise. Audit-first.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: talu-restrict-privileged
+  labels:
+    app.kubernetes.io/part-of: talu
+  annotations:
+    policies.kyverno.io/description: >-
+      Disallow privileged containers outside platform namespaces; virt-launcher pods are exempt.
+spec:
+  validationFailureAction: Audit        # env flip -> Enforce (security.kyverno.enforce)
+  background: true
+  rules:
+    - name: no-privileged-containers
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          # platform namespaces run legitimate privileged workloads
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-node-lease
+                - kube-public
+                - kyverno
+                - tetragon
+                - kubevirt
+                - cdi
+                - rook-ceph
+                - velero
+                - garage
+                - monitoring
+                - logging
+                - flux-system
+                - cert-manager
+                - pomerium
+                - talu-system
+          # KubeVirt's own launcher pods legitimately need elevated privileges
+          - resources:
+              selector:
+                matchLabels:
+                  kubevirt.io: virt-launcher
+      validate:
+        message: "Privileged containers are not allowed for tenant pods (pod {{ request.object.metadata.name }})"
+        pattern:
+          spec:
+            =(ephemeralContainers):
+              - =(securityContext):
+                  =(privileged): "false"
+            =(initContainers):
+              - =(securityContext):
+                  =(privileged): "false"
+            containers:
+              - =(securityContext):
+                  =(privileged): "false"

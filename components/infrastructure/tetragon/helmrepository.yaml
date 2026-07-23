@@ -1,0 +1,9 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: cilium
+  namespace: tetragon
+spec:
+  interval: 1h
+  # Tetragon ships from the Cilium Helm repo (chart `tetragon`).
+  url: https://helm.cilium.io

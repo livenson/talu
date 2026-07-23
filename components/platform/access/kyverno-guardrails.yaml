@@ -7,7 +7,9 @@
 # config blob), so it must not be the generator. (SSH auth is Pomerium Native SSH —
 # Pomerium is the SSH CA; there is no OpenBao in this path.)
 #
-# Install Kyverno first (helm repo kyverno/kyverno) — these are optional hardening.
+# The Kyverno engine is installed by components/platform/kyverno/ (this policy is applied there and
+# by dev/lab/kyverno-install.sh). This guardrail stays Enforce; the platform-wide policies in
+# components/platform/kyverno/policies/ ship Audit-first.
 ---
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy

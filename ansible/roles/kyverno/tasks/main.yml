@@ -1,0 +1,51 @@
+---
+# Kyverno (CNCF policy engine) — installs the engine that access/kyverno-guardrails.yaml and the
+# platform-wide policies rely on. Deployed with helm/kubectl directly (platform tier — no flux
+# helm-controller on the nested node), mirroring components/platform/kyverno/. All Talu policies ship
+# Audit-first (`kubectl get polr -A`); promote to Enforce per-env. Runs fine on the nested lab node
+# (plain admission Deployments — no BTF/hostPath, unlike Tetragon which is real-hardware only, #38).
+- name: Kyverno component dir (on the lab, from the synced repo)
+  ansible.builtin.set_fact:
+    kyverno_dir: "{{ playbook_dir }}/../components/platform/kyverno"
+
+- name: Apply the kyverno namespace
+  ansible.builtin.command: "kubectl apply -f {{ kyverno_dir }}/namespace.yaml"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+# Base values (production defaults) + the rocky-sandbox override that drops every controller to a
+# single replica — same base+env layering the HelmRelease uses in the GitOps path.
+- name: Install/upgrade Kyverno
+  ansible.builtin.shell: |
+    helm repo add kyverno https://kyverno.github.io/kyverno/ >/dev/null 2>&1 || true
+    helm repo update kyverno >/dev/null
+    helm upgrade --install kyverno kyverno/kyverno --version {{ kyverno_version }} --namespace kyverno \
+      -f {{ kyverno_dir }}/values.yaml \
+      -f {{ playbook_dir }}/../environments/{{ tenant_env }}/kyverno-values.yaml \
+      --wait --timeout 5m
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Wait for the Kyverno ClusterPolicy CRD to register
+  ansible.builtin.command: "kubectl wait --for condition=established crd/clusterpolicies.kyverno.io --timeout=120s"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
+
+# Policies match KubeVirt VirtualMachine / CDI DataVolume kinds, so this role runs AFTER kubevirt in
+# site.yml (the CRDs exist → policies register cleanly). kubectl apply is idempotent.
+- name: Apply the Talu policies (Audit) + the VM-access guardrail (Enforce)
+  ansible.builtin.command: "kubectl apply -f {{ item }}"
+  loop:
+    - "{{ kyverno_dir }}/policies/require-project-uuid.yaml"
+    - "{{ kyverno_dir }}/policies/restrict-privileged.yaml"
+    - "{{ kyverno_dir }}/policies/verify-images-cosign.yaml"
+    - "{{ playbook_dir }}/../components/platform/access/kyverno-guardrails.yaml"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+- name: Show Kyverno rollout + any PolicyReport findings
+  ansible.builtin.shell: |
+    kubectl -n kyverno rollout status deploy/kyverno-admission-controller --timeout=180s
+    echo "PolicyReports (Audit findings):"; kubectl get polr -A 2>/dev/null || true
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: false
