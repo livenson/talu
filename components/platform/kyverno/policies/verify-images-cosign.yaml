@@ -1,0 +1,86 @@
+# Admission-time cosign verification — the in-cluster half of the supply chain. CI already signs
+# Talu-built golden images (ci/image-build.sh: build -> Trivy -> publish -> cosign sign); this
+# policy checks the signature at admission so an unsigned/tampered Talu image is caught before it
+# runs. Scoped to Talu's OWN registry images (not every upstream image) to keep Audit noise low.
+#
+# DEPENDENCY: cosign.publicKey below is a PLACEHOLDER. Wire the real CI signing public key via the
+# environment overlay (kyverno-values-env / a SOPS-managed Secret ref) before promoting to Enforce.
+# Until then the rule runs in Audit and only reports.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: talu-verify-images-cosign
+  labels:
+    app.kubernetes.io/part-of: talu
+  annotations:
+    policies.kyverno.io/description: >-
+      Verify cosign signatures on Talu-registry images (Pod containers incl. KubeVirt containerDisks,
+      and CDI DataVolume registry sources). Audit until the real signing key is wired.
+spec:
+  validationFailureAction: Audit
+  background: false                      # verifyImages cannot run in background scans
+  webhookConfiguration:
+    failurePolicy: Ignore                # never wedge admission while Audit; Enforce sets this to Fail
+  rules:
+    # 1) Pod container images (covers virt-launcher's containerDisk images, which run as containers)
+    - name: verify-pod-images
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-node-lease
+                - kube-public
+                - kyverno
+                - tetragon
+                - kubevirt
+                - cdi
+                - rook-ceph
+                - velero
+                - garage
+                - monitoring
+                - logging
+                - flux-system
+                - cert-manager
+                - pomerium
+                - talu-system
+      verifyImages:
+        - imageReferences:
+            # TODO(site): set to your zot/registry host for Talu-built images, e.g. registry.<site>/talu/*
+            - "registry.talu.local/talu/*"
+          failureAction: Audit           # env flip -> Enforce
+          verifyDigest: true
+          mutateDigest: true             # pin to the verified digest on admission
+          attestors:
+            - count: 1
+              entries:
+                - keys:
+                    publicKeys: |-
+                      -----BEGIN PUBLIC KEY-----
+                      PLACEHOLDER_REPLACE_WITH_CI_COSIGN_PUBLIC_KEY
+                      -----END PUBLIC KEY-----
+                    rekor:
+                      ignoreTlog: true
+                      url: https://rekor.sigstore.dev
+    # 2) CDI DataVolume registry imports (golden containerDisks pulled by DataImportCron)
+    - name: verify-datavolume-source
+      match:
+        any:
+          - resources:
+              kinds: ["cdi.kubevirt.io/v1beta1/DataVolume"]
+      verifyImages:
+        - imageReferences:
+            - "registry.talu.local/talu/*"
+          failureAction: Audit
+          attestors:
+            - count: 1
+              entries:
+                - keys:
+                    publicKeys: |-
+                      -----BEGIN PUBLIC KEY-----
+                      PLACEHOLDER_REPLACE_WITH_CI_COSIGN_PUBLIC_KEY
+                      -----END PUBLIC KEY-----

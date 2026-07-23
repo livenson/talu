@@ -41,7 +41,9 @@ admission time. `vm-ssh-access.template.yaml` is the chart-rendered shape (objec
 
 ## Kyverno — enforcement, not generation
 
-Kyverno (`kyverno-guardrails.yaml`) **validates the invariants**, it does not create the plumbing:
+The Kyverno **engine** lives in [`../kyverno/`](../kyverno/README.md) (installed as its own component);
+this `kyverno-guardrails.yaml` is one of the policies it enforces.
+Kyverno **validates the invariants**, it does not create the plumbing:
 every exposed VM Service must carry `talu.io/project-uuid` and have its pinning policy; a hardened
 VM must not re-enable SSH password auth. Kyverno cannot edit the Pomerium config blob, so it can't
 be the generator — the chart is. (Kyverno `generate` *could* own objects 2–3, but then the chart

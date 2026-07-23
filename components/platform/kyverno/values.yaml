@@ -1,0 +1,14 @@
+# Kyverno base values — production-sane defaults. Environments override replica counts
+# (the lab drops these to 1) via kyverno-values-env. See docs/development/lab-notes.md.
+#
+# HA guidance (kyverno.io/docs/guides/high-availability): admission controller >=3; the background
+# and reports controllers are leader-elected (only one active) so 2 is enough for failover.
+# PolicyReports are how Audit-mode findings surface — `kubectl get polr -A`.
+admissionController:
+  replicas: 3
+backgroundController:
+  replicas: 2
+reportsController:
+  replicas: 2
+cleanupController:
+  replicas: 2

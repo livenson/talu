@@ -1,0 +1,38 @@
+# Scrape Tetragon agent + operator metrics (tetragon_* — policy hits, enforcement actions, ringbuf
+# health). The monitoring stack owns scrape config, so — like the kubevirt/pomerium ServiceMonitors
+# in components/platform/monitoring — these live with the component but target the monitoring stack.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: tetragon
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  namespaceSelector:
+    matchNames: [tetragon]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tetragon
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: tetragon-operator
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  namespaceSelector:
+    matchNames: [tetragon]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tetragon-operator
+  endpoints:
+    - port: metrics
+      interval: 60s
+      path: /metrics

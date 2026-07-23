@@ -1,0 +1,25 @@
+# OBSERVE: ptrace targeting KubeVirt virt-launcher pods. ptrace against a launcher is a strong
+# signal of process injection / debugging of a running tenant VM's supervisor. podSelector +
+# enablePolicyFilter scope this to launcher pods only (not the whole cluster). action Post = report,
+# never block. Events land in Loki (stdout JSON) and are queryable in Perses.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: talu-observe-ptrace-virt-launcher
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  podSelector:
+    matchLabels:
+      kubevirt.io: virt-launcher
+  kprobes:
+    - call: "__x64_sys_ptrace"
+      syscall: true
+      args:
+        - index: 0
+          type: "int"      # ptrace request
+        - index: 1
+          type: "int"      # target pid
+      selectors:
+        - matchActions:
+            - action: Post

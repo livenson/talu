@@ -333,7 +333,9 @@ VM's `:22` — two layers, validated both ways (see the Stage 6 multi-tenancy no
 All on latest stable:
 K8s v1.36.2 · Talos v1.13.6 · **Cilium v1.19.6** · **cert-manager v1.21.0** · KubeVirt v1.8.4 ·
 CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Native SSH) · kubevirt-manager 1.5.4 ·
-**local-path v0.0.36** · **external-snapshotter v8.6.0** · MicroCeph 19.2.3 (squid).
+**local-path v0.0.36** · **external-snapshotter v8.6.0** · MicroCeph 19.2.3 (squid) ·
+**Kyverno chart 3.8.2** (policy engine — Audit-first) · **Tetragon chart 1.7.0 / app v1.7.0**
+(eBPF runtime security — real hardware only, see #38).
 24. **Cilium helm upgrade: DON'T use `--reuse-values` across a minor bump.** 1.18→1.19 fails with
     `standaloneDnsProxy.enabled: nil pointer` — `--reuse-values` drops the chart's NEW default subtrees.
     Fix: `helm get values cilium -n kube-system -o yaml > v.yaml; helm upgrade cilium cilium/cilium
@@ -565,3 +567,21 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     line** from the tenant values before embedding them, so `valuesFrom` is the sole source. Precedence,
     not the dotted ConfigMap key (`user_ca.pub`), was the culprit — verified by re-applying with the line
     removed → `HelmRelease Ready`, VM `Running`.
+
+38. **Tetragon is real-hardware ONLY — the nested lab can't run it (same wall class as #14/#15).**
+    Tetragon loads eBPF programs and needs kernel **BTF** (`CONFIG_DEBUG_INFO_BTF`) plus
+    `/sys/kernel/tracing`. The nested Talos-in-Podman node exposes neither reliably (its curated
+    kernel/`/dev` surface is the same limitation that blocks rbd-nbd), so the DaemonSet either fails to
+    load probes or CrashLoops. Therefore `components/infrastructure/tetragon/` is wired into
+    `environments/example` only and **deliberately omitted from `rocky-sandbox`** (`security.tetragon.enabled:
+    false`, no `dev/lab/` installer). Validate Tetragon on KVM-capable hardware. Kyverno, by contrast,
+    is plain admission Deployments (no BTF/hostPath) and runs fine on the nested node
+    (`dev/lab/kyverno-install.sh`).
+
+39. **Kyverno must exclude its own namespace (and kube-system) or it can deadlock admission.** A
+    validating/verifying webhook with `failurePolicy: Fail` that also matches pods in `kyverno`/`kube-system`
+    can wedge the cluster if the admission controller is down (its own pods can't reschedule). Talu's
+    policies (`components/platform/kyverno/policies/*`) `exclude` the platform/system namespaces, and the
+    cosign `verify-images` rule ships `failurePolicy: Ignore` while it is Audit. All Talu policies ship
+    **Audit-first** — findings surface as `PolicyReport` (`kubectl get polr -A`), nothing is blocked;
+    promote to Enforce per-env only after PolicyReports confirm no legitimate workload trips a rule.

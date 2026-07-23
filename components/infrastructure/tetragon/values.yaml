@@ -1,0 +1,28 @@
+# Tetragon base values — tuned for Talos Linux. Real hardware ONLY: the nested Talos-in-Podman lab
+# has no kernel BTF / /sys/kernel/tracing, so Tetragon is not wired into rocky-sandbox. See README
+# and docs/development/lab-notes.md.
+tetragon:
+  # Per-namespace / per-pod-label scoping of TracingPolicies — required so a TracingPolicyNamespaced
+  # (or a policy's podSelector) only watches the intended tenant, not the whole cluster.
+  enablePolicyFilter: true
+  # Enrich events with process credentials and namespace changes (privilege-escalation visibility).
+  enableProcessCred: true
+  enableProcessNs: true
+  # Talos exposes the tracefs here; Tetragon needs it mounted to attach kprobes/tracepoints.
+  extraHostPathMounts:
+    - name: sys-kernel-tracing
+      mountPath: /sys/kernel/tracing
+  # BTF is auto-detected on Talos (CONFIG_DEBUG_INFO_BTF=y); leave btf unset.
+
+# JSON events to stdout -> the existing Grafana Alloy DaemonSet scrapes pod stdout into Loki, and
+# Perses queries it. No extra export wiring needed (see components/platform/logging).
+export:
+  mode: stdout
+
+# The operator reconciles TracingPolicy CRDs.
+tetragonOperator:
+  enabled: true
+
+# Prometheus metrics for the DaemonSet + operator (scraped by servicemonitors.yaml).
+serviceMonitor:
+  enabled: false                     # Talu ships its own ServiceMonitors (monitoring stack owns scrape config)

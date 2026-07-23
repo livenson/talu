@@ -1,0 +1,29 @@
+# OBSERVE: reads/opens of sensitive host & cluster credential files. security_file_permission is the
+# LSM hook Tetragon uses for file access; matchArgs on the path prefix keeps the event volume low.
+# action Post = report only. Cluster-wide (no podSelector) so both platform and tenant access is
+# visible — triage happens in Perses/Loki, nothing is blocked.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: talu-observe-sensitive-files
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  kprobes:
+    - call: "security_file_permission"
+      syscall: false
+      args:
+        - index: 0
+          type: "file"
+        - index: 1
+          type: "int"      # access mask (MAY_READ/MAY_WRITE)
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: "Prefix"
+              values:
+                - "/etc/shadow"
+                - "/etc/kubernetes/"
+                - "/var/lib/kubelet/pki/"
+          matchActions:
+            - action: Post

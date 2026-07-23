@@ -16,3 +16,8 @@ replicas:
   pomerium: 2
 hostnames:
   scheme: wildcard            # *.apps.<site>.example.com
+security:
+  kyverno:
+    enforce: false            # policies ship Audit; flip to Enforce after watching PolicyReports
+  tetragon:
+    enabled: true             # real hardware: kernel BTF + /sys/kernel/tracing available
