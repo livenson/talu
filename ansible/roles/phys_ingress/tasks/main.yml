@@ -1,83 +1,51 @@
 ---
 # North-south ingress substrate: a Cilium LoadBalancer IP pool on the overlay + L2 announcement, so
 # `type: LoadBalancer` Services get a real IP that Cilium answers ARP for on the overlay segment
-# (reachable from compute2, which DNATs the public :80/:443 to it). No MetalLB, no socat shim — the
-# real LB-IPAM path the single-node VM lab can't do.
-- name: Facts
-  ansible.builtin.set_fact:
-    ing_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
-    ing_lb_cidr: "{{ talos_ingress_lb_cidr | default('172.18.200.0/24') }}"
-    ing_overlay_iface: "{{ talos_node_overlay_iface | default('enp1s0') }}"
-
-- name: CiliumLoadBalancerIPPool + L2 announcement
-  ansible.builtin.shell: |
-    cat <<'EOF' | {{ ing_k }} apply -f -
-    apiVersion: cilium.io/v2
-    kind: CiliumLoadBalancerIPPool
-    metadata: {name: talu-ingress}
-    spec:
-      blocks:
-        - cidr: {{ ing_lb_cidr }}
-    ---
-    apiVersion: cilium.io/v2
-    kind: CiliumL2AnnouncementPolicy
-    metadata: {name: talu-ingress-l2}
-    spec:
-      # Announce LB IPs via ARP on the Talos node's overlay interface.
-      interfaces:
-        - {{ ing_overlay_iface }}
-      loadBalancerIPs: true
-    EOF
-  register: ing_apply
-  changed_when: "'created' in ing_apply.stdout or 'configured' in ing_apply.stdout"
-  # v2 CRDs may be v2alpha1 on older Cilium — retry with that apiVersion if the first fails.
+# (reachable from compute2, which DNATs the public :80/:443 to it). No MetalLB, no socat shim.
+- name: Detect the Cilium LB CRD API version (v2 vs v2alpha1)
+  ansible.builtin.command: >-
+    kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig
+    get crd ciliumloadbalancerippools.cilium.io -o jsonpath={.spec.versions[0].name}
+  register: cilium_lb_crd
+  changed_when: false
   failed_when: false
 
-- name: Fallback to v2alpha1 API if v2 not present
-  ansible.builtin.shell: |
-    cat <<'EOF' | {{ ing_k }} apply -f -
-    apiVersion: cilium.io/v2alpha1
-    kind: CiliumLoadBalancerIPPool
-    metadata: {name: talu-ingress}
-    spec:
-      blocks:
-        - cidr: {{ ing_lb_cidr }}
-    ---
-    apiVersion: cilium.io/v2alpha1
-    kind: CiliumL2AnnouncementPolicy
-    metadata: {name: talu-ingress-l2}
-    spec:
-      interfaces:
-        - {{ ing_overlay_iface }}
-      loadBalancerIPs: true
-    EOF
-  when: "'no matches for kind' in (ing_apply.stderr | default('')) or ing_apply.rc | default(1) != 0"
-  register: ing_apply_alpha
-  changed_when: "'created' in ing_apply_alpha.stdout or 'configured' in ing_apply_alpha.stdout"
-  failed_when: ing_apply_alpha.rc != 0
+- name: Render the LB pool + L2 announcement
+  ansible.builtin.template:
+    src: cilium-lb.yaml.j2
+    dest: "{{ talos_gen_dir }}/cilium-lb.yaml"
+    mode: "0644"
+  vars:
+    cilium_lb_api: "{{ cilium_lb_crd.stdout | default('v2') | trim | default('v2', true) }}"
 
-- name: Verify — a smoke-test LoadBalancer Service gets an IP from the pool
+- name: Apply the LB pool + L2 announcement
+  ansible.builtin.command: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig apply -f {{ talos_gen_dir }}/cilium-lb.yaml"
+  register: ing_apply
+  changed_when: "'created' in ing_apply.stdout or 'configured' in ing_apply.stdout"
+
+- name: Smoke-test — a LoadBalancer Service gets an IP from the pool
   ansible.builtin.shell: |
-    {{ ing_k }} create ns lbtest --dry-run=client -o yaml | {{ ing_k }} apply -f - >/dev/null
-    cat <<'EOF' | {{ ing_k }} apply -f - >/dev/null
+    K="kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+    $K create ns lbtest --dry-run=client -o yaml | $K apply -f - >/dev/null
+    cat <<'YAML' | $K apply -f - >/dev/null
     apiVersion: v1
     kind: Service
     metadata: {name: lbsmoke, namespace: lbtest}
     spec:
       type: LoadBalancer
-      loadBalancerClass: io.cilium/l2-announcer
       ports: [{port: 80}]
       selector: {app: none}
-    EOF
+    YAML
+    IP=""
     for i in $(seq 1 15); do
-      IP=$({{ ing_k }} -n lbtest get svc lbsmoke -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+      IP=$($K -n lbtest get svc lbsmoke -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
       [ -n "$IP" ] && break; sleep 2
     done
-    echo "LB IP assigned: ${IP:-NONE}"
-    {{ ing_k }} delete ns lbtest --wait=false >/dev/null 2>&1
+    echo "LB-IP-ASSIGNED=${IP:-NONE}"
+    $K delete ns lbtest --wait=false >/dev/null 2>&1
   register: lb_smoke
   changed_when: false
 
 - name: Show
   ansible.builtin.debug:
-    msg: "Ingress LB-IPAM: pool {{ ing_lb_cidr }} on {{ ing_overlay_iface }} — {{ lb_smoke.stdout_lines | select('search','LB IP') | first }}"
+    msg: "Ingress LB-IPAM ({{ cilium_lb_crd.stdout | default('v2') }}): {{ lb_smoke.stdout_lines | select('search','LB-IP-ASSIGNED') | first }}"

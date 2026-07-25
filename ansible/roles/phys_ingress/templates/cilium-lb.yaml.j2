@@ -1,0 +1,18 @@
+# ANSIBLE MANAGED — talu phys ingress: Cilium LB-IPAM pool + L2 announcement.
+apiVersion: "cilium.io/{{ cilium_lb_api | default('v2') }}"
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: talu-ingress
+spec:
+  blocks:
+    - cidr: "{{ talos_ingress_lb_cidr | default('172.18.200.0/24') }}"
+---
+apiVersion: "cilium.io/{{ cilium_lb_api | default('v2') }}"
+kind: CiliumL2AnnouncementPolicy
+metadata:
+  name: talu-ingress-l2
+spec:
+  # Announce LB IPs via ARP on the Talos node's overlay interface.
+  interfaces:
+    - "{{ talos_node_overlay_iface | default('enp1s0') }}"
+  loadBalancerIPs: true
