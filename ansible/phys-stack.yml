@@ -10,5 +10,6 @@
   vars:
     talos_overlay_gateway: mirror     # inventory group holding the gateway host (compute1)
   roles:
-    - { role: phys_cilium, tags: [cilium, cni] }
-    - { role: phys_rook,   tags: [rook, storage] }
+    - { role: phys_cilium,   tags: [cilium, cni] }
+    - { role: phys_rook,     tags: [rook, storage] }
+    - { role: phys_kubevirt, tags: [kubevirt, virt] }

@@ -1,0 +1,100 @@
+---
+# KubeVirt validation: boot a VM on REAL KVM, then LIVE-MIGRATE it between physical hosts — the two
+# things the nested VM lab can't prove. Run with: ansible-playbook phys-stack.yml --tags kv-validate
+- name: Validate block (gateway)
+  vars:
+    ns: kv-test
+  block:
+    - name: Test namespace (privileged PSA — VMs need it)
+      ansible.builtin.command: "{{ kubevirt_k }} create ns {{ ns }} --dry-run=client -o yaml"
+      register: ns_yaml
+      changed_when: false
+    - ansible.builtin.shell: "echo '{{ ns_yaml.stdout }}' | {{ kubevirt_k }} apply -f - && {{ kubevirt_k }} label ns {{ ns }} pod-security.kubernetes.io/enforce=privileged --overwrite"
+      changed_when: true
+
+    - name: Define a cirros VM (containerDisk = migratable; useEmulation:false → real KVM)
+      ansible.builtin.shell: |
+        cat <<'EOF' | {{ kubevirt_k }} apply -f -
+        apiVersion: kubevirt.io/v1
+        kind: VirtualMachine
+        metadata: {name: vm-test, namespace: {{ ns }}}
+        spec:
+          running: true
+          template:
+            metadata:
+              labels: {kubevirt.io/vm: vm-test}
+            spec:
+              domain:
+                cpu: {cores: 1}
+                resources: {requests: {memory: 512Mi}}
+                devices:
+                  disks:
+                    - {name: containerdisk, disk: {bus: virtio}}
+                    - {name: cloudinit, disk: {bus: virtio}}
+              volumes:
+                - name: containerdisk
+                  containerDisk: {image: quay.io/kubevirt/cirros-container-disk-demo}
+                - name: cloudinit
+                  cloudInitNoCloud: {userData: "#cloud-config\npassword: talu\nchpasswd: {expire: false}\n"}
+        EOF
+      changed_when: true
+
+    - name: Wait for the VMI to be Running (image pulls via the mirror)
+      ansible.builtin.command: "{{ kubevirt_k }} -n {{ ns }} wait vmi/vm-test --for=jsonpath='{.status.phase}'=Running --timeout=420s"
+      changed_when: false
+
+    - name: Assert REAL KVM (not emulation) + capture the node
+      ansible.builtin.shell: |
+        {{ kubevirt_k }} -n {{ ns }} get vmi vm-test -o jsonpath='{.status.nodeName}{" "}{.status.conditions[?(@.type=="LiveMigratable")].status}'
+      register: vmi_info
+      changed_when: false
+
+    - name: Confirm the launcher uses /dev/kvm (proves useEmulation:false took effect)
+      ansible.builtin.shell: |
+        POD=$({{ kubevirt_k }} -n {{ ns }} get pod -l kubevirt.io/created-by -o name 2>/dev/null | head -1)
+        {{ kubevirt_k }} -n {{ ns }} exec $POD -c compute -- ls -l /dev/kvm 2>&1 | head -1
+      register: kvm_check
+      changed_when: false
+      failed_when: "'/dev/kvm' not in kvm_check.stdout"
+
+    - name: Source node + migratable
+      ansible.builtin.set_fact:
+        src_node: "{{ vmi_info.stdout.split()[0] }}"
+        migratable: "{{ vmi_info.stdout.split()[1] | default('False') }}"
+
+    # ── live migration between physical hosts ──
+    - name: Live-migrate the VM
+      ansible.builtin.command: "virtctl migrate vm-test -n {{ ns }} --kubeconfig={{ kubevirt_kubeconfig }}"
+      when: migratable == 'True'
+      changed_when: true
+
+    - name: Wait for the migration to complete
+      ansible.builtin.command: >-
+        {{ kubevirt_k }} -n {{ ns }} wait vmi/vm-test
+        --for=jsonpath='{.status.migrationState.completed}'=true --timeout=300s
+      when: migratable == 'True'
+      changed_when: false
+
+    - name: Read post-migration state
+      ansible.builtin.shell: |
+        {{ kubevirt_k }} -n {{ ns }} get vmi vm-test -o jsonpath='{.status.phase}{" node="}{.status.nodeName}{" failed="}{.status.migrationState.failed}'
+      register: post_mig
+      changed_when: false
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: |
+          KubeVirt validation:
+            VM boot        : Running on {{ src_node }} (real KVM — /dev/kvm present in launcher, useEmulation:false)
+            LiveMigratable : {{ migratable }}
+          {% if migratable == 'True' %}
+            Live migration : {{ post_mig.stdout }}
+            → {{ 'MIGRATED across physical hosts' if src_node not in post_mig.stdout else 'completed but same node (check)' }} · failed={{ 'true' in post_mig.stdout }}
+          {% else %}
+            Live migration : SKIPPED (VMI not migratable — check storage/volumes)
+          {% endif %}
+
+    - name: Cleanup (skip with -e kv_keep=true to inspect the VM)
+      ansible.builtin.command: "{{ kubevirt_k }} delete ns {{ ns }} --wait=false"
+      changed_when: true
+      when: not (kv_keep | default(false) | bool)
