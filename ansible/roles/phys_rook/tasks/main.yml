@@ -7,9 +7,20 @@
     _cp_ips: "{{ talos_nodes | selectattr('role','equalto','controlplane') | map(attribute='ip') | list }}"
 
   # ── make control planes schedulable so OSDs/mons can spread across ≥3 hosts (host failure domain) ──
+  # NB: the --endpoints/--nodes FLAGS take a COMMA-joined list (unlike the `config endpoint`
+  # subcommand which takes separate positional args). Space-separated args get mis-parsed as a
+  # subcommand ("unknown command").
 - name: Allow scheduling on control planes (Talos config patch, no reboot)
   ansible.builtin.command:
-    argv: "{{ ['talosctl', '--talosconfig=' + talos_gen_dir + '/talosconfig', '--endpoints'] + _cp_ips + ['--nodes'] + _cp_ips + ['patch', 'mc', '--mode=no-reboot', '--patch', '[{\"op\":\"add\",\"path\":\"/cluster/allowSchedulingOnControlPlanes\",\"value\":true}]'] }}"
+    argv:
+      - talosctl
+      - "--talosconfig={{ talos_gen_dir }}/talosconfig"
+      - "--endpoints={{ _cp_ips | join(',') }}"
+      - "--nodes={{ _cp_ips | join(',') }}"
+      - patch
+      - mc
+      - "--mode=no-reboot"
+      - "--patch=[{\"op\":\"add\",\"path\":\"/cluster/allowSchedulingOnControlPlanes\",\"value\":true}]"
   register: sched_patch
   changed_when: "'patched' in sched_patch.stdout or sched_patch.rc == 0"
   failed_when: sched_patch.rc != 0 and 'no changes' not in (sched_patch.stderr | default(''))
