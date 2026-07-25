@@ -1,0 +1,16 @@
+# ANSIBLE MANAGED — talu roles/phys_vm_network
+[Unit]
+Description=Talu Talos-VM VXLAN overlay ({{ talos_overlay.bridge }} / {{ talos_overlay.vxlan_if }})
+After=network-online.target
+Wants=network-online.target
+# bond0 must be up first (the vxlan underlay); network-online covers it.
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/sbin/talu-overlay-net.sh
+ExecStop=-/usr/sbin/ip link del {{ talos_overlay.vxlan_if }}
+ExecStop=-/usr/sbin/ip link del {{ talos_overlay.bridge }}
+
+[Install]
+WantedBy=multi-user.target

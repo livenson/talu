@@ -1,0 +1,26 @@
+# ANSIBLE MANAGED — talu roles/phys_vm_network. DHCP + DNS for the Talos VM overlay.
+# Bound to the overlay bridge only; does NOT touch the host's own resolv.conf or LAN.
+interface={{ talos_overlay.bridge }}
+bind-interfaces
+except-interface=lo
+listen-address={{ talos_overlay.gateway_ip }}
+
+# DNS: forward to the fast internal resolvers (same ones Phase 0 pinned).
+no-resolv
+{% for r in talos_overlay.upstream_dns %}
+server={{ r }}
+{% endfor %}
+domain=talu.local
+local=/talu.local/
+
+# DHCP: dynamic pool for maintenance-mode boots; static leases pin each Talos node by MAC so its
+# address is stable even before any machineconfig is applied.
+dhcp-range={{ talos_overlay.dhcp_range }}
+dhcp-option=option:router,{{ talos_overlay.gateway_ip }}
+dhcp-option=option:dns-server,{{ talos_overlay.gateway_ip }}
+dhcp-option=option:mtu,{{ talos_overlay.mtu }}
+{% for n in talos_nodes %}
+dhcp-host={{ n.mac }},{{ n.ip }},{{ n.name }}
+{% endfor %}
+
+log-dhcp

@@ -1,0 +1,132 @@
+---
+# Host-to-host VXLAN overlay for the Talos VM network + DHCP/DNS + NAT on the gateway host.
+# Reversible: `systemctl stop talu-overlay-net` deletes both ifaces; nothing touches bond0/VLANs.
+
+- name: Overlay bring-up script
+  become: true
+  ansible.builtin.template:
+    src: talu-overlay-net.sh.j2
+    dest: /usr/local/sbin/talu-overlay-net.sh
+    mode: "0755"
+  register: overlay_script
+
+- name: Overlay systemd unit
+  become: true
+  ansible.builtin.template:
+    src: talu-overlay-net.service.j2
+    dest: /etc/systemd/system/talu-overlay-net.service
+    mode: "0644"
+  register: overlay_unit
+
+- name: Reload systemd
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: overlay_script.changed or overlay_unit.changed
+
+- name: Enable + (re)start the overlay
+  become: true
+  ansible.builtin.systemd:
+    name: talu-overlay-net.service
+    enabled: true
+    state: "{{ 'restarted' if (overlay_script.changed or overlay_unit.changed) else 'started' }}"
+
+# ── firewalld ────────────────────────────────────────────────────────────────────────────────
+# VXLAN travels host→host as UDP/4789 on bond0 (public zone, which only allows ssh) — open it from
+# the underlay subnet on every host, or the overlay silently blackholes.
+- name: Allow VXLAN (UDP 4789) from the underlay LAN
+  become: true
+  ansible.posix.firewalld:
+    rich_rule: "rule family=ipv4 source address=10.8.0.0/16 port port=4789 protocol=udp accept"
+    permanent: true
+    immediate: true
+    state: enabled
+
+# The overlay bridge is fully trusted (VM↔VM and VM↔host services incl. the registry mirror).
+- name: Put the overlay bridge in the trusted zone
+  become: true
+  ansible.posix.firewalld:
+    zone: trusted
+    interface: "{{ talos_overlay.bridge }}"
+    permanent: true
+    immediate: true
+    state: enabled
+
+# ── gateway host only: NAT egress + DHCP/DNS ──────────────────────────────────────────────────
+- name: Gateway — masquerade the overlay subnet to the WAN
+  become: true
+  ansible.posix.firewalld:
+    masquerade: true
+    zone: public
+    permanent: true
+    immediate: true
+    state: enabled
+  when: inventory_hostname == talos_overlay.gateway_host
+
+- name: Gateway — install dnsmasq
+  become: true
+  ansible.builtin.dnf:
+    name: dnsmasq
+    state: present
+  when: inventory_hostname == talos_overlay.gateway_host
+
+- name: Gateway — dnsmasq config for the overlay
+  become: true
+  ansible.builtin.template:
+    src: talu-dnsmasq.conf.j2
+    dest: /etc/dnsmasq.d/talu-overlay.conf
+    mode: "0644"
+  register: dnsmasq_conf
+  when: inventory_hostname == talos_overlay.gateway_host
+
+# dnsmasq must start AFTER the overlay bridge has its IP, else bind-interfaces fails.
+- name: Gateway — enable + (re)start dnsmasq
+  become: true
+  ansible.builtin.systemd:
+    name: dnsmasq
+    enabled: true
+    state: "{{ 'restarted' if dnsmasq_conf.changed else 'started' }}"
+  when: inventory_hostname == talos_overlay.gateway_host
+
+# ── validation ────────────────────────────────────────────────────────────────────────────────
+- name: Verify the bridge + vxlan exist and are up
+  ansible.builtin.command: "ip -br link show {{ item }}"
+  loop:
+    - "{{ talos_overlay.bridge }}"
+    - "{{ talos_overlay.vxlan_if }}"
+  register: overlay_links
+  changed_when: false
+  failed_when: "'UP' not in overlay_links.stdout and 'UNKNOWN' not in overlay_links.stdout"
+
+- name: Verify gateway has the overlay IP
+  ansible.builtin.command: "ip -4 -br addr show {{ talos_overlay.bridge }}"
+  register: overlay_gw_ip
+  changed_when: false
+  failed_when: talos_overlay.gateway_ip not in overlay_gw_ip.stdout
+  when: inventory_hostname == talos_overlay.gateway_host
+
+# ── libvirt network bound to the overlay bridge (so virt-install can `--network network=talu`) ──
+- name: List defined libvirt networks
+  become: true
+  ansible.builtin.command: virsh net-list --all --name
+  register: virsh_nets
+  changed_when: false
+
+- name: Write the talu network XML
+  become: true
+  ansible.builtin.template:
+    src: libvirt-net-talu.xml.j2
+    dest: /tmp/libvirt-net-talu.xml
+    mode: "0644"
+  when: "'talu' not in virsh_nets.stdout.split()"
+
+- name: virsh net-define + autostart + start
+  become: true
+  ansible.builtin.shell: |
+    set -e
+    virsh net-define /tmp/libvirt-net-talu.xml
+    virsh net-autostart talu
+    virsh net-start talu
+  when: "'talu' not in virsh_nets.stdout.split()"
+  register: net_define
+  changed_when: "'defined from' in net_define.stdout or 'started' in net_define.stdout"

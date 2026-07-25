@@ -1,0 +1,17 @@
+---
+# Talu physical lab — nested Talos cluster build (reversible; Rocky stays underneath).
+#
+#   ansible-playbook phys-cluster.yml --tags libvirt,network   # host virt + overlay net only
+#   ansible-playbook phys-cluster.yml                           # full: + Talos VMs + bootstrap
+#
+# Layers, each validated before the next:
+#   1. phys_libvirt     — libvirt/qemu-kvm on all 4 hosts (non-destructive)
+#   2. phys_vm_network  — host-to-host VXLAN overlay (br-talu), DHCP/DNS + NAT on the gateway
+#   3. phys_talos_vms   — boot Talos VMs, apply machineconfig (+ registry-mirror patch), bootstrap
+- name: Talu physical lab — nested Talos cluster
+  hosts: phys
+  gather_facts: true
+  roles:
+    - { role: phys_libvirt,    tags: [libvirt] }
+    - { role: phys_vm_network, tags: [network] }
+    - { role: phys_talos_vms,  tags: [vms, talos] }

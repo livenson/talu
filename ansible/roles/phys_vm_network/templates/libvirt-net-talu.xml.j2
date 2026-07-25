@@ -1,0 +1,8 @@
+<!-- ANSIBLE MANAGED — talu roles/phys_vm_network. libvirt network bound to the overlay bridge.
+     forward mode=bridge: libvirt attaches guest NICs to {{ talos_overlay.bridge }} and does NOT
+     run its own DHCP/NAT (dnsmasq on the gateway host owns that). -->
+<network>
+  <name>talu</name>
+  <forward mode="bridge"/>
+  <bridge name="{{ talos_overlay.bridge }}"/>
+</network>

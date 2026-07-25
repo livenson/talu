@@ -1,0 +1,6 @@
+---
+# phys_talos_vms — built after the overlay network is validated. Placeholder so phys-cluster.yml
+# parses while running only --tags libvirt,network.
+- name: phys_talos_vms not yet implemented
+  ansible.builtin.debug:
+    msg: "phys_talos_vms is a stub; run with --tags libvirt,network for now."

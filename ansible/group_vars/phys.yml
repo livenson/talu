@@ -9,6 +9,35 @@ ansible_python_interpreter: /usr/bin/python3
 
 # Real hardware: no emulation, jumbo frames, Tetragon available.
 kubevirt_use_emulation: false
-cilium_mtu: 8950            # 9000 - 50B VXLAN. Anything egressing to the internet must MSS-clamp:
-                            # the uplink path is 1500 and the gateway drops ICMP (no PMTU signal).
+cilium_mtu: 8850            # overlay MTU (8950) - 50 for Cilium's own VXLAN inside the guests.
 primary_iface_mtu: 9000     # documented, not applied — the role never touches MTU.
+
+# ── Nested Talos cluster topology ───────────────────────────────────────────────────────────
+# The Talos nodes are libvirt VMs spread across the 4 physical hosts, joined by a host-to-host
+# VXLAN overlay (so no provider IP coordination is needed — the VM subnet is private and lives
+# only inside the overlay). compute1 is the overlay gateway + DHCP/DNS + registry mirror + the
+# 80/443 ingress host.
+talos_overlay:
+  bridge: br-talu
+  vxlan_if: vxlan-talu
+  vni: 4711
+  udp_port: 4789
+  mtu: 8950                 # host LAN 9000 − 50B VXLAN
+  subnet: "172.18.0.0/16"
+  gateway_ip: "172.18.0.1"  # compute1's br-talu address; VM default route + DNS + mirror endpoint
+  gateway_host: compute1
+  dhcp_range: "172.18.9.100,172.18.9.200,12h"
+  upstream_dns: [10.8.0.10, 10.3.0.10]
+
+talos_vip: "172.18.0.10"    # Talos shared control-plane VIP = the Kubernetes API endpoint
+talos_cluster_name: talu-phys
+talos_version: "v1.11.2"    # matches all.yml; the metal disk image + installer tag
+kubernetes_version: "v1.34.1"
+
+# Control planes on the 3 healthy-bond hosts (1/2 also have more RAM); worker on compute4 (its
+# bond leg is dead — keep etcd off it). MACs are fixed so DHCP hands out stable IPs.
+talos_nodes:
+  - { name: talos-cp1, role: controlplane, host: compute1, ip: "172.18.1.11", mac: "52:54:00:7a:10:11", vcpu: 8, ram_mib: 16384, disk_gb: 60, ceph_gb: 120 }
+  - { name: talos-cp2, role: controlplane, host: compute2, ip: "172.18.1.12", mac: "52:54:00:7a:10:12", vcpu: 8, ram_mib: 16384, disk_gb: 60, ceph_gb: 120 }
+  - { name: talos-cp3, role: controlplane, host: compute3, ip: "172.18.1.13", mac: "52:54:00:7a:10:13", vcpu: 8, ram_mib: 16384, disk_gb: 60, ceph_gb: 120 }
+  - { name: talos-w1,  role: worker,       host: compute4, ip: "172.18.1.21", mac: "52:54:00:7a:10:21", vcpu: 8, ram_mib: 16384, disk_gb: 60, ceph_gb: 120 }

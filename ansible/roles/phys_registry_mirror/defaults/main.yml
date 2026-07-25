@@ -10,11 +10,12 @@ mirror_data_root: /var/lib/registry-mirror
 mirror_write_patch: true
 mirror_talos_patch_path: /home/cloud-user/talu/talos-registry-mirror.patch.yaml
 mirror_registry_image: "docker.io/library/registry:2"
-mirror_allowed_sources:                   # LAN ranges permitted to reach the cache ports
+mirror_allowed_sources:                   # LAN + VM-overlay ranges permitted to reach the caches
   - 10.8.0.0/16
   - 10.5.0.0/16
   - 10.2.0.0/16
   - 10.3.0.0/16
+  - 172.18.0.0/16                         # the Talos VM overlay (phys_vm_network)
 
 # One cache per upstream. Port → REGISTRY_PROXY_REMOTEURL. Ports are stable so the Talos mirror
 # machineconfig can reference them.

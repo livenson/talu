@@ -1,0 +1,45 @@
+---
+- name: Install libvirt + qemu-kvm stack
+  become: true
+  ansible.builtin.dnf:
+    name: "{{ libvirt_packages }}"
+    state: present
+
+- name: Enable libvirtd (monolithic daemon — simplest; modular sockets also work)
+  become: true
+  ansible.builtin.systemd:
+    name: libvirtd
+    enabled: true
+    state: started
+
+- name: Add {{ libvirt_admin_user }} to the libvirt group
+  become: true
+  ansible.builtin.user:
+    name: "{{ libvirt_admin_user }}"
+    groups: libvirt
+    append: true
+
+- name: Verify KVM acceleration is actually available (not TCG)
+  become: true
+  ansible.builtin.command: virsh domcapabilities
+  register: libvirt_domcaps
+  changed_when: false
+
+- name: Assert hardware virtualization (domcaps reports kvm)
+  ansible.builtin.assert:
+    that: "'<domain>kvm</domain>' in libvirt_domcaps.stdout or 'domain=\"kvm\"' in libvirt_domcaps.stdout or 'kvm' in libvirt_domcaps.stdout"
+    fail_msg: "libvirt reports no KVM acceleration — nested Talos VMs would run under TCG. Check /dev/kvm and kvm_intel."
+    success_msg: "KVM acceleration available"
+
+- name: Remove libvirt's default NAT network (we use our own overlay bridge)
+  become: true
+  ansible.builtin.command: "virsh net-undefine default"
+  register: libvirt_undef
+  changed_when: "'has been undefined' in libvirt_undef.stdout"
+  failed_when: false
+
+- name: Destroy the default network if running
+  become: true
+  ansible.builtin.command: "virsh net-destroy default"
+  changed_when: "'destroyed' in libvirt_undef.stdout | default('')"
+  failed_when: false

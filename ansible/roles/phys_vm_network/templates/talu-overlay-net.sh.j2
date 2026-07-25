@@ -1,0 +1,46 @@
+#!/bin/bash
+# ANSIBLE MANAGED — talu roles/phys_vm_network. Idempotent VXLAN overlay for the Talos VM network.
+# Creates {{ talos_overlay.bridge }} + {{ talos_overlay.vxlan_if }} (VNI {{ talos_overlay.vni }})
+# over bond0, with head-end replication to the peer hosts. Reversible: `ip link del` both ifaces.
+set -euo pipefail
+
+BR={{ talos_overlay.bridge }}
+VX={{ talos_overlay.vxlan_if }}
+VNI={{ talos_overlay.vni }}
+DPORT={{ talos_overlay.udp_port }}
+MTU={{ talos_overlay.mtu }}
+LOCAL={{ phys_internal_ip }}
+PEERS=({% for h in groups['phys'] if hostvars[h].phys_internal_ip != phys_internal_ip %}{{ hostvars[h].phys_internal_ip }} {% endfor %})
+
+# 1) bridge
+if ! ip link show "$BR" &>/dev/null; then
+  ip link add "$BR" type bridge
+fi
+ip link set "$BR" mtu "$MTU"
+ip link set "$BR" up
+
+# 2) vxlan (recreate only if missing; params are immutable once created)
+if ! ip link show "$VX" &>/dev/null; then
+  ip link add "$VX" type vxlan id "$VNI" local "$LOCAL" dstport "$DPORT" nolearning
+  ip link set "$VX" master "$BR"
+fi
+ip link set "$VX" mtu "$MTU"
+ip link set "$VX" up
+
+# 3) head-end replication: one all-zeros FDB entry per peer → BUM traffic is unicast-flooded to
+#    each peer (works on fabrics without multicast, which we can't assume here).
+#    `self` targets the vxlan device's own FDB (not the master bridge's, which rejects `dst`);
+#    multiple all-zeros entries require `append`, so reset-then-append keeps it idempotent.
+while read -r d; do
+  [ -n "$d" ] && bridge fdb del 00:00:00:00:00:00 dev "$VX" dst "$d" self 2>/dev/null || true
+done < <(bridge fdb show dev "$VX" | awk '$1=="00:00:00:00:00:00"{print $3}')
+for p in "${PEERS[@]}"; do
+  bridge fdb append 00:00:00:00:00:00 dev "$VX" dst "$p" self permanent
+done
+
+{% if inventory_hostname == talos_overlay.gateway_host %}
+# 4) gateway host only: address on the bridge = VM default route / DNS / mirror endpoint
+ip addr replace {{ talos_overlay.gateway_ip }}/{{ talos_overlay.subnet.split('/')[1] }} dev "$BR"
+{% endif %}
+
+echo "overlay up: $BR mtu $MTU, $VX vni $VNI local $LOCAL peers ${PEERS[*]}"
