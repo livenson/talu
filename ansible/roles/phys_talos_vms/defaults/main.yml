@@ -7,3 +7,8 @@ talos_base_image: "{{ talos_image_dir }}/talos-{{ talos_version }}-metal-amd64.r
 
 talosctl_url: "https://github.com/siderolabs/talos/releases/download/{{ talos_version }}/talosctl-linux-amd64"
 
+# k8s API + Talos endpoint. VIP floats across the control planes.
+talos_endpoint: "https://{{ talos_vip }}:6443"
+talos_install_disk: /dev/vda        # the VM's primary virtio disk (boot); /dev/vdb is the Ceph OSD
+libvirt_network: talu               # the bridge network defined by phys_vm_network
+

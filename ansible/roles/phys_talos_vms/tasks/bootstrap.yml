@@ -4,12 +4,15 @@
 - name: Bootstrap block (gateway only)
   when: inventory_hostname == talos_overlay.gateway_host
   block:
-    - name: Install talosctl + kubectl on the gateway
+    # force:true so a version bump actually re-downloads — otherwise an old talosctl/kubectl from a
+    # prior build lingers and (for talosctl) gen-config would pick the wrong default k8s version.
+    - name: Install talosctl + kubectl on the gateway (pinned versions)
       become: true
       ansible.builtin.get_url:
         url: "{{ item.url }}"
         dest: "{{ item.dest }}"
         mode: "0755"
+        force: true
       loop:
         - { url: "{{ talosctl_url }}", dest: /usr/local/bin/talosctl }
         - { url: "https://dl.k8s.io/release/{{ kubernetes_version }}/bin/linux/amd64/kubectl", dest: /usr/local/bin/kubectl }
@@ -52,6 +55,7 @@
           - config
           - "{{ talos_cluster_name }}"
           - "{{ talos_endpoint }}"
+          - "--kubernetes-version={{ kubernetes_version | regex_replace('^v', '') }}"
           - "--install-disk={{ talos_install_disk }}"
           - "--config-patch=@{{ talos_gen_dir }}/common-patch.yaml"
           - "--config-patch=@{{ talos_registry_patch }}"
@@ -76,18 +80,19 @@
       changed_when: true
 
     # apply-config --insecure only works while a node is in maintenance mode. On a re-run a node is
-    # already configured (secured mTLS on :50000), so probe first and only (re)configure the nodes
-    # that still answer the *insecure* maintenance API — robust regardless of error wording.
-    - name: Probe which nodes are still in maintenance mode
+    # already configured, so its SECURED API answers `version` with the cluster talosconfig. Probe
+    # that (a valid command on every Talos version) and apply only to nodes where it fails — i.e.
+    # nodes still in maintenance. Robust regardless of talosctl version / error wording.
+    - name: Probe which nodes are already configured (secured API answers)
       ansible.builtin.command:
-        argv: ["talosctl", "--nodes={{ item.ip }}", "--endpoints={{ item.ip }}", "--insecure", "get", "machinestatus"]
+        argv: ["talosctl", "--talosconfig={{ talos_gen_dir }}/talosconfig", "--endpoints={{ item.ip }}", "--nodes={{ item.ip }}", "version"]
       loop: "{{ talos_nodes }}"
       loop_control: { label: "{{ item.name }} ({{ item.ip }})" }
-      register: maint_probe
+      register: configured_probe
       changed_when: false
       failed_when: false
 
-    - name: Apply machineconfig to nodes in maintenance mode
+    - name: Apply machineconfig to nodes still in maintenance mode
       ansible.builtin.command:
         argv:
           - talosctl
@@ -95,9 +100,9 @@
           - "--insecure"
           - "--nodes={{ item.item.ip }}"
           - "--file={{ talos_gen_dir }}/{{ item.item.name }}.yaml"
-      loop: "{{ maint_probe.results }}"
+      loop: "{{ configured_probe.results }}"
       loop_control: { label: "{{ item.item.name }} ({{ item.item.ip }})" }
-      when: item.rc == 0          # rc==0 → insecure API answered → still in maintenance
+      when: item.rc != 0          # secured version failed → node NOT yet configured → apply
       register: applyc
       changed_when: applyc.rc == 0
 
