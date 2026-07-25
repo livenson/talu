@@ -73,6 +73,30 @@
     state: enabled
   when: inventory_hostname == talos_overlay.gateway_host
 
+# ── ingress host (compute2): DNAT the provider-forwarded public :80/:443 into the cluster's Cilium
+# LoadBalancer IP on the overlay (talos_ingress_lb_ip). masquerade so the return path comes back here.
+- name: Ingress — masquerade (return path for the DNAT'd traffic)
+  become: true
+  ansible.posix.firewalld:
+    masquerade: true
+    zone: public
+    permanent: true
+    immediate: true
+    state: enabled
+  when: inventory_hostname == talos_overlay.ingress_host
+
+- name: Ingress — forward public :80/:443 to the cluster LB IP
+  become: true
+  ansible.posix.firewalld:
+    port_forward:
+      - { port: "{{ item }}", proto: tcp, toaddr: "{{ talos_ingress_lb_ip }}", toport: "{{ item }}" }
+    zone: public
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: ["80", "443"]
+  when: inventory_hostname == talos_overlay.ingress_host
+
 - name: Gateway — install dnsmasq
   become: true
   ansible.builtin.dnf:
