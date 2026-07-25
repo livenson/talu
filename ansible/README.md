@@ -49,3 +49,73 @@ server it stands up).
 RBD block storage (unreliable on the nested node — CephFS is the storage path here; production on real
 nodes/KVM uses Rook RBD). Tenant *workloads* are now covered by the `tenancy` role (Flux renders a
 HelmRelease per tenant file); the sample tenants live in `environments/<env>/tenants/`.
+
+---
+
+# Physical lab — `phys-phase0.yml`
+
+A second, independent target: **KVM-capable bare metal** (inventory group `phys`). Everything above
+is the no-KVM VM lab and does not apply here — in particular `group_vars/all.yml` sets
+`primary_iface_mtu: 1400`, which must **never** be applied to these hosts (their LAN is jumbo 9000,
+and lowering MTU on a host with no console is the lab-notes #1 failure mode with no recovery path).
+`group_vars/phys.yml` holds the hardware-side overrides; the role never touches MTU.
+
+This is **Phase 0 only** — host prerequisites, so that a cluster built later isn't debugging the
+host. Talos/cluster/storage roles for hardware come in Phase 1.
+
+```sh
+ansible-playbook phys-phase0.yml                      # apply (no reboot)
+ansible-playbook phys-phase0.yml --check --diff       # dry run
+ansible-playbook phys-phase0.yml --tags verify        # readiness check only, changes nothing
+ansible-playbook phys-phase0.yml -e phys_reboot=true  # apply + reboot, one host at a time
+```
+
+`serial: 1` — never both sleds mid-change, never both rebooting.
+
+| What `phys_host_prep` fixes | Why |
+|---|---|
+| **chrony** → reachable sources (`10.8.0.10`, `10.3.0.10`, pool fallback) and blocks until synced | The image ships `server 10.0.7.100`, unreachable from both sleds (`Reach 0`, ref time = epoch). etcd, Ceph and every TLS/OIDC flow need a synced clock |
+| **resolv.conf** owned by ansible (NM `dns=none`), internal resolvers first | `getaddrinfo()` stalled a flat 5.02 s per call with 8.8.8.8 first; the internal resolvers answer A **and** AAAA in <10 ms |
+| **Stock kernel** as the grub default | Both sleds boot `…x86_64+debug`; a debug build invalidates every perf number, which is the reason for this hardware. The stock kernel is already installed (grubby index 1) — this is a default-entry change, not an install |
+| **`intel_iommu=on iommu=pt`** on all entries + `/etc/default/grub` | 0 IOMMU groups today → no VFIO/SR-IOV passthrough into VMs (the NICs expose 63 VFs/port) |
+| **tuned** `virtual-host` | KVM-host profile; Phase 1 runs Talos as KVM guests |
+| `/etc/hosts` peer entries, base tools (incl. `ipmitool` — in-band KCS works even though the BMC LAN doesn't) | groundwork for Phase 1 |
+
+**Reported, not fixed** (provider-owned): egress is filtered asymmetrically per host — one sled
+reaches `registry.k8s.io` 3/3 while the other times out 3/3. The verify step prints a per-endpoint
+reachability line and warns; set `phys_require_registry_egress=true` to make it fatal. The fix is a
+provider change or a pull-through mirror (zot is already in the stack).
+
+**Not in scope**: disk layout (blocked on the extra hardware), firewalld/SELinux (Phase 1 owns the
+port list), MTU.
+
+> ⚠ **Reboot has no safety net.** The BMC network (`10.9.0.0/16`) is not reachable from these hosts
+> and only the two forwarded SSH ports are open inbound, so a host that fails to boot needs the
+> provider (they run MAAS — note the `maas` BMC user). `phys_reboot` defaults to `false`; the role
+> verifies the stock **and** rescue grub entries exist before it changes the default, and reports a
+> pending reboot on every subsequent run until the host actually comes up on the new kernel.
+
+---
+
+# Physical lab — pull-through registry mirror (`phys-registry-mirror.yml`)
+
+The physical lab's WAN egress is **flaky and time-varying**: every host intermittently times out to
+`registry.k8s.io` / `ghcr.io` / `quay.io` / `docker.io` / `factory.talos.dev`, but retries converge
+(measured 4–8 / 8 first-try per registry). Rather than fight it per node, the mirror caches once and
+serves the cluster over the reliable 9000 LAN.
+
+```sh
+ansible-playbook phys-registry-mirror.yml
+```
+
+`phys_registry_mirror` runs on the `[mirror]` host (compute1) and stands up one stock `registry:2`
+pull-through cache per upstream (podman quadlets, ports 5000–5006), cache on local disk (407 GB
+free), firewalld-restricted to the LAN ranges. It pre-pulls `registry:2` with retry (the image
+itself lives on flaky docker.io), proves each cache with a live manifest pull, and writes a Talos
+machineconfig patch (`~/talu/talos-registry-mirror.patch.yaml`) mapping every registry host to its
+cache endpoint — apply it to each node so containerd pulls via the LAN. Validated: a cross-node pull
+caches on first hit (~3.5 s WAN) and serves the second in ~0.2 s.
+
+Provider-side items this does **not** fix (tracked as tickets): the egress filtering itself, the
+missing `:25` forward for compute4, and compute4's dead bond leg (`ens20f0` NO-CARRIER — a fibre/SFP
+fault, not software-fixable).

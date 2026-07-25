@@ -2,3 +2,18 @@
 # Mirrors env.sh. The example uses the RFC 5737 documentation IP; replace with your VM.
 [lab]
 talu-lab ansible_host=203.0.113.10 ansible_user=rocky
+
+# Physical lab (KVM-capable bare metal). Two hosts may share one NAT'd address on different
+# ports; phys_internal_ip is the address on the private LAN the nodes talk to each other over.
+# Hosts may share one NAT'd address on different forwarded ports. A host with no forwarded port
+# (compute4 here) is reached over ProxyJump via a sibling that does. phys_internal_ip is the
+# address the nodes use to talk to each other on the private LAN.
+[phys]
+compute1 ansible_host=198.51.100.10 ansible_port=22 phys_internal_ip=10.8.1.101
+compute2 ansible_host=198.51.100.10 ansible_port=23 phys_internal_ip=10.8.1.102
+compute3 ansible_host=198.51.100.10 ansible_port=24 phys_internal_ip=10.8.1.103
+compute4 ansible_host=10.8.1.104     ansible_port=22 phys_internal_ip=10.8.1.104 ansible_ssh_common_args='-o ProxyJump=cloud-user@198.51.100.10:24'
+
+# The pull-through registry mirror runs on compute1 (most RAM, healthy bond, most free disk).
+[mirror]
+compute1

@@ -1,0 +1,131 @@
+---
+# Deploy the pull-through registry caches on the mirror host. Non-destructive; podman quadlets.
+
+- name: Install podman
+  become: true
+  ansible.builtin.dnf:
+    name: podman
+    state: present
+
+- name: Cache data directories (one per upstream)
+  become: true
+  ansible.builtin.file:
+    path: "{{ mirror_data_root }}/{{ item.name }}"
+    state: directory
+    mode: "0711"
+  loop: "{{ mirror_upstreams }}"
+  loop_control: { label: "{{ item.name }}" }
+
+# The registry:2 image lives on docker.io — one of the flaky upstreams. Pre-pull with retry so
+# the quadlets start clean; retries converge (measured 5/8 first-try, so 6 tries is ample).
+- name: Pre-pull the registry image (retry through flaky egress)
+  become: true
+  ansible.builtin.command: "podman pull --retry 6 --retry-delay 5s {{ mirror_registry_image }}"
+  register: mirror_pull
+  changed_when: "'Writing manifest' in mirror_pull.stdout or 'Storing signatures' in mirror_pull.stderr"
+  retries: 3
+  delay: 10
+  until: mirror_pull.rc == 0
+
+- name: Quadlet unit per upstream cache
+  become: true
+  ansible.builtin.template:
+    src: registry.container.j2
+    dest: "/etc/containers/systemd/registry-{{ item.name }}.container"
+    mode: "0644"
+  loop: "{{ mirror_upstreams }}"
+  loop_control: { label: "{{ item.name }} :{{ item.port }}" }
+  register: mirror_quadlets
+
+- name: Reload systemd so quadlets generate their services
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: mirror_quadlets.changed
+
+- name: Start + enable each cache
+  become: true
+  ansible.builtin.systemd:
+    name: "registry-{{ item.name }}.service"
+    state: started
+    enabled: false          # quadlet [Install] handles enablement; state:started is what we assert
+  loop: "{{ mirror_upstreams }}"
+  loop_control: { label: "{{ item.name }}" }
+
+- name: Open cache ports to the LAN only (firewalld rich rules)
+  become: true
+  ansible.posix.firewalld:
+    rich_rule: "rule family=ipv4 source address={{ item.0 }} port port={{ item.1.port }} protocol=tcp accept"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ mirror_allowed_sources | product(mirror_upstreams) | list }}"
+  loop_control: { label: "{{ item.1.name }}:{{ item.1.port }} from {{ item.0 }}" }
+
+- name: Wait for each cache to answer /v2/
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/v2/"
+    status_code: [200, 401]
+  loop: "{{ mirror_upstreams }}"
+  loop_control: { label: "{{ item.name }}" }
+  register: mirror_health
+  retries: 12
+  delay: 5
+  until: mirror_health is not failed
+
+- name: Functional proof — pull a manifest through each cache that has a well-known small image
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/v2/{{ item.repo }}/manifests/{{ item.tag }}"
+    headers:
+      Accept: "application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json"
+    status_code: [200]
+  loop:
+    - { port: 5003, repo: "pause", tag: "3.10", name: "registry.k8s.io/pause" }
+    - { port: 5000, repo: "library/busybox", tag: "latest", name: "docker.io/busybox" }
+  loop_control: { label: "{{ item.name }}" }
+  register: mirror_proof
+  retries: 4
+  delay: 8
+  until: mirror_proof is not failed
+  failed_when: false      # a flaky first pull is a warning, not a hard failure — report below
+
+- name: Report mirror status
+  ansible.builtin.debug:
+    msg: |
+      Pull-through mirror on {{ inventory_hostname }} ({{ phys_internal_ip }}):
+      {% for u in mirror_upstreams %}
+        :{{ u.port }}  {{ u.remote }}
+      {% endfor %}
+      functional-pull proof:
+      {% for r in mirror_proof.results %}
+        {{ r.item.name }} → {{ 'OK (cached through the mirror)' if (r.status | default(0)) == 200 else 'first-pull not yet through — upstream egress flaky, retry will cache it' }}
+      {% endfor %}
+      Talos machineconfig patch written to: {{ mirror_talos_patch_path }}
+
+- name: Ensure the patch output directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ mirror_talos_patch_path | dirname }}"
+    state: directory
+    owner: cloud-user
+    mode: "0755"
+  when: mirror_write_patch | bool
+
+- name: Write the Talos registry-mirror machineconfig patch
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ mirror_talos_patch_path }}"
+    owner: cloud-user
+    mode: "0644"
+    content: |
+      # ANSIBLE MANAGED — talu phys registry mirror. Apply to every Talos node
+      # (talosctl machineconfig patch / --config-patch) so containerd pulls via the LAN cache.
+      machine:
+        registries:
+          mirrors:
+      {% for host, port in mirror_talos_map.items() %}
+            {{ host }}:
+              endpoints:
+                - http://{{ phys_internal_ip }}:{{ port }}
+      {% endfor %}
+  when: mirror_write_patch | bool

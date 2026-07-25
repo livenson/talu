@@ -4,3 +4,5 @@
 collections:
   - name: kubernetes.core        # cilium role uses kubernetes.core.helm_repository
     version: ">=3.0.0"
+  - name: ansible.posix         # phys_registry_mirror uses ansible.posix.firewalld
+    version: ">=1.5.0"

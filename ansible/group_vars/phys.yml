@@ -1,0 +1,14 @@
+---
+# Physical lab (KVM-capable bare metal) — overrides for the `phys` group.
+# group_vars/all.yml is written for the no-KVM VM lab; nothing there applies to these hosts, and
+# in particular `primary_iface_mtu: 1400` must NEVER be applied here (the LAN is jumbo 9000 and
+# lowering it would be the lab-notes #1 failure mode on hardware with no console).
+
+ansible_user: cloud-user
+ansible_python_interpreter: /usr/bin/python3
+
+# Real hardware: no emulation, jumbo frames, Tetragon available.
+kubevirt_use_emulation: false
+cilium_mtu: 8950            # 9000 - 50B VXLAN. Anything egressing to the internet must MSS-clamp:
+                            # the uplink path is 1500 and the gateway drops ICMP (no PMTU signal).
+primary_iface_mtu: 9000     # documented, not applied — the role never touches MTU.

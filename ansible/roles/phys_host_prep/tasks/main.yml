@@ -1,0 +1,293 @@
+---
+# Phase 0 — physical-lab host prerequisites. Idempotent; a second run reports changed=0.
+# Deliberately NOT here: MTU changes (the LAN is jumbo 9000 and correct — the MTU-1400 rule in
+# lab-notes #1 is specific to the OpenStack VM lab), firewalld/SELinux changes (Phase 1 owns the
+# port list), and any disk repartitioning (blocked on the extra hardware).
+
+- name: Base packages
+  become: true
+  ansible.builtin.dnf:
+    name: "{{ phys_base_packages }}"
+    state: present
+
+# ---------------------------------------------------------------------------------------------
+# Clock — etcd, Ceph and every TLS/OIDC flow need this before anything else is worth doing.
+# ---------------------------------------------------------------------------------------------
+- name: Configure chrony against reachable sources
+  become: true
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony.conf
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: restart chronyd
+
+- name: Enable chronyd
+  become: true
+  ansible.builtin.systemd:
+    name: chronyd
+    enabled: true
+    state: started
+
+- name: Apply chrony changes now (so the wait below sees the new sources)
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the clock to actually synchronise
+  become: true
+  ansible.builtin.command: "chronyc waitsync {{ [(phys_ntp_wait_seconds | int / 10) | round | int, 1] | max }} 0.5"
+  register: phys_waitsync
+  changed_when: false
+  when: phys_ntp_wait_sync | bool
+
+# ---------------------------------------------------------------------------------------------
+# Resolver — kill the 5 s getaddrinfo stall by owning resolv.conf outright.
+# ---------------------------------------------------------------------------------------------
+- name: Stop NetworkManager from rewriting resolv.conf
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/NetworkManager/conf.d/90-talu-dns-none.conf
+    content: |
+      # Talu Phase 0: resolv.conf is managed by ansible (roles/phys_host_prep), not NM.
+      [main]
+      dns=none
+    owner: root
+    group: root
+    mode: "0644"
+  when: phys_manage_resolv | bool
+  notify: reload networkmanager
+
+- name: Apply the NM config change before rewriting resolv.conf
+  ansible.builtin.meta: flush_handlers
+
+- name: Write resolv.conf with the fast internal resolvers first
+  become: true
+  ansible.builtin.template:
+    src: resolv.conf.j2
+    dest: /etc/resolv.conf
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  register: phys_resolv_written
+  when: phys_manage_resolv | bool
+
+- name: Verify name resolution still works (A+AAAA pair — the path that stalled)
+  ansible.builtin.command: getent ahosts quay.io
+  register: phys_resolv_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: phys_manage_resolv | bool
+
+- name: Restore the previous resolv.conf if the new one broke resolution
+  become: true
+  ansible.builtin.copy:
+    src: "{{ phys_resolv_written.backup_file }}"
+    dest: /etc/resolv.conf
+    remote_src: true
+    mode: "0644"
+  when:
+    - phys_manage_resolv | bool
+    - phys_resolv_check.rc | default(0) != 0
+    - phys_resolv_written.backup_file is defined
+
+- name: Fail if the resolver is broken
+  ansible.builtin.assert:
+    that: phys_resolv_check.rc | default(1) == 0
+    fail_msg: >-
+      Name resolution failed after rewriting /etc/resolv.conf (the previous file was restored).
+      SSH is by IP, so you are not locked out — check phys_nameservers reachability.
+  when: phys_manage_resolv | bool
+
+# ---------------------------------------------------------------------------------------------
+# /etc/hosts — peer names on the jumbo LAN, used from Phase 1 onward.
+# ---------------------------------------------------------------------------------------------
+- name: Peer entries in /etc/hosts
+  become: true
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE MANAGED — talu phys lab"
+    block: |
+      {% for h in groups['phys'] | sort %}
+      {{ hostvars[h].phys_internal_ip }} {{ h }} {{ h }}.talu.lab
+      {% endfor %}
+  when:
+    - phys_manage_hosts_entries | bool
+    - groups['phys'] | default([]) | length > 0
+    - groups['phys'] | map('extract', hostvars, 'phys_internal_ip') | select('defined') | list | length
+      == groups['phys'] | length
+
+# ---------------------------------------------------------------------------------------------
+# Boot configuration — takes effect on the next reboot (see phys_reboot).
+# ---------------------------------------------------------------------------------------------
+- name: Find the stock (non-debug, non-rescue) kernel entry
+  become: true
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    grubby --info=ALL | awk -F'"' '/^kernel=/ {print $2}'
+    | grep -v -- '+debug' | grep -v rescue | head -1
+  args:
+    executable: /bin/bash
+  register: phys_stock_kernel
+  changed_when: false
+  check_mode: false
+  when: phys_set_stock_kernel | bool
+
+- name: Assert a stock kernel is installed before switching the default
+  ansible.builtin.assert:
+    that: phys_stock_kernel.stdout | length > 0
+    fail_msg: >-
+      No non-debug kernel entry found in grubby. Install `kernel-core` first — do NOT reboot,
+      there is no console on these hosts.
+  when: phys_set_stock_kernel | bool
+
+- name: Read the current default kernel
+  become: true
+  ansible.builtin.command: grubby --default-kernel
+  register: phys_default_kernel
+  changed_when: false
+  check_mode: false
+  when: phys_set_stock_kernel | bool
+
+- name: Boot the stock kernel instead of +debug
+  become: true
+  ansible.builtin.command: "grubby --set-default={{ phys_stock_kernel.stdout }}"
+  register: phys_kernel_default_set
+  when:
+    - phys_set_stock_kernel | bool
+    - phys_default_kernel.stdout | trim != phys_stock_kernel.stdout | trim
+
+- name: Read the current kernel args
+  become: true
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    grubby --info=DEFAULT | awk -F'"' '/^args=/ {print $2}'
+  args:
+    executable: /bin/bash
+  register: phys_grubby_args
+  changed_when: false
+  check_mode: false
+
+- name: Add kernel args to every installed entry (IOMMU for VFIO/SR-IOV)
+  become: true
+  ansible.builtin.command: 'grubby --update-kernel=ALL --args="{{ phys_kernel_args }}"'
+  register: phys_kernel_args_set
+  when:
+    - phys_kernel_args | length > 0
+    - phys_kernel_args.split() | difference(phys_grubby_args.stdout.split()) | length > 0
+
+- name: Persist kernel args for future kernels (/etc/default/grub)
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+    line: 'GRUB_CMDLINE_LINUX_DEFAULT="rd.auto=1 {{ phys_kernel_args }}"'
+    backup: true
+  when: phys_kernel_args | length > 0
+
+- name: Read the RUNNING kernel cmdline
+  ansible.builtin.slurp:
+    src: /proc/cmdline
+  register: phys_running_cmdline
+
+# Not just "did we change grub this run" — a previous run may have set it and nobody rebooted yet,
+# so compare the running kernel/args against the intended ones.
+- name: Note whether a reboot is now required
+  ansible.builtin.set_fact:
+    phys_reboot_required: >-
+      {{ (phys_kernel_default_set.changed | default(false))
+         or (phys_kernel_args_set.changed | default(false))
+         or ('+debug' in ansible_facts.kernel and phys_set_stock_kernel | bool)
+         or (phys_kernel_args.split()
+             | difference((phys_running_cmdline.content | b64decode).split()) | length > 0) }}
+
+# ---------------------------------------------------------------------------------------------
+# Tuning
+# ---------------------------------------------------------------------------------------------
+- name: Install tuned
+  become: true
+  ansible.builtin.dnf:
+    name: tuned
+    state: present
+  when: phys_tuned_profile | length > 0
+
+- name: Enable tuned
+  become: true
+  ansible.builtin.systemd:
+    name: tuned
+    enabled: true
+    state: started
+  when:
+    - phys_tuned_profile | length > 0
+    - not ansible_check_mode          # the package is only installed for real outside --check
+
+- name: Read the active tuned profile
+  become: true
+  ansible.builtin.command: tuned-adm active
+  register: phys_tuned_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - phys_tuned_profile | length > 0
+    - not ansible_check_mode
+
+- name: Select the KVM-host tuned profile
+  become: true
+  ansible.builtin.command: "tuned-adm profile {{ phys_tuned_profile }}"
+  when:
+    - phys_tuned_profile | length > 0
+    - not ansible_check_mode
+    - phys_tuned_profile not in (phys_tuned_active.stdout | default(''))
+
+- name: Disable swap (opt-in — guest latency on the shared SATA SSD)
+  become: true
+  when: phys_disable_swap | bool
+  block:
+    - name: swapoff -a
+      ansible.builtin.command: swapoff -a
+      when: ansible_facts.swaptotal_mb | default(0) > 0
+      changed_when: ansible_facts.swaptotal_mb | default(0) > 0
+    - name: Comment swap out of /etc/fstab
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^(\s*[^#\n]+\s+swap\s+.*)$'
+        replace: '# \1   # disabled by talu phys_host_prep'
+        backup: true
+
+# ---------------------------------------------------------------------------------------------
+# Reboot — only when explicitly allowed.
+# ---------------------------------------------------------------------------------------------
+- name: Reboot to pick up the stock kernel + IOMMU
+  become: true
+  ansible.builtin.reboot:
+    reboot_timeout: "{{ phys_reboot_timeout }}"
+    post_reboot_delay: 15
+    msg: "talu phase 0: stock kernel + IOMMU"
+  when:
+    - phys_reboot | bool
+    - phys_reboot_required | bool
+
+- name: Report pending reboot
+  ansible.builtin.debug:
+    msg: >-
+      Boot configuration changed but phys_reboot=false — the host is still on {{ ansible_facts.kernel }}
+      with IOMMU {{ 'on' if 'intel_iommu' in ansible_facts.cmdline else 'off' }}. Re-run with
+      `-e phys_reboot=true` when a reboot window is agreed. There is no console on these hosts
+      (BMC 10.9.0.0/16 unreachable, only :22/:23 forwarded), so both the stock kernel entry and
+      the rescue entry were verified present first.
+  when:
+    - phys_reboot_required | bool
+    - not (phys_reboot | bool)
+
+# ---------------------------------------------------------------------------------------------
+# Verification. Self-contained, so `--tags verify` is a standalone readiness check.
+# ---------------------------------------------------------------------------------------------
+- name: Verify Phase 0 state
+  ansible.builtin.include_tasks:
+    file: verify.yml
+    apply:
+      tags: [verify]
+  tags: [verify]

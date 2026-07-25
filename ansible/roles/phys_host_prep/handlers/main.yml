@@ -1,0 +1,13 @@
+---
+- name: restart chronyd
+  become: true
+  ansible.builtin.systemd:
+    name: chronyd
+    state: restarted
+
+# reload, not restart: a NetworkManager restart can bounce the LACP bond and the VLANs on it.
+- name: reload networkmanager
+  become: true
+  ansible.builtin.systemd:
+    name: NetworkManager
+    state: reloaded
