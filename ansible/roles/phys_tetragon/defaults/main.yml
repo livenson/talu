@@ -5,7 +5,8 @@
 tetra_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
 tetra_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
 tetra_helm: /usr/local/bin/helm
-tetra_dir: "{{ playbook_dir }}/../components/infrastructure/tetragon"
+tetra_src: "{{ playbook_dir }}/../components/infrastructure/tetragon"
+tetra_dir: "{{ talos_gen_dir }}/components/tetragon"
 tetra_namespace: tetragon
 tetragon_version: "1.7.0"          # latest tetragon chart (helm.cilium.io)
 tetra_chart_tgz: "{{ talos_gen_dir }}/tetragon-{{ tetragon_version }}.tgz"

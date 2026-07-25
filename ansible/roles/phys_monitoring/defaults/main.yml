@@ -6,7 +6,10 @@
 mon_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
 mon_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
 mon_helm: /usr/local/bin/helm
-mon_dir: "{{ playbook_dir }}/../components/platform/monitoring"
+# Component files live on the CONTROL NODE; kubectl/helm run on the gateway (which has no repo),
+# so they're copied there first. mon_src = control node, mon_dir = gateway.
+mon_src: "{{ playbook_dir }}/../components/platform/monitoring"
+mon_dir: "{{ talos_gen_dir }}/components/monitoring"
 
 kube_prometheus_stack_version: "87.19.1"   # latest; Prometheus + Alertmanager (Perses is the UI)
 perses_operator_version: "0.4.0"           # latest; dashboards-as-code operator

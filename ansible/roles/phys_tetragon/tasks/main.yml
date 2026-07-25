@@ -1,4 +1,10 @@
 ---
+- name: Copy the tetragon component files to the gateway
+  ansible.builtin.copy:
+    src: "{{ tetra_src }}/"
+    dest: "{{ tetra_dir }}/"
+    mode: "0644"
+
 - name: Tetragon namespace (privileged — eBPF DaemonSet mounts tracefs/proc)
   ansible.builtin.command: "{{ tetra_k }} apply -f {{ tetra_dir }}/namespace.yaml"
   changed_when: true

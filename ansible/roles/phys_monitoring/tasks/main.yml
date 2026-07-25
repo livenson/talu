@@ -1,4 +1,10 @@
 ---
+- name: Copy the monitoring component files to the gateway
+  ansible.builtin.copy:
+    src: "{{ mon_src }}/"
+    dest: "{{ mon_dir }}/"
+    mode: "0644"
+
 - name: Monitoring namespace (PSA privileged — node-exporter needs hostNetwork/hostPath)
   ansible.builtin.command: "{{ mon_k }} apply -f {{ mon_dir }}/namespace.yaml"
   changed_when: true
