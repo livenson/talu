@@ -6,7 +6,7 @@
 ten_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
 ten_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
 flux_bin: /usr/local/bin/flux
-flux_version: "2.4.0"          # flux CLI + controllers
+flux_version: "2.9.3"          # latest; OCIRepository graduated to v1 in Flux 2.6+ (the chart uses v1)
 
 # Component files (control node → gateway).
 ten_src: "{{ playbook_dir }}/../components/tenancy"

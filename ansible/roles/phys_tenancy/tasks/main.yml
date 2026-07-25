@@ -17,7 +17,12 @@
       https://github.com/fluxcd/flux2/releases/download/v{{ flux_version }}/flux_{{ flux_version }}_linux_amd64.tar.gz
     tar xzf /tmp/flux.tgz -C /tmp
     install -m0755 /tmp/flux {{ flux_bin }}
-  args: { creates: "{{ flux_bin }}" }
+    touch /usr/local/bin/flux-{{ flux_version }}.done
+    {{ flux_bin }} version --client 2>/dev/null | head -1
+  args:
+    creates: "/usr/local/bin/flux-{{ flux_version }}.done"
+  # marker file so a version bump re-downloads
+
 
 - name: Install Flux controllers (source + helm controllers only)
   ansible.builtin.command: "{{ flux_bin }} install --components=source-controller,helm-controller --namespace=flux-system"
