@@ -14,6 +14,9 @@ cephClusterSpec:
   dashboard:
     enabled: true
     ssl: false
+  # Rook creates the mgr Prometheus ServiceMonitor (in-cluster Ceph metrics for the monitoring stack).
+  monitoring:
+    enabled: true
   # Nested-lab OSDs live on a single qcow2-backed SATA disk per node — real block semantics, not
   # real spindles. Filter to the empty /dev/vdb; the boot disk (vda) is untouched.
   storage:

@@ -24,7 +24,6 @@ mon_rules:
   - recording-rules.yaml
   - node-rules.yaml
   - resource-rules.yaml
-  - ceph-scrape.yaml
 # Perses instance + dashboards (backup/pomerium/certs render empty until those layers land — harmless).
 mon_dashboards:
   - perses-instance.yaml
