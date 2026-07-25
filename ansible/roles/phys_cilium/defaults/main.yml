@@ -1,0 +1,8 @@
+---
+# Cilium CNI on the physical cluster. Runs on the gateway host (has kubeconfig + egress). The base
+# values come from the repo product (components/), the physical overlay from environments/rocky-phys.
+cilium_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+cilium_helm_bin: /usr/local/bin/helm
+cilium_chart_tgz: "{{ talos_gen_dir }}/cilium-{{ cilium_version }}.tgz"
+cilium_values_base: "{{ playbook_dir }}/../components/infrastructure/cilium/values.yaml"
+cilium_values_env: "{{ playbook_dir }}/../environments/rocky-phys/cilium-values.yaml"

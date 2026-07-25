@@ -9,7 +9,10 @@ ansible_python_interpreter: /usr/bin/python3
 
 # Real hardware: no emulation, jumbo frames, Tetragon available.
 kubevirt_use_emulation: false
+cilium_version: "1.19.6"
 cilium_mtu: 8850            # overlay MTU (8950) - 50 for Cilium's own VXLAN inside the guests.
+prometheus_operator_crd_version: "v0.92.1"   # cilium ServiceMonitors need these CRDs pre-installed
+helm_version: "v3.16.4"
 primary_iface_mtu: 9000     # documented, not applied — the role never touches MTU.
 
 # ── Nested Talos cluster topology ───────────────────────────────────────────────────────────
@@ -31,6 +34,8 @@ talos_overlay:
 
 talos_vip: "172.18.0.10"    # Talos shared control-plane VIP = the Kubernetes API endpoint
 talos_cluster_name: talu-phys
+talos_gen_dir: /home/cloud-user/talu/talos-phys        # cluster secrets/configs/kubeconfig (gateway)
+talos_registry_patch: /home/cloud-user/talu/talos-registry-mirror.patch.yaml
 talos_version: "v1.11.2"    # matches all.yml; the metal disk image + installer tag
 kubernetes_version: "v1.34.1"
 

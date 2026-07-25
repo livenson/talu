@@ -1,0 +1,84 @@
+---
+# Cilium install, resilient to the lab's flaky WAN: helm binary + chart are fetched with retries,
+# then installed from the local tgz so a transient timeout never aborts the apply.
+- name: helm binary present?
+  ansible.builtin.stat:
+    path: "{{ cilium_helm_bin }}"
+  register: helm_bin
+
+- name: Install helm (direct tarball, retried — get-helm-3 hits flaky get.helm.sh)
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd /tmp
+    curl -fL --retry 10 --retry-all-errors --retry-delay 5 -o helm.tgz \
+      https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz
+    tar xzf helm.tgz
+    install -m0755 linux-amd64/helm {{ cilium_helm_bin }}
+  when: not helm_bin.stat.exists
+
+- name: Copy Cilium values (base + rocky-phys) to the gateway
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ talos_gen_dir }}/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - { src: "{{ cilium_values_base }}", dest: cilium-base.yaml }
+    - { src: "{{ cilium_values_env }}",  dest: cilium-phys.yaml }
+
+# Cilium's ServiceMonitors need the prometheus-operator CRDs before the chart validates.
+- name: Pre-install prometheus-operator CRDs
+  ansible.builtin.command: >-
+    kubectl --kubeconfig={{ cilium_kubeconfig }} apply --server-side --force-conflicts -f
+    https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/{{ prometheus_operator_crd_version }}/example/prometheus-operator-crd/monitoring.coreos.com_{{ item }}.yaml
+  loop: [servicemonitors, podmonitors, prometheusrules]
+  register: crd_apply
+  changed_when: "'created' in crd_apply.stdout or 'configured' in crd_apply.stdout"
+  retries: 5
+  delay: 5
+  until: crd_apply.rc == 0
+
+- name: Fetch the Cilium chart to a local tgz (retry through flaky egress)
+  ansible.builtin.shell: |
+    {{ cilium_helm_bin }} repo add cilium https://helm.cilium.io >/dev/null 2>&1 || true
+    {{ cilium_helm_bin }} repo update cilium >/dev/null 2>&1 || true
+    {{ cilium_helm_bin }} pull cilium/cilium --version {{ cilium_version }} -d {{ talos_gen_dir }}
+  args:
+    creates: "{{ cilium_chart_tgz }}"
+  register: chart_pull
+  retries: 15
+  delay: 5
+  until: chart_pull is not failed
+
+- name: helm upgrade --install cilium (from the local chart)
+  ansible.builtin.command:
+    argv:
+      - "{{ cilium_helm_bin }}"
+      - upgrade
+      - --install
+      - cilium
+      - "{{ cilium_chart_tgz }}"
+      - --namespace=kube-system
+      - "--values={{ talos_gen_dir }}/cilium-base.yaml"
+      - "--values={{ talos_gen_dir }}/cilium-phys.yaml"
+      - --wait
+      - --timeout=5m
+  environment:
+    KUBECONFIG: "{{ cilium_kubeconfig }}"
+  register: cilium_helm
+  changed_when: "'has been upgraded' in cilium_helm.stdout or 'has been installed' in cilium_helm.stdout"
+
+- name: Wait for all nodes Ready
+  ansible.builtin.command: >-
+    kubectl --kubeconfig={{ cilium_kubeconfig }} wait --for=condition=Ready node --all --timeout=240s
+  register: nodes_ready
+  changed_when: false
+
+- name: Node + Cilium status
+  ansible.builtin.command: "kubectl --kubeconfig={{ cilium_kubeconfig }} get nodes -o wide"
+  register: final_nodes
+  changed_when: false
+
+- name: Show cluster
+  ansible.builtin.debug:
+    msg: "{{ final_nodes.stdout_lines }}"

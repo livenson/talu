@@ -1,0 +1,9 @@
+# ANSIBLE MANAGED — talu phys Talos control-plane patch: shared VIP = the Kubernetes API endpoint.
+machine:
+  network:
+    interfaces:
+      - deviceSelector:
+          driver: virtio_net
+        dhcp: true
+        vip:
+          ip: {{ talos_vip }}

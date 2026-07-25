@@ -1,0 +1,13 @@
+---
+# Talu physical lab — Kubernetes-level stack on the bootstrapped Talos cluster. Runs on the gateway
+# host (has the kubeconfig + talosctl + egress). Built up component-by-component; each is validated
+# before the next.
+#
+#   ansible-playbook phys-stack.yml --tags cilium
+- name: Talu physical lab — cluster stack
+  hosts: "{{ talos_overlay_gateway | default('mirror') }}"
+  gather_facts: true
+  vars:
+    talos_overlay_gateway: mirror     # inventory group holding the gateway host (compute1)
+  roles:
+    - { role: phys_cilium, tags: [cilium, cni] }

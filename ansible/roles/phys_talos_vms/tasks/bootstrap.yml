@@ -1,0 +1,163 @@
+---
+# Runs once on the gateway host: generate cluster config, apply to every node in maintenance mode,
+# bootstrap etcd, fetch kubeconfig. Everything below is guarded to the gateway.
+- name: Bootstrap block (gateway only)
+  when: inventory_hostname == talos_overlay.gateway_host
+  block:
+    - name: Install talosctl + kubectl on the gateway
+      become: true
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "{{ item.dest }}"
+        mode: "0755"
+      loop:
+        - { url: "{{ talosctl_url }}", dest: /usr/local/bin/talosctl }
+        - { url: "https://dl.k8s.io/release/{{ kubernetes_version }}/bin/linux/amd64/kubectl", dest: /usr/local/bin/kubectl }
+
+    - name: Gen/config directory
+      ansible.builtin.file:
+        path: "{{ talos_gen_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Wait for every node's Talos maintenance API (:50000)
+      ansible.builtin.wait_for:
+        host: "{{ item.ip }}"
+        port: 50000
+        timeout: 420
+        sleep: 5
+      loop: "{{ talos_nodes }}"
+      loop_control: { label: "{{ item.name }} ({{ item.ip }})" }
+
+    - name: Render config patches
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "{{ talos_gen_dir }}/{{ item }}"
+        mode: "0644"
+      loop:
+        - common-patch.yaml
+        - cp-patch.yaml
+
+    - name: Already generated?
+      ansible.builtin.stat:
+        path: "{{ talos_gen_dir }}/talosconfig"
+      register: talosconfig_stat
+
+    - name: Generate cluster config (secrets + controlplane/worker machineconfigs)
+      ansible.builtin.command:
+        chdir: "{{ talos_gen_dir }}"
+        argv:
+          - talosctl
+          - gen
+          - config
+          - "{{ talos_cluster_name }}"
+          - "{{ talos_endpoint }}"
+          - "--install-disk={{ talos_install_disk }}"
+          - "--config-patch=@{{ talos_gen_dir }}/common-patch.yaml"
+          - "--config-patch=@{{ talos_registry_patch }}"
+          - "--config-patch-control-plane=@{{ talos_gen_dir }}/cp-patch.yaml"
+          - "--additional-sans={{ talos_vip }},{{ talos_nodes | map(attribute='ip') | join(',') }}"
+          - "--output-dir={{ talos_gen_dir }}"
+      when: not talosconfig_stat.stat.exists
+
+    - name: Build per-node machineconfig (inject hostname)
+      ansible.builtin.command:
+        chdir: "{{ talos_gen_dir }}"
+        argv:
+          - talosctl
+          - machineconfig
+          - patch
+          - "{{ talos_gen_dir }}/{{ 'controlplane.yaml' if item.role == 'controlplane' else 'worker.yaml' }}"
+          - "--patch=[{\"op\":\"add\",\"path\":\"/machine/network/hostname\",\"value\":\"{{ item.name }}\"}]"
+          - "-o"
+          - "{{ talos_gen_dir }}/{{ item.name }}.yaml"
+      loop: "{{ talos_nodes }}"
+      loop_control: { label: "{{ item.name }}" }
+      changed_when: true
+
+    # apply-config --insecure only works while a node is in maintenance mode. On a re-run a node is
+    # already configured (secured mTLS on :50000), so probe first and only (re)configure the nodes
+    # that still answer the *insecure* maintenance API — robust regardless of error wording.
+    - name: Probe which nodes are still in maintenance mode
+      ansible.builtin.command:
+        argv: ["talosctl", "--nodes={{ item.ip }}", "--endpoints={{ item.ip }}", "--insecure", "get", "machinestatus"]
+      loop: "{{ talos_nodes }}"
+      loop_control: { label: "{{ item.name }} ({{ item.ip }})" }
+      register: maint_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Apply machineconfig to nodes in maintenance mode
+      ansible.builtin.command:
+        argv:
+          - talosctl
+          - apply-config
+          - "--insecure"
+          - "--nodes={{ item.item.ip }}"
+          - "--file={{ talos_gen_dir }}/{{ item.item.name }}.yaml"
+      loop: "{{ maint_probe.results }}"
+      loop_control: { label: "{{ item.item.name }} ({{ item.item.ip }})" }
+      when: item.rc == 0          # rc==0 → insecure API answered → still in maintenance
+      register: applyc
+      changed_when: applyc.rc == 0
+
+    - name: First control-plane IP
+      ansible.builtin.set_fact:
+        first_cp_ip: "{{ (talos_nodes | selectattr('role','equalto','controlplane') | first).ip }}"
+        cp_ips: "{{ talos_nodes | selectattr('role','equalto','controlplane') | map(attribute='ip') | list }}"
+
+    # NB: each endpoint must be a SEPARATE argv element — joining them into one string stores a
+    # single space-containing endpoint that the gRPC resolver rejects ("produced zero addresses").
+    - name: Point talosconfig at the control planes
+      ansible.builtin.command:
+        argv: "{{ ['talosctl', '--talosconfig=' + talos_gen_dir + '/talosconfig', 'config', 'endpoint'] + cp_ips }}"
+      changed_when: false
+
+    - name: Wait for the first control plane's secured API (:50000 mTLS) after config apply
+      ansible.builtin.command:
+        argv: ["talosctl", "--talosconfig={{ talos_gen_dir }}/talosconfig", "--endpoints={{ first_cp_ip }}", "--nodes={{ first_cp_ip }}", "version"]
+      register: cp_secured
+      until: cp_secured.rc == 0
+      retries: 40
+      delay: 15
+      changed_when: false
+      failed_when: false
+
+    - name: Bootstrap etcd on the first control plane (once)
+      ansible.builtin.command:
+        argv: ["talosctl", "--talosconfig={{ talos_gen_dir }}/talosconfig", "--endpoints={{ first_cp_ip }}", "--nodes={{ first_cp_ip }}", "bootstrap"]
+      register: bootstrapc
+      changed_when: "'already' not in (bootstrapc.stderr | default('')) and bootstrapc.rc == 0"
+      failed_when: bootstrapc.rc != 0 and 'already' not in (bootstrapc.stderr | default('')) and 'AlreadyExists' not in (bootstrapc.stderr | default(''))
+
+    - name: Fetch kubeconfig
+      ansible.builtin.command:
+        argv: ["talosctl", "--talosconfig={{ talos_gen_dir }}/talosconfig", "--endpoints={{ first_cp_ip }}", "--nodes={{ first_cp_ip }}", "kubeconfig", "{{ talos_gen_dir }}/kubeconfig", "--force"]
+      changed_when: true
+
+    - name: Wait for the Kubernetes API on the VIP
+      ansible.builtin.command:
+        argv: ["kubectl", "--kubeconfig={{ talos_gen_dir }}/kubeconfig", "get", "--raw=/healthz"]
+      register: k8s_health
+      until: k8s_health.rc == 0
+      retries: 40
+      delay: 15
+      changed_when: false
+      failed_when: false
+
+    - name: Node roster (CNI-less nodes stay NotReady until Cilium — that is expected here)
+      ansible.builtin.command:
+        argv: ["kubectl", "--kubeconfig={{ talos_gen_dir }}/kubeconfig", "get", "nodes", "-o", "wide"]
+      register: nodes_out
+      changed_when: false
+      failed_when: false
+
+    - name: Cluster status
+      ansible.builtin.debug:
+        msg: |
+          Talos cluster '{{ talos_cluster_name }}' bootstrap:
+            k8s /healthz : {{ 'ok' if k8s_health.rc == 0 else 'NOT READY (rc=' ~ k8s_health.rc ~ ')' }}
+            kubeconfig   : {{ talos_gen_dir }}/kubeconfig  (API {{ talos_endpoint }})
+            talosconfig  : {{ talos_gen_dir }}/talosconfig
+          {{ nodes_out.stdout | default('(kubectl get nodes failed — see above)') }}
+          Nodes are NotReady until Cilium is installed (cni:none). That is the next step.

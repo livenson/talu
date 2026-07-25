@@ -1,0 +1,24 @@
+# ANSIBLE MANAGED — talu phys Talos common machineconfig patch (all nodes).
+machine:
+  install:
+    disk: {{ talos_install_disk }}
+  time:
+    servers:
+{% for s in talos_overlay.upstream_dns %}
+      - {{ s }}
+{% endfor %}
+  network:
+    nameservers:
+      - {{ talos_overlay.gateway_ip }}
+cluster:
+  network:
+    # Cilium owns the dataplane (installed by the stack later) — Talos ships no CNI, no kube-proxy.
+    cni:
+      name: none
+  proxy:
+    disabled: true
+  discovery:
+    registries:
+      # discovery.talos.dev needs WAN egress (flaky here); rely on the Kubernetes registry instead.
+      service:
+        disabled: true

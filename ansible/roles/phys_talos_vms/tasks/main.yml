@@ -1,6 +1,16 @@
 ---
-# phys_talos_vms — built after the overlay network is validated. Placeholder so phys-cluster.yml
-# parses while running only --tags libvirt,network.
-- name: phys_talos_vms not yet implemented
-  ansible.builtin.debug:
-    msg: "phys_talos_vms is a stub; run with --tags libvirt,network for now."
+# Two stages, each independently taggable so the VMs can be validated in maintenance mode before
+# any config is applied:
+#   --tags vm-create       → download image, create disks, virt-install (per host)
+#   --tags talos-bootstrap → gen config, apply-config, bootstrap etcd, fetch kubeconfig (gateway)
+- name: Create the Talos VMs on this host
+  ansible.builtin.include_tasks:
+    file: vm-create.yml
+    apply: { tags: [vm-create] }
+  tags: [vm-create]
+
+- name: Bootstrap the Talos cluster (gateway, run once)
+  ansible.builtin.include_tasks:
+    file: bootstrap.yml
+    apply: { tags: [talos-bootstrap] }
+  tags: [talos-bootstrap]

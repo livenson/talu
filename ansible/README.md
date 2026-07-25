@@ -119,3 +119,34 @@ caches on first hit (~3.5 s WAN) and serves the second in ~0.2 s.
 Provider-side items this does **not** fix (tracked as tickets): the egress filtering itself, the
 missing `:25` forward for compute4, and compute4's dead bond leg (`ens20f0` NO-CARRIER — a fibre/SFP
 fault, not software-fixable).
+
+---
+
+# Physical lab — nested Talos cluster (`phys-cluster.yml` + `phys-stack.yml`)
+
+A reversible 4-node HA Talos cluster running as libvirt VMs across the four hosts (Rocky preserved
+underneath as the recovery floor). 3 control planes (compute1/2/3) + 1 worker (compute4), joined by
+the VXLAN overlay, pulling every image through the compute1 registry mirror.
+
+```sh
+ansible-playbook phys-cluster.yml --tags libvirt,network   # host virt + overlay net
+ansible-playbook phys-cluster.yml --tags vm-create         # download image + virt-install the VMs
+ansible-playbook phys-cluster.yml --tags talos-bootstrap   # gen config, apply, bootstrap etcd, kubeconfig
+ansible-playbook phys-stack.yml   --tags cilium            # Cilium CNI (nodes → Ready)
+```
+
+| Role | Does |
+|---|---|
+| `phys_libvirt` | libvirt/qemu-kvm on every host; asserts KVM accel; drops libvirt's default NAT net |
+| `phys_vm_network` | host-to-host VXLAN overlay (`br-talu`, MTU 8950), gateway IP + NAT + dnsmasq DHCP/DNS on compute1, libvirt `talu` bridge network |
+| `phys_talos_vms` | Talos metal image (per host, retried), CoW boot disk + empty Ceph disk per node, virt-install; then gen config (VIP, cni:none, kube-proxy off, registry-mirror patch), apply to nodes in maintenance mode, bootstrap etcd, fetch kubeconfig |
+| `phys_cilium` | Cilium 1.19.6 (MTU 8850, bpf.masquerade, LB-IPAM/L2, Hubble) — helm + chart fetched with retries through the flaky WAN, installed from a local tgz |
+
+Cluster secrets/kubeconfig/talosconfig land in `~/talu/talos-phys/` on compute1. Node topology
+(names/roles/IPs/MACs/sizes) is `talos_nodes` in `group_vars/phys.yml`. Teardown is `virsh destroy`
++ the overlay systemd unit's `ExecStop` — back to bare Rocky.
+
+**Validated:** 4/4 nodes Ready · etcd 3-member quorum · HA control plane (3× apiserver/scheduler/
+controller) · cross-host pod-to-pod 0% loss (Cilium VXLAN over the host VXLAN) · in-cluster DNS ·
+images served through the mirror. Still to layer on: storage (Rook RBD on the per-node Ceph disks),
+KubeVirt, monitoring, identity/access.

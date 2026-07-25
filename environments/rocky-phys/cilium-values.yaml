@@ -1,0 +1,31 @@
+# rocky-phys Cilium overlay — layered ON TOP of components/infrastructure/cilium/values.yaml.
+# Physical 4-node nested-Talos cluster (compute1-4), VMs on a host-to-host VXLAN overlay.
+
+# Routing MTU. Guest NIC MTU is 8950 (host LAN 9000 − 50B host VXLAN). Cilium runs its own VXLAN
+# tunnel (+50B) inside the guests, so pod MTU = 8950 − 50 = 8900. We pin 8850 for a safety margin.
+MTU: 8850
+
+# Real multi-node: eBPF masquerade (Talos nodes are nftables-only, same rationale as the VM lab).
+bpf:
+  masquerade: true
+
+# Node-to-node WireGuard: OFF for the first bring-up to keep the MTU budget simple; flip on once
+# the cluster is validated (costs ~80B MTU — drop Cilium MTU to ~8770 when enabling).
+encryption:
+  enabled: false
+  type: wireguard
+
+# 3 control planes + 1 worker → HA operator.
+operator:
+  replicas: 2
+
+# LB-IPAM + L2 announcements work for real here: Cilium answers ARP for LoadBalancer IPs on the
+# 172.18.0.0/16 overlay L2, reachable from the gateway (no socat shim like the single-node lab).
+l2announcements:
+  enabled: true
+externalIPs:
+  enabled: true
+
+hubble:
+  ui:
+    enabled: true
