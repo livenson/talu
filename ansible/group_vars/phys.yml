@@ -62,3 +62,13 @@ talos_nodes:
 # Observability versions (override all.yml lab pins with current-latest).
 kube_prometheus_stack_version: "87.19.1"
 perses_operator_version: "0.4.0"
+
+# ── Identity / access plane ──────────────────────────────────────────────────────────────────
+lab_floating_ip: "92.220.16.211"                         # the physical lab's public NAT IP
+lab_domain: "{{ lab_floating_ip | replace('.', '-') }}.sslip.io"   # 92-220-16-211.sslip.io
+# Dex OIDC (reuses the product component config; bcrypt of the demo password).
+dex_user_email: "alice@talu.local"
+dex_user_name: "alice"
+dex_user_bcrypt: "$2a$10$Yq.nLkSyi65yz/8AdmXpW.FEgnh6qXPfmuJDKLDDz67UoJJJKlpea"
+dex_version: "v2.45.1"
+pomerium_idp_client_secret: "pomerium-secret-phys"

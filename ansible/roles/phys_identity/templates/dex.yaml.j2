@@ -1,0 +1,56 @@
+# ANSIBLE MANAGED — talu phys Dex (OIDC IdP). Issuer proxied through Pomerium at id.<domain>/dex.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: identity
+  labels: {app.kubernetes.io/part-of: talu}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: dex-config, namespace: identity}
+data:
+  config.yaml: |
+    issuer: https://id.{{ lab_domain }}/dex
+    storage: {type: memory}
+    web: {http: 0.0.0.0:5556}
+    oauth2: {skipApprovalScreen: true}
+    staticClients:
+      - id: pomerium
+        name: Pomerium
+        secret: {{ pomerium_idp_client_secret }}
+        redirectURIs: [https://authenticate.{{ lab_domain }}/oauth2/callback]
+    enablePasswordDB: true
+    staticPasswords:
+      - email: {{ dex_user_email }}
+        hash: "{{ dex_user_bcrypt }}"
+        username: {{ dex_user_name }}
+        userID: 08a8684b-db88-4b73-90a9-3cd1661f5466
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dex, namespace: identity}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: dex}}
+  template:
+    metadata:
+      labels: {app: dex}
+      annotations: {checksum/config: "{{ dex_config_checksum | default('0') }}"}
+    spec:
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:{{ dex_version }}
+          command: [/usr/local/bin/dex, serve, /etc/dex/config.yaml]
+          ports: [{name: http, containerPort: 5556}]
+          volumeMounts: [{name: config, mountPath: /etc/dex}]
+          readinessProbe: {httpGet: {path: /dex/healthz, port: 5556}, initialDelaySeconds: 5}
+      volumes:
+        - name: config
+          configMap: {name: dex-config, items: [{key: config.yaml, path: config.yaml}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: dex, namespace: identity}
+spec:
+  selector: {app: dex}
+  ports: [{name: http, port: 5556, targetPort: 5556}]

@@ -1,0 +1,73 @@
+---
+- name: Deploy Dex (OIDC IdP)
+  ansible.builtin.template:
+    src: dex.yaml.j2
+    dest: "{{ talos_gen_dir }}/dex.yaml"
+    mode: "0644"
+
+- name: Apply Dex
+  ansible.builtin.command: "{{ id_k }} apply -f {{ talos_gen_dir }}/dex.yaml"
+  register: dex_apply
+  changed_when: "'created' in dex_apply.stdout or 'configured' in dex_apply.stdout"
+
+- name: Wait for Dex ready
+  ansible.builtin.command: "{{ id_k }} -n identity rollout status deploy/dex --timeout=120s"
+  changed_when: false
+
+# Pomerium shared + cookie secrets — 32 random bytes each, created once (never rotated in place).
+- name: Pomerium namespace
+  ansible.builtin.command: "{{ id_k }} create ns pomerium --dry-run=client -o yaml"
+  register: pom_ns
+  changed_when: false
+- ansible.builtin.command: "{{ id_k }} apply -f -"
+  args: { stdin: "{{ pom_ns.stdout }}" }
+  changed_when: true
+
+- name: Pomerium secrets present?
+  ansible.builtin.command: "{{ id_k }} -n pomerium get secret pomerium-secrets"
+  register: pom_sec
+  changed_when: false
+  failed_when: false
+
+- name: Create pomerium-secrets (shared + cookie)
+  ansible.builtin.shell: |
+    {{ id_k }} -n pomerium create secret generic pomerium-secrets \
+      --from-literal=SHARED_SECRET="$(openssl rand -base64 32)" \
+      --from-literal=COOKIE_SECRET="$(openssl rand -base64 32)"
+  when: pom_sec.rc != 0
+  changed_when: true
+
+- name: Deploy Pomerium (IAP)
+  ansible.builtin.template:
+    src: pomerium.yaml.j2
+    dest: "{{ talos_gen_dir }}/pomerium.yaml"
+    mode: "0644"
+
+- name: Apply Pomerium
+  ansible.builtin.command: "{{ id_k }} apply -f {{ talos_gen_dir }}/pomerium.yaml"
+  register: pom_apply
+  changed_when: "'created' in pom_apply.stdout or 'configured' in pom_apply.stdout"
+
+- name: Wait for Pomerium ready (autocert can take a minute)
+  ansible.builtin.command: "{{ id_k }} -n pomerium rollout status deploy/pomerium --timeout=240s"
+  changed_when: false
+  failed_when: false
+  register: pom_ready
+
+- name: Read the assigned LB IP
+  ansible.builtin.command: "{{ id_k }} -n pomerium get svc pomerium -o jsonpath={.status.loadBalancer.ingress[0].ip}"
+  register: pom_lbip
+  changed_when: false
+
+- name: Status
+  ansible.builtin.shell: |
+    echo "dex:      $({{ id_k }} -n identity get pods -l app=dex --no-headers 2>/dev/null | awk '{print $3}')"
+    echo "pomerium: $({{ id_k }} -n pomerium get pods -l app=pomerium --no-headers 2>/dev/null | awk '{print $3}')"
+    echo "pomerium LB IP: {{ pom_lbip.stdout | default('none') }} (want {{ talos_ingress_lb_ip }})"
+    echo "routes: id.{{ lab_domain }} (dex) · perses.{{ lab_domain }} · hubble.{{ lab_domain }}"
+  register: id_status
+  changed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ id_status.stdout_lines }}"
