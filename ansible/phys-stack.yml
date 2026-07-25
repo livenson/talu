@@ -13,5 +13,6 @@
     - { role: phys_cilium,   tags: [cilium, cni] }
     - { role: phys_rook,     tags: [rook, storage] }
     - { role: phys_kubevirt,   tags: [kubevirt, virt] }
-    - { role: phys_monitoring, tags: [monitoring, obs] }
+    - { role: phys_cert_manager, tags: [cert-manager, certs, monitoring, obs] }
+    - { role: phys_monitoring,   tags: [monitoring, obs] }
     - { role: phys_tetragon,   tags: [tetragon, security] }
