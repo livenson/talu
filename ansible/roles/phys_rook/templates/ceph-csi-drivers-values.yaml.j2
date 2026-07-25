@@ -10,6 +10,9 @@ operatorConfig:
     # which pull through the LAN registry mirror (Talos machine.registries.mirrors).
     imageSet:
       name: ""
+    # Enable the csi-snapshotter sidecar (default "none" omits it → VolumeSnapshots never become
+    # ready). "volumeSnapshot" gives per-PVC snapshots (the CSI snapshot + smart-clone path).
+    snapshotPolicy: "volumeSnapshot"
     nodePlugin:
       priorityClassName: system-node-critical
     controllerPlugin:

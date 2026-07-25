@@ -92,7 +92,7 @@
       - "--namespace={{ rook_namespace }}"
       - --create-namespace
       - --wait
-      - --timeout=6m
+      - --timeout=12m
   environment: { KUBECONFIG: "{{ rook_kubeconfig }}" }
   register: rook_op
   changed_when: "'has been' in rook_op.stdout"
