@@ -43,9 +43,14 @@
                 cpu: {cores: 1}
                 resources: {requests: {memory: 512Mi}}
                 devices:
+                  # masquerade (not bridge) pod networking — bridge binding is non-migratable.
+                  interfaces:
+                    - {name: default, masquerade: {}}
                   disks:
                     - {name: rootdisk, disk: {bus: virtio}}
                     - {name: cloudinit, disk: {bus: virtio}}
+              networks:
+                - {name: default, pod: {}}
               volumes:
                 - name: rootdisk
                   dataVolume: {name: vm-test-disk}
