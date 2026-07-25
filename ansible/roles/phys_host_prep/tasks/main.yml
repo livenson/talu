@@ -159,6 +159,68 @@
     - phys_set_stock_kernel | bool
     - phys_default_kernel.stdout | trim != phys_stock_kernel.stdout | trim
 
+# grubby --set-default alone did NOT switch the booted kernel on these hosts (see defaults/main.yml
+# note). blscfg + GRUB_DEFAULT=0 ignore saved_entry, so the +debug entry (which sorts to index 0)
+# kept booting. Remove the +debug boot entries so stock is the first BLS entry — the fix that
+# actually worked on compute4. grubby --remove-kernel drops the loader entry (and image files); the
+# currently-running +debug kernel keeps running until the reboot below. Stock + rescue are asserted
+# present above, so the host is never left without a bootable entry.
+- name: Find installed +debug kernel entries
+  become: true
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    grubby --info=ALL | awk -F'"' '/^kernel=/ {print $2}' | grep -- '+debug' || true
+  args:
+    executable: /bin/bash
+  register: phys_debug_kernels
+  changed_when: false
+  check_mode: false
+  when: phys_remove_debug_kernel | bool
+
+- name: Remove the +debug kernel boot entries (makes stock the first BLS entry)
+  become: true
+  ansible.builtin.command: "grubby --remove-kernel={{ item }}"
+  loop: "{{ phys_debug_kernels.stdout_lines | default([]) }}"
+  register: phys_debug_removed
+  when:
+    - phys_remove_debug_kernel | bool
+    - phys_debug_kernels.stdout_lines | default([]) | length > 0
+
+# Belt-and-suspenders for FUTURE kernel installs (a newer kernel could again sort to index 0):
+# make grub consult saved_entry rather than a hardcoded index. The /etc/grub2*.cfg symlinks are
+# dangling on these UEFI images, so locate the real cfg under the ESP and patch the else-branch.
+- name: Make grub honor the saved default for future kernels (GRUB_DEFAULT=saved)
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_DEFAULT='
+    line: 'GRUB_DEFAULT=saved'
+    backup: true
+  when: phys_set_stock_kernel | bool
+
+- name: Locate the real grub.cfg (the /etc symlinks are dangling on these UEFI images)
+  become: true
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    find /boot/efi /boot/grub2 -name grub.cfg 2>/dev/null | head -1
+  args:
+    executable: /bin/bash
+  register: phys_grubcfg
+  changed_when: false
+  check_mode: false
+  when: phys_set_stock_kernel | bool
+
+- name: Point the grub.cfg else-branch at saved_entry instead of the hardcoded index 0
+  become: true
+  ansible.builtin.replace:
+    path: "{{ phys_grubcfg.stdout }}"
+    regexp: 'set default="0"'
+    replace: 'set default="${saved_entry}"'
+    backup: true
+  when:
+    - phys_set_stock_kernel | bool
+    - phys_grubcfg.stdout | default('') | length > 0
+
 - name: Read the current kernel args
   become: true
   ansible.builtin.shell: >-
@@ -198,6 +260,7 @@
   ansible.builtin.set_fact:
     phys_reboot_required: >-
       {{ (phys_kernel_default_set.changed | default(false))
+         or (phys_debug_removed.changed | default(false))
          or (phys_kernel_args_set.changed | default(false))
          or ('+debug' in ansible_facts.kernel and phys_set_stock_kernel | bool)
          or (phys_kernel_args.split()

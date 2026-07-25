@@ -32,9 +32,17 @@ phys_dns_search: "no-stb.serverant.com"
 phys_dns_options: "timeout:1 attempts:2"
 
 # --- Boot configuration (requires a reboot to take effect) ---------------------------------
-# Both sleds boot the +debug kernel (grubby default-index 0). The stock kernel is ALREADY
-# installed as index 1 — this is a default-entry change, not a package install.
+# The sleds boot the +debug kernel and the stock kernel is ALREADY installed — but this is NOT
+# just a default-entry change. `grubby --set-default` only rewrites grubenv's saved_entry, and
+# these Rocky 10 UEFI images ship an EFI grub.cfg generated with GRUB_DEFAULT=0, so its else-branch
+# is literally `set default="0"` — saved_entry is never consulted. Even forcing GRUB_DEFAULT=saved,
+# blscfg's id-matching did not reliably pick the stock entry while a "+debug" entry sorted ahead of
+# it (validated the hard way on compute4: two reboots stayed on +debug until the entry was removed).
+# So the deterministic fix — and the right end-state for a perf host, where the debug kernel's
+# lock/alloc instrumentation invalidates every latency number — is to DROP the +debug boot entry so
+# stock becomes the first BLS entry. We also set GRUB_DEFAULT=saved for future kernel installs.
 phys_set_stock_kernel: true
+phys_remove_debug_kernel: true    # remove +debug BLS entries (deterministic; see the note above)
 # IOMMU is off (0 groups, no intel_iommu on the cmdline) => no VFIO/SR-IOV passthrough into VMs.
 phys_kernel_args: "intel_iommu=on iommu=pt"
 

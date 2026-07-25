@@ -17,7 +17,13 @@
 - name: Talu physical lab — Phase 0 host prep
   hosts: phys
   gather_facts: true
-  # One host at a time: never leave both sleds mid-change, and never reboot both at once.
+  # One host at a time: never reboot more than one at once. With 3 control-plane VMs (compute1/2/3)
+  # a parallel reboot would break etcd quorum and take down Ceph mons + ingress. serial:1 guarantees
+  # sequential, but it only waits for SSH to return (post_reboot_delay) — NOT for the Talos node to
+  # rejoin quorum. So when rebooting the control-plane hosts, gate each on the cluster being healthy
+  # again before the next: `kubectl get nodes` all Ready + `ceph -s` HEALTH_OK. Validated first on
+  # compute4 (worker-only, quorum-safe) before touching any control-plane host. Prefer:
+  #   ansible-playbook phys-phase0.yml -e phys_reboot=true --limit compute4   # then cp hosts 1-by-1
   serial: 1
   roles:
     - { role: phys_host_prep, tags: [phase0] }
