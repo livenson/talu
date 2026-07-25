@@ -1,0 +1,111 @@
+---
+# Copy the tenancy component + tenant files to the gateway (kubectl/helm/flux run there).
+- name: Copy tenancy components + tenant files to the gateway
+  ansible.builtin.copy:
+    src: "{{ item.src }}/"
+    dest: "{{ item.dest }}/"
+    mode: "0644"
+  loop:
+    - { src: "{{ ten_src }}", dest: "{{ ten_dir }}" }
+    - { src: "{{ tenants_src }}", dest: "{{ tenants_dir }}" }
+
+- name: Install the flux CLI on the gateway (retry through flaky egress)
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -fL --retry 10 --retry-all-errors --retry-delay 5 -o /tmp/flux.tgz \
+      https://github.com/fluxcd/flux2/releases/download/v{{ flux_version }}/flux_{{ flux_version }}_linux_amd64.tar.gz
+    tar xzf /tmp/flux.tgz -C /tmp
+    install -m0755 /tmp/flux {{ flux_bin }}
+  args: { creates: "{{ flux_bin }}" }
+
+- name: Install Flux controllers (source + helm controllers only)
+  ansible.builtin.command: "{{ flux_bin }} install --components=source-controller,helm-controller --namespace=flux-system"
+  environment: { KUBECONFIG: "{{ ten_kubeconfig }}" }
+  changed_when: true
+  # (no nested-node probe removal here — real hardware; the host→pod probes work)
+
+- name: Wait for the Flux controllers to be Available
+  ansible.builtin.command: "{{ ten_k }} -n flux-system rollout status deploy/{{ item }} --timeout=180s"
+  loop: [source-controller, helm-controller]
+  changed_when: false
+
+# Native SSH CA is deferred on this lab, so ensure an (empty) pomerium-user-ca ConfigMap exists for
+# the HelmRelease valuesFrom injection (tenant VMs boot without Pomerium SSH trust).
+- name: Ensure a pomerium-user-ca ConfigMap exists (empty if Native SSH CA is deferred)
+  ansible.builtin.shell: |
+    {{ ten_k }} get ns pomerium >/dev/null 2>&1 || {{ ten_k }} create ns pomerium
+    {{ ten_k }} -n pomerium get cm pomerium-user-ca >/dev/null 2>&1 || \
+      {{ ten_k }} -n pomerium create cm pomerium-user-ca --from-literal=user_ca.pub=""
+  changed_when: true
+
+- name: Apply the tenant control plane (in-cluster chart registry + OCIRepository + route-sync)
+  ansible.builtin.command: "{{ ten_k }} apply -k {{ ten_dir }}/flux"
+  changed_when: true
+
+- name: Wait for the in-cluster chart registry
+  ansible.builtin.command: "{{ ten_k }} -n flux-system rollout status deploy/registry --timeout=180s"
+  changed_when: false
+
+- name: (Re)publish the talu-tenant chart to the in-cluster registry
+  ansible.builtin.shell: |
+    {{ ten_k }} -n flux-system delete job chart-publish --ignore-not-found
+    {{ ten_k }} apply -f {{ ten_dir }}/flux/chart-publish-job.yaml
+    {{ ten_k }} -n flux-system wait --for=condition=complete job/chart-publish --timeout=300s
+  changed_when: true
+
+- name: Reconcile the OCIRepository so it pulls the freshly-published chart
+  ansible.builtin.command: "{{ flux_bin }} reconcile source oci talu-tenant --namespace flux-system"
+  environment: { KUBECONFIG: "{{ ten_kubeconfig }}" }
+  changed_when: true
+
+- name: Tenants management namespace
+  ansible.builtin.shell: "{{ ten_k }} create namespace {{ tenant_release_namespace }} --dry-run=client -o yaml | {{ ten_k }} apply -f -"
+  changed_when: true
+
+- name: Mirror the Pomerium User CA into the tenants namespace
+  ansible.builtin.shell: |
+    CA=$({{ ten_k }} -n pomerium get cm pomerium-user-ca -o jsonpath='{.data.user_ca\.pub}')
+    {{ ten_k }} -n {{ tenant_release_namespace }} create configmap pomerium-user-ca \
+      --from-literal=user_ca.pub="$CA" --dry-run=client -o yaml | {{ ten_k }} apply -f -
+  changed_when: true
+
+- name: Discover tenant definitions
+  ansible.builtin.find:
+    paths: "{{ tenants_dir }}"
+    patterns: "*.yaml"
+  register: tenant_files
+
+- name: Render a HelmRelease per tenant
+  ansible.builtin.template:
+    src: tenant-helmrelease.yaml.j2
+    dest: "{{ talos_gen_dir }}/talu-hr-{{ item.path | basename }}"
+    mode: "0644"
+  vars:
+    tenant_name: "{{ item.path | basename | splitext | first }}"
+    tenant_values: "{{ lookup('file', item.path) }}"
+  loop: "{{ tenant_files.files }}"
+
+- name: Apply the tenant HelmReleases (Flux renders each into its own namespace)
+  ansible.builtin.command: "{{ ten_k }} apply -f {{ talos_gen_dir }}/talu-hr-{{ item.path | basename }}"
+  loop: "{{ tenant_files.files }}"
+  changed_when: true
+
+- name: Wait for a tenant HelmRelease to reconcile
+  ansible.builtin.command: "{{ ten_k }} -n {{ tenant_release_namespace }} wait helmrelease/acme --for=condition=Ready --timeout=240s"
+  changed_when: false
+  failed_when: false
+  register: hr_ready
+
+- name: Status
+  ansible.builtin.shell: |
+    echo "flux: $({{ ten_k }} -n flux-system get pods --no-headers 2>/dev/null | grep -cE 'Running')/$({{ ten_k }} -n flux-system get pods --no-headers 2>/dev/null | wc -l) pods Running"
+    echo "helmreleases: $({{ ten_k }} -n {{ tenant_release_namespace }} get helmrelease -o custom-columns=N:.metadata.name,R:.status.conditions[-1].reason --no-headers 2>/dev/null | tr '\n' ' ')"
+    echo "tenant ns 'acme': $({{ ten_k }} get ns acme -o jsonpath='{.metadata.labels.talu\.io/project-uuid}' 2>/dev/null || echo 'not yet')"
+    echo "tenant VMs: $({{ ten_k }} -n acme get vm 2>/dev/null | tail -n +2 | tr '\n' ' ' || echo none)"
+  register: ten_status
+  changed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ ten_status.stdout_lines }}"

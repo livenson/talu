@@ -26,7 +26,8 @@ data:
         allow_public_unauthenticated_access: true
         preserve_host_header: true
       - from: https://perses.{{ lab_domain }}
-        to: http://perses.monitoring.svc:8080
+        # the Perses server Service is named after the Perses CR ("talu"), not "perses".
+        to: http://talu.monitoring.svc:8080
         allowed_users: [{{ dex_user_email }}]
         allow_websockets: true
       - from: https://hubble.{{ lab_domain }}
