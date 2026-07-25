@@ -18,8 +18,12 @@ primary_iface_mtu: 9000     # documented, not applied — the role never touches
 # ── Nested Talos cluster topology ───────────────────────────────────────────────────────────
 # The Talos nodes are libvirt VMs spread across the 4 physical hosts, joined by a host-to-host
 # VXLAN overlay (so no provider IP coordination is needed — the VM subnet is private and lives
-# only inside the overlay). compute1 is the overlay gateway + DHCP/DNS + registry mirror + the
-# 80/443 ingress host.
+# only inside the overlay).
+#   compute1 = overlay gateway + DHCP/DNS + NAT + registry mirror.
+#   compute2 = the north-south INGRESS host: the provider forwards the public :80/:443 here, and
+#              compute2 DNATs them into the cluster's Cilium LoadBalancer IP (L2-announced on the
+#              overlay). It carries its own overlay address so it can reach that LB IP. Splitting
+#              ingress off compute1 keeps the gateway/mirror host from also terminating all traffic.
 talos_overlay:
   bridge: br-talu
   vxlan_if: vxlan-talu
@@ -29,8 +33,15 @@ talos_overlay:
   subnet: "172.18.0.0/16"
   gateway_ip: "172.18.0.1"  # compute1's br-talu address; VM default route + DNS + mirror endpoint
   gateway_host: compute1
+  ingress_host: compute2    # provider forwards public :80/:443 here (access-plane ingress)
+  ingress_ip: "172.18.0.2"  # compute2's br-talu address, so it can DNAT inbound to the cluster LB IP
   dhcp_range: "172.18.9.100,172.18.9.200,12h"
   upstream_dns: [10.8.0.10, 10.3.0.10]
+
+# Cilium LoadBalancer pool for north-south ingress. The access-plane Service (Pomerium) requests
+# ingress_lb_ip; Cilium L2-announces it on the overlay; compute2 DNATs :80/:443 → this address.
+# (Real L2 LB IPs — the reason this hardware beats the single-node VM lab's socat shim.)
+talos_ingress_lb_ip: "172.18.200.10"
 
 talos_vip: "172.18.0.10"    # Talos shared control-plane VIP = the Kubernetes API endpoint
 talos_cluster_name: talu-phys

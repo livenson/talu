@@ -24,12 +24,22 @@
     daemon_reload: true
   when: overlay_script.changed or overlay_unit.changed
 
-- name: Enable + (re)start the overlay
+# NEVER `restart` here: the unit's ExecStop deletes br-talu, which would drop the running Talos
+# VMs' networking (their tap devices are enslaved to it). Ensure it is enabled + started (no-op if
+# already active), then apply any script changes by RUNNING the idempotent script directly — it uses
+# `ip ... replace` and existence checks, so it converges the live state without tearing the bridge down.
+- name: Enable + start the overlay (idempotent, never restarts)
   become: true
   ansible.builtin.systemd:
     name: talu-overlay-net.service
     enabled: true
-    state: "{{ 'restarted' if (overlay_script.changed or overlay_unit.changed) else 'started' }}"
+    state: started
+
+- name: Apply overlay script changes in place (no bridge teardown)
+  become: true
+  ansible.builtin.command: /usr/local/sbin/talu-overlay-net.sh
+  when: overlay_script.changed
+  changed_when: true
 
 # ── firewalld ────────────────────────────────────────────────────────────────────────────────
 # VXLAN travels host→host as UDP/4789 on bond0 (public zone, which only allows ssh) — open it from

@@ -39,8 +39,11 @@ for p in "${PEERS[@]}"; do
 done
 
 {% if inventory_hostname == talos_overlay.gateway_host %}
-# 4) gateway host only: address on the bridge = VM default route / DNS / mirror endpoint
+# 4) gateway host: address on the bridge = VM default route / DNS / mirror endpoint
 ip addr replace {{ talos_overlay.gateway_ip }}/{{ talos_overlay.subnet.split('/')[1] }} dev "$BR"
+{% elif inventory_hostname == talos_overlay.ingress_host %}
+# 4) ingress host: its own overlay address so it can DNAT public :80/:443 to the cluster LB IP.
+ip addr replace {{ talos_overlay.ingress_ip }}/{{ talos_overlay.subnet.split('/')[1] }} dev "$BR"
 {% endif %}
 
 echo "overlay up: $BR mtu $MTU, $VX vni $VNI local $LOCAL peers ${PEERS[*]}"
