@@ -58,3 +58,7 @@ talos_nodes:
   - { name: talos-cp2, role: controlplane, host: compute2, ip: "172.18.1.12", mac: "52:54:00:7a:10:12", vcpu: 8, ram_mib: 16384, disk_gb: 60, ceph_gb: 120 }
   - { name: talos-cp3, role: controlplane, host: compute3, ip: "172.18.1.13", mac: "52:54:00:7a:10:13", vcpu: 8, ram_mib: 16384, disk_gb: 60, ceph_gb: 120 }
   - { name: talos-w1,  role: worker,       host: compute4, ip: "172.18.1.21", mac: "52:54:00:7a:10:21", vcpu: 8, ram_mib: 16384, disk_gb: 60, ceph_gb: 120 }
+
+# Observability versions (override all.yml lab pins with current-latest).
+kube_prometheus_stack_version: "87.19.1"
+perses_operator_version: "0.4.0"

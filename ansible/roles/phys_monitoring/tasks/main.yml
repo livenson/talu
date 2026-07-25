@@ -28,18 +28,11 @@
   delay: 5
   until: mon_pull is not failed
 
-- name: Alertmanager webhook override (only when a URL is set)
-  ansible.builtin.set_fact:
-    mon_am_args: >-
-      {% if alerting_webhook_url | length > 0 %}
-      --set-string alertmanager.config.receivers[0].webhook_configs[0].url={{ alerting_webhook_url }}
-      --set-string alertmanager.config.receivers[1].webhook_configs[0].url={{ alerting_webhook_url }}
-      {% endif %}
-
 - name: Install kube-prometheus-stack (Prometheus + Alertmanager)
   ansible.builtin.shell: >-
     {{ mon_helm }} upgrade --install kube-prometheus-stack {{ kps_chart_tgz }}
-    --namespace monitoring -f {{ mon_dir }}/values.yaml {{ mon_am_args | trim }}
+    --namespace monitoring -f {{ mon_dir }}/values.yaml
+    {{ ('--set-string alertmanager.config.receivers[0].webhook_configs[0].url=' ~ alerting_webhook_url ~ ' --set-string alertmanager.config.receivers[1].webhook_configs[0].url=' ~ alerting_webhook_url) if (alerting_webhook_url | length > 0) else '' }}
     --wait --timeout 10m
   environment: { KUBECONFIG: "{{ mon_kubeconfig }}" }
   register: kps
