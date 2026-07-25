@@ -2,13 +2,16 @@
 # North-south ingress substrate: a Cilium LoadBalancer IP pool on the overlay + L2 announcement, so
 # `type: LoadBalancer` Services get a real IP that Cilium answers ARP for on the overlay segment
 # (reachable from compute2, which DNATs the public :80/:443 to it). No MetalLB, no socat shim.
-- name: Detect the Cilium LB CRD API version (v2 vs v2alpha1)
-  ansible.builtin.command: >-
+# The two CRDs graduate independently — prefer v2, fall back to v2alpha1 per CRD.
+- name: Detect the Cilium LB pool + L2 CRD API versions
+  ansible.builtin.shell: >-
     kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig
-    get crd ciliumloadbalancerippools.cilium.io -o jsonpath={.spec.versions[0].name}
-  register: cilium_lb_crd
+    get crd {{ item }} -o jsonpath='{.spec.versions[*].name}'
+  loop:
+    - ciliumloadbalancerippools.cilium.io
+    - ciliuml2announcementpolicies.cilium.io
+  register: cilium_crd_vers
   changed_when: false
-  failed_when: false
 
 - name: Render the LB pool + L2 announcement
   ansible.builtin.template:
@@ -16,7 +19,8 @@
     dest: "{{ talos_gen_dir }}/cilium-lb.yaml"
     mode: "0644"
   vars:
-    cilium_lb_api: "{{ cilium_lb_crd.stdout | default('v2') | trim | default('v2', true) }}"
+    cilium_lbpool_api: "{{ 'v2' if 'v2' in cilium_crd_vers.results[0].stdout.split() else 'v2alpha1' }}"
+    cilium_l2_api: "{{ 'v2' if 'v2' in cilium_crd_vers.results[1].stdout.split() else 'v2alpha1' }}"
 
 - name: Apply the LB pool + L2 announcement
   ansible.builtin.command: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig apply -f {{ talos_gen_dir }}/cilium-lb.yaml"
@@ -48,4 +52,4 @@
 
 - name: Show
   ansible.builtin.debug:
-    msg: "Ingress LB-IPAM ({{ cilium_lb_crd.stdout | default('v2') }}): {{ lb_smoke.stdout_lines | select('search','LB-IP-ASSIGNED') | first }}"
+    msg: "Ingress LB-IPAM: {{ lb_smoke.stdout_lines | select('search','LB-IP-ASSIGNED') | first }}"
