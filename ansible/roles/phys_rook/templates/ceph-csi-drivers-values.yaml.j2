@@ -1,0 +1,31 @@
+# ANSIBLE MANAGED — talu phys ceph-csi-drivers values (the packaging Rook omits from its helm repo).
+# Creates the OperatorConfig + Driver CRs + ServiceAccounts + RBAC in {{ rook_namespace }} so the
+# ceph-csi-operator deploys the RBD/CephFS driver pods.
+operatorConfig:
+  name: ceph-csi-operator-config
+  namespace: {{ rook_namespace }}
+  create: true
+  driverSpecDefaults:
+    # imageSet empty → the csi-operator uses its built-in default cephcsi + sig-storage images,
+    # which pull through the LAN registry mirror (Talos machine.registries.mirrors).
+    imageSet:
+      name: ""
+    nodePlugin:
+      priorityClassName: system-node-critical
+    controllerPlugin:
+      priorityClassName: system-cluster-critical
+
+# RBD is the tenant/VM disk class we validate; CephFS on for RWX (live-migration/EFI later).
+drivers:
+  rbd:
+    enabled: true
+    name: {{ rook_namespace }}.rbd.csi.ceph.com
+  cephfs:
+    enabled: true
+    name: {{ rook_namespace }}.cephfs.csi.ceph.com
+  nfs:
+    enabled: false
+    name: {{ rook_namespace }}.nfs.csi.ceph.com
+  nvmeof:
+    enabled: false
+    name: {{ rook_namespace }}.nvmeof.csi.ceph.com

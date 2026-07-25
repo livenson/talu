@@ -63,15 +63,18 @@
   changed_when: false
   failed_when: false
 
-# Two charts (operator + cluster). The operator chart bundles the ceph-csi-operator subchart
-# (values csi.installCsiOperator=true, default) which deploys the RBD/CephFS CSI drivers — there is
-# no separately-published ceph-csi-drivers chart in charts.rook.io/release.
+- name: Add the ceph-csi-operator helm repo (hosts the ceph-csi-drivers chart)
+  ansible.builtin.command: "{{ _h }} repo add ceph-csi-operator {{ ceph_csi_operator_helm_repo }}"
+  changed_when: false
+  failed_when: false
+
 - name: Pull rook charts to local tgz (retry through flaky egress)
-  ansible.builtin.command: "{{ _h }} pull rook-release/{{ item.chart }} --version {{ rook_version }} -d {{ talos_gen_dir }}"
+  ansible.builtin.command: "{{ _h }} pull {{ item.repo }}/{{ item.chart }} --version {{ item.ver }} -d {{ talos_gen_dir }}"
   args: { creates: "{{ item.tgz }}" }
   loop:
-    - { chart: rook-ceph,         tgz: "{{ rook_operator_chart_tgz }}" }
-    - { chart: rook-ceph-cluster, tgz: "{{ rook_cluster_chart_tgz }}" }
+    - { repo: rook-release, chart: rook-ceph,         ver: "{{ rook_version }}",             tgz: "{{ rook_operator_chart_tgz }}" }
+    - { repo: ceph-csi-operator, chart: ceph-csi-drivers, ver: "{{ ceph_csi_drivers_version }}", tgz: "{{ rook_csi_drivers_chart_tgz }}" }
+    - { repo: rook-release, chart: rook-ceph-cluster, ver: "{{ rook_version }}",             tgz: "{{ rook_cluster_chart_tgz }}" }
   loop_control: { label: "{{ item.chart }}" }
   register: rook_pull
   retries: 15
@@ -94,7 +97,26 @@
   register: rook_op
   changed_when: "'has been' in rook_op.stdout"
 
+# installCsiOperator=true installs the csi-operator controller + CRDs, but does NOT switch the rook
+# operator into csi-operator mode — it only creates the ClientProfile/CephConnection CRs (with real
+# mon data) that the csi-operator needs when CSI_ENABLE_CSI_OPERATOR=true. Set it and restart.
+- name: Enable the csi-operator handoff in the operator config
+  ansible.builtin.command: >-
+    {{ _k }} -n {{ rook_namespace }} patch cm rook-ceph-operator-config --type merge
+    -p '{"data":{"CSI_ENABLE_CSI_OPERATOR":"true"}}'
+  register: csi_op_flag
+  changed_when: true
+
+- name: Restart the operator to pick up the flag
+  ansible.builtin.command: "{{ _k }} -n {{ rook_namespace }} rollout restart deploy/rook-ceph-operator"
+  changed_when: true
+
+- name: Wait for the operator rollout
+  ansible.builtin.command: "{{ _k }} -n {{ rook_namespace }} rollout status deploy/rook-ceph-operator --timeout=180s"
+  changed_when: false
+
 # Talos enforces PodSecurity baseline cluster-wide; Ceph daemons are privileged (lab-notes #5).
+# Label BEFORE the CSI/cluster charts so their privileged pods (csi plugins, OSDs) admit.
 - name: Label the rook namespace privileged (PSA)
   ansible.builtin.command: >-
     {{ _k }} label namespace {{ rook_namespace }}
@@ -102,6 +124,29 @@
     pod-security.kubernetes.io/warn=privileged
     pod-security.kubernetes.io/audit=privileged --overwrite
   changed_when: true
+
+# The packaging Rook omits: creates the Driver + OperatorConfig CRs, the rbd/cephfs ctrlplugin+
+# nodeplugin ServiceAccounts, and their RBAC — so the ceph-csi-operator's driver pods actually start.
+- name: Render ceph-csi-drivers values
+  ansible.builtin.template:
+    src: ceph-csi-drivers-values.yaml.j2
+    dest: "{{ talos_gen_dir }}/ceph-csi-drivers-values.yaml"
+    mode: "0644"
+
+- name: Install ceph-csi-drivers (Driver/OperatorConfig CRs + ServiceAccounts + RBAC)
+  ansible.builtin.command:
+    argv:
+      - "{{ _h }}"
+      - upgrade
+      - --install
+      - ceph-csi-drivers
+      - "{{ rook_csi_drivers_chart_tgz }}"
+      - "--namespace={{ rook_namespace }}"
+      - "--values={{ talos_gen_dir }}/ceph-csi-drivers-values.yaml"
+      - --timeout=5m
+  environment: { KUBECONFIG: "{{ rook_kubeconfig }}" }
+  register: rook_csi
+  changed_when: "'has been' in rook_csi.stdout"
 
 - name: Render cluster values
   ansible.builtin.template:
