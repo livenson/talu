@@ -14,7 +14,8 @@ kubevirt_parallel_outbound_migrations: 2
 
 # CDI scratch: a plain RWO ceph-block PVC is fine (temporary import space).
 cdi_scratch_storageclass: ceph-block
-kubevirt_vm_storageclass: ceph-block     # RBD; VM disks use volumeMode:Block, RWX for migration
+kubevirt_vm_storageclass: ceph-block          # RBD block — default for single-node VM disks
+kubevirt_migratable_storageclass: ceph-filesystem  # CephFS RWX filesystem → live-migratable disk.img
 
 # virtctl on the gateway (for console + migrate).
 virtctl_url: "https://github.com/kubevirt/kubevirt/releases/download/{{ kubevirt_version }}/virtctl-{{ kubevirt_version }}-linux-amd64"

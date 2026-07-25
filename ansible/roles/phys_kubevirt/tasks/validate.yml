@@ -12,7 +12,10 @@
     - ansible.builtin.shell: "echo '{{ ns_yaml.stdout }}' | {{ kubevirt_k }} apply -f - && {{ kubevirt_k }} label ns {{ ns }} pod-security.kubernetes.io/enforce=privileged --overwrite"
       changed_when: true
 
-    - name: Define a cirros VM (containerDisk = migratable; useEmulation:false → real KVM)
+    # For live migration the VM disk must be on SHARED storage. CDI imports the cirros image (from the
+    # container registry, via the mirror) into an RWX **block** RBD volume — migratable across hosts,
+    # and validates CDI + RBD-under-KubeVirt in one shot.
+    - name: Define a VM on an RWX-block RBD disk (CDI-imported → migratable, real KVM)
       ansible.builtin.shell: |
         cat <<'EOF' | {{ kubevirt_k }} apply -f -
         apiVersion: kubevirt.io/v1
@@ -20,6 +23,18 @@
         metadata: {name: vm-test, namespace: {{ ns }}}
         spec:
           running: true
+          dataVolumeTemplates:
+            - metadata: {name: vm-test-disk}
+              spec:
+                source:
+                  registry: {url: "docker://quay.io/kubevirt/cirros-container-disk-demo"}
+                storage:
+                  # CephFS RWX filesystem: the disk.img is shared across hosts → live-migratable, and
+                  # a filesystem volume avoids the raw-block-device permission wall CDI hits on RBD.
+                  storageClassName: {{ kubevirt_migratable_storageclass }}
+                  volumeMode: Filesystem
+                  accessModes: [ReadWriteMany]
+                  resources: {requests: {storage: 2Gi}}
           template:
             metadata:
               labels: {kubevirt.io/vm: vm-test}
@@ -29,18 +44,22 @@
                 resources: {requests: {memory: 512Mi}}
                 devices:
                   disks:
-                    - {name: containerdisk, disk: {bus: virtio}}
+                    - {name: rootdisk, disk: {bus: virtio}}
                     - {name: cloudinit, disk: {bus: virtio}}
               volumes:
-                - name: containerdisk
-                  containerDisk: {image: quay.io/kubevirt/cirros-container-disk-demo}
+                - name: rootdisk
+                  dataVolume: {name: vm-test-disk}
                 - name: cloudinit
                   cloudInitNoCloud: {userData: "#cloud-config\npassword: talu\nchpasswd: {expire: false}\n"}
         EOF
       changed_when: true
 
-    - name: Wait for the VMI to be Running (image pulls via the mirror)
-      ansible.builtin.command: "{{ kubevirt_k }} -n {{ ns }} wait vmi/vm-test --for=jsonpath='{.status.phase}'=Running --timeout=420s"
+    - name: Wait for the CDI import to succeed (registry pull + convert via mirror)
+      ansible.builtin.command: "{{ kubevirt_k }} -n {{ ns }} wait dv/vm-test-disk --for=jsonpath='{.status.phase}'=Succeeded --timeout=420s"
+      changed_when: false
+
+    - name: Wait for the VMI to be Running
+      ansible.builtin.command: "{{ kubevirt_k }} -n {{ ns }} wait vmi/vm-test --for=jsonpath='{.status.phase}'=Running --timeout=300s"
       changed_when: false
 
     - name: Assert REAL KVM (not emulation) + capture the node
