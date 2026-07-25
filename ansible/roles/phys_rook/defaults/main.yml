@@ -14,8 +14,8 @@ rook_storageclass: ceph-block
 rook_replica_size: 3                # host failure domain across the (now schedulable) 3 CP + 1 worker
 snapshotter_version: "v8.6.0"       # external-snapshotter CRDs + controller (not shipped by Talos)
 
-# Rook 1.20 split CSI driver management into its own chart — a fresh install is THREE charts, in
-# order: operator → ceph-csi-drivers → cluster (Rook v1.20 Helm docs).
+# Two charts: operator + cluster. The operator chart bundles the ceph-csi-operator subchart
+# (csi.installCsiOperator=true) which deploys the CSI drivers — charts.rook.io/release publishes
+# only rook-ceph and rook-ceph-cluster (no standalone ceph-csi-drivers chart).
 rook_operator_chart_tgz: "{{ talos_gen_dir }}/rook-ceph-{{ rook_version }}.tgz"
-rook_csi_chart_tgz:      "{{ talos_gen_dir }}/ceph-csi-drivers-{{ rook_version }}.tgz"
 rook_cluster_chart_tgz:  "{{ talos_gen_dir }}/rook-ceph-cluster-{{ rook_version }}.tgz"

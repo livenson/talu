@@ -63,12 +63,14 @@
   changed_when: false
   failed_when: false
 
+# Two charts (operator + cluster). The operator chart bundles the ceph-csi-operator subchart
+# (values csi.installCsiOperator=true, default) which deploys the RBD/CephFS CSI drivers — there is
+# no separately-published ceph-csi-drivers chart in charts.rook.io/release.
 - name: Pull rook charts to local tgz (retry through flaky egress)
   ansible.builtin.command: "{{ _h }} pull rook-release/{{ item.chart }} --version {{ rook_version }} -d {{ talos_gen_dir }}"
   args: { creates: "{{ item.tgz }}" }
   loop:
     - { chart: rook-ceph,         tgz: "{{ rook_operator_chart_tgz }}" }
-    - { chart: ceph-csi-drivers,  tgz: "{{ rook_csi_chart_tgz }}" }
     - { chart: rook-ceph-cluster, tgz: "{{ rook_cluster_chart_tgz }}" }
   loop_control: { label: "{{ item.chart }}" }
   register: rook_pull
@@ -91,22 +93,6 @@
   environment: { KUBECONFIG: "{{ rook_kubeconfig }}" }
   register: rook_op
   changed_when: "'has been' in rook_op.stdout"
-
-# Rook 1.20: CSI drivers are their own chart, installed between operator and cluster.
-- name: Install ceph-csi-drivers (Rook 1.20 fresh-install step 2)
-  ansible.builtin.command:
-    argv:
-      - "{{ _h }}"
-      - upgrade
-      - --install
-      - ceph-csi-drivers
-      - "{{ rook_csi_chart_tgz }}"
-      - "--namespace={{ rook_namespace }}"
-      - --wait
-      - --timeout=6m
-  environment: { KUBECONFIG: "{{ rook_kubeconfig }}" }
-  register: rook_csi
-  changed_when: "'has been' in rook_csi.stdout"
 
 # Talos enforces PodSecurity baseline cluster-wide; Ceph daemons are privileged (lab-notes #5).
 - name: Label the rook namespace privileged (PSA)
