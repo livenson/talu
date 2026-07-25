@@ -1,0 +1,74 @@
+---
+- name: Monitoring namespace (PSA privileged — node-exporter needs hostNetwork/hostPath)
+  ansible.builtin.command: "{{ mon_k }} apply -f {{ mon_dir }}/namespace.yaml"
+  changed_when: true
+
+- name: Helm repos
+  ansible.builtin.shell: |
+    {{ mon_helm }} repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
+    {{ mon_helm }} repo add perses https://perses.github.io/helm-charts >/dev/null 2>&1 || true
+    {{ mon_helm }} repo update prometheus-community perses >/dev/null
+  changed_when: false
+
+- name: Pull charts to local tgz (retry through flaky egress)
+  ansible.builtin.command: "{{ mon_helm }} pull {{ item.repo }}/{{ item.chart }} --version {{ item.ver }} -d {{ talos_gen_dir }}"
+  args: { creates: "{{ item.tgz }}" }
+  loop:
+    - { repo: prometheus-community, chart: kube-prometheus-stack, ver: "{{ kube_prometheus_stack_version }}", tgz: "{{ kps_chart_tgz }}" }
+    - { repo: perses,               chart: perses-operator,       ver: "{{ perses_operator_version }}",       tgz: "{{ perses_chart_tgz }}" }
+  loop_control: { label: "{{ item.chart }}" }
+  register: mon_pull
+  retries: 15
+  delay: 5
+  until: mon_pull is not failed
+
+- name: Alertmanager webhook override (only when a URL is set)
+  ansible.builtin.set_fact:
+    mon_am_args: >-
+      {% if alerting_webhook_url | length > 0 %}
+      --set-string alertmanager.config.receivers[0].webhook_configs[0].url={{ alerting_webhook_url }}
+      --set-string alertmanager.config.receivers[1].webhook_configs[0].url={{ alerting_webhook_url }}
+      {% endif %}
+
+- name: Install kube-prometheus-stack (Prometheus + Alertmanager)
+  ansible.builtin.shell: >-
+    {{ mon_helm }} upgrade --install kube-prometheus-stack {{ kps_chart_tgz }}
+    --namespace monitoring -f {{ mon_dir }}/values.yaml {{ mon_am_args | trim }}
+    --wait --timeout 10m
+  environment: { KUBECONFIG: "{{ mon_kubeconfig }}" }
+  register: kps
+  changed_when: "'has been' in kps.stdout"
+
+- name: Install the Perses operator
+  ansible.builtin.command: >-
+    {{ mon_helm }} upgrade --install perses-operator {{ perses_chart_tgz }}
+    --namespace monitoring --wait --timeout 5m
+  environment: { KUBECONFIG: "{{ mon_kubeconfig }}" }
+  register: perses_op
+  changed_when: "'has been' in perses_op.stdout"
+
+- name: Wait for the Perses CRDs
+  ansible.builtin.command: "{{ mon_k }} wait --for condition=established crd/perses.perses.dev crd/persesdashboards.perses.dev --timeout=120s"
+  changed_when: false
+
+- name: Apply ServiceMonitors + recording/alert rules
+  ansible.builtin.command: "{{ mon_k }} apply -f {{ mon_dir }}/{{ item }}"
+  loop: "{{ mon_rules }}"
+  changed_when: true
+
+- name: Apply the Perses instance + dashboards
+  ansible.builtin.command: "{{ mon_k }} apply -f {{ mon_dir }}/{{ item }}"
+  loop: "{{ mon_dashboards }}"
+  changed_when: true
+
+- name: Status
+  ansible.builtin.shell: |
+    {{ mon_k }} -n monitoring get pods 2>&1 | grep -cE 'prometheus-kube|alertmanager|perses|kube-state|node-exporter|operator' | xargs echo "monitoring pods:"
+    echo "prometheus targets up (via API):"; {{ mon_k }} -n monitoring exec statefulset/prometheus-kube-prometheus-stack-prometheus -c prometheus -- wget -qO- 'http://localhost:9090/api/v1/query?query=count(up==1)' 2>/dev/null | head -c 200 || echo "(prometheus not ready yet)"
+  register: mon_status
+  changed_when: false
+  failed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ mon_status.stdout_lines }}"

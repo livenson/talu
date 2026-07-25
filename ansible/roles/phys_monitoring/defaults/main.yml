@@ -1,0 +1,32 @@
+---
+# Prometheus + Alertmanager (kube-prometheus-stack, Grafana off) + Perses on the physical cluster.
+# Reuses the product component values/rules/dashboards (components/platform/monitoring/) — they're
+# environment-agnostic. Scrapes what's already emitting: node-exporter, kube-state-metrics, Cilium/
+# Hubble, Ceph mgr, KubeVirt. Metrics feed the perf-testing work (docs/architecture/performance-testing).
+mon_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+mon_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+mon_helm: /usr/local/bin/helm
+mon_dir: "{{ playbook_dir }}/../components/platform/monitoring"
+
+kube_prometheus_stack_version: "87.19.1"   # latest; Prometheus + Alertmanager (Perses is the UI)
+perses_operator_version: "0.4.0"           # latest; dashboards-as-code operator
+alerting_webhook_url: ""                   # empty → Alertmanager null receiver (visible, notifies nowhere)
+
+kps_chart_tgz: "{{ talos_gen_dir }}/kube-prometheus-stack-{{ kube_prometheus_stack_version }}.tgz"
+perses_chart_tgz: "{{ talos_gen_dir }}/perses-operator-{{ perses_operator_version }}.tgz"
+
+# Rules/SMs to apply (Velero/backup ones deferred until the backup layer exists).
+mon_rules:
+  - servicemonitors.yaml
+  - recording-rules.yaml
+  - node-rules.yaml
+  - resource-rules.yaml
+  - ceph-scrape.yaml
+# Perses instance + dashboards (backup/pomerium/certs render empty until those layers land — harmless).
+mon_dashboards:
+  - perses-instance.yaml
+  - dashboard-fleet.yaml
+  - dashboard-netsec.yaml
+  - dashboard-vmdetail.yaml
+  - dashboard-alerts.yaml
+  - dashboard-alertops.yaml
