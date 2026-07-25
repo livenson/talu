@@ -3,7 +3,6 @@
 # install step): the VM comes up in maintenance mode, gets its DHCP-reserved IP, then apply-config.
 
 talos_image_url: "https://github.com/siderolabs/talos/releases/download/{{ talos_version }}/metal-amd64.raw.zst"
-talos_image_dir: /var/lib/libvirt/images/talu
 talos_base_image: "{{ talos_image_dir }}/talos-{{ talos_version }}-metal-amd64.raw"
 
 talosctl_url: "https://github.com/siderolabs/talos/releases/download/{{ talos_version }}/talosctl-linux-amd64"

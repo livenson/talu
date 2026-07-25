@@ -1,0 +1,21 @@
+---
+# Rook-Ceph on the physical cluster: real RBD block storage on the per-node /dev/vdb disks — the
+# thing the nested VM lab can't do (it falls back to MicroCeph CephFS, lab-notes #14/#15).
+rook_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+rook_helm_bin: /usr/local/bin/helm
+rook_namespace: rook-ceph
+
+rook_version: "v1.20.2"             # latest Rook (operator + csi-drivers + cluster charts)
+ceph_image: "quay.io/ceph/ceph:v20.2.2"   # Tentacle. NOTE: v20.2.0 has a read-affinity data-corruption
+                                          # bug — must be >= v20.2.1; Rook 1.20.2 ships v20.2.2.
+rook_osd_device_filter: "^vdb$"     # the empty 129G virtio disk attached per node
+rook_block_pool: ceph-blockpool
+rook_storageclass: ceph-block
+rook_replica_size: 3                # host failure domain across the (now schedulable) 3 CP + 1 worker
+snapshotter_version: "v8.6.0"       # external-snapshotter CRDs + controller (not shipped by Talos)
+
+# Rook 1.20 split CSI driver management into its own chart — a fresh install is THREE charts, in
+# order: operator → ceph-csi-drivers → cluster (Rook v1.20 Helm docs).
+rook_operator_chart_tgz: "{{ talos_gen_dir }}/rook-ceph-{{ rook_version }}.tgz"
+rook_csi_chart_tgz:      "{{ talos_gen_dir }}/ceph-csi-drivers-{{ rook_version }}.tgz"
+rook_cluster_chart_tgz:  "{{ talos_gen_dir }}/rook-ceph-cluster-{{ rook_version }}.tgz"

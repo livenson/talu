@@ -46,9 +46,10 @@ talos_ingress_lb_ip: "172.18.200.10"
 talos_vip: "172.18.0.10"    # Talos shared control-plane VIP = the Kubernetes API endpoint
 talos_cluster_name: talu-phys
 talos_gen_dir: /home/cloud-user/talu/talos-phys        # cluster secrets/configs/kubeconfig (gateway)
+talos_image_dir: /var/lib/libvirt/images/talu          # Talos base image + per-node VM disks (each host)
 talos_registry_patch: /home/cloud-user/talu/talos-registry-mirror.patch.yaml
-talos_version: "v1.11.2"    # matches all.yml; the metal disk image + installer tag
-kubernetes_version: "v1.34.1"
+talos_version: "v1.13.7"    # latest Talos (was v1.11.2); the metal disk image + installer tag
+kubernetes_version: "v1.35.7"   # KubeVirt v1.8 targets k8s <=1.35 — do NOT jump to 1.36
 
 # Control planes on the 3 healthy-bond hosts (1/2 also have more RAM); worker on compute4 (its
 # bond leg is dead — keep etcd off it). MACs are fixed so DHCP hands out stable IPs.

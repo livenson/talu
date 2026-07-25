@@ -1,0 +1,164 @@
+---
+# Deploys Rook-Ceph (RBD) on the physical cluster. Runs on the gateway (kubeconfig + helm + talosctl).
+- name: Shorthands
+  ansible.builtin.set_fact:
+    _k: "kubectl --kubeconfig={{ rook_kubeconfig }}"
+    _h: "{{ rook_helm_bin }}"
+    _cp_ips: "{{ talos_nodes | selectattr('role','equalto','controlplane') | map(attribute='ip') | list }}"
+
+  # ── make control planes schedulable so OSDs/mons can spread across ≥3 hosts (host failure domain) ──
+- name: Allow scheduling on control planes (Talos config patch, no reboot)
+  ansible.builtin.command:
+    argv: "{{ ['talosctl', '--talosconfig=' + talos_gen_dir + '/talosconfig', '--endpoints'] + _cp_ips + ['--nodes'] + _cp_ips + ['patch', 'mc', '--mode=no-reboot', '--patch', '[{\"op\":\"add\",\"path\":\"/cluster/allowSchedulingOnControlPlanes\",\"value\":true}]'] }}"
+  register: sched_patch
+  changed_when: "'patched' in sched_patch.stdout or sched_patch.rc == 0"
+  failed_when: sched_patch.rc != 0 and 'no changes' not in (sched_patch.stderr | default(''))
+
+- name: Wait for the control-plane taint to be removed
+  ansible.builtin.shell: >-
+    {{ _k }} get nodes -o jsonpath='{range .items[*]}{.spec.taints[?(@.key=="node-role.kubernetes.io/control-plane")].key}{"\n"}{end}'
+    | grep -c control-plane || true
+  register: taint_count
+  until: taint_count.stdout | trim == "0"
+  retries: 20
+  delay: 6
+  changed_when: false
+
+# ── external-snapshotter (CRDs + controller) — Talos/k8s does not ship these ──
+- name: Install snapshot CRDs + controller (retried through flaky egress)
+  ansible.builtin.command: "{{ _k }} apply --server-side --force-conflicts -f {{ item }}"
+  loop:
+    - "https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ snapshotter_version }}/client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml"
+    - "https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ snapshotter_version }}/client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml"
+    - "https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ snapshotter_version }}/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml"
+  register: snap_crds
+  retries: 6
+  delay: 5
+  until: snap_crds.rc == 0
+  changed_when: "'created' in snap_crds.stdout or 'configured' in snap_crds.stdout"
+
+- name: Deploy the snapshot-controller
+  ansible.builtin.command: "{{ _k }} apply --server-side --force-conflicts -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ snapshotter_version }}/deploy/kubernetes/snapshot-controller/{{ item }}"
+  loop: [rbac-snapshot-controller.yaml, setup-snapshot-controller.yaml]
+  register: snap_ctrl
+  retries: 6
+  delay: 5
+  until: snap_ctrl.rc == 0
+  changed_when: "'created' in snap_ctrl.stdout or 'configured' in snap_ctrl.stdout"
+
+# ── Rook operator + cluster (helm; charts pulled to local tgz with retries) ──
+- name: Add rook helm repo
+  ansible.builtin.command: "{{ _h }} repo add rook-release https://charts.rook.io/release"
+  changed_when: false
+  failed_when: false
+
+- name: Pull rook charts to local tgz (retry through flaky egress)
+  ansible.builtin.command: "{{ _h }} pull rook-release/{{ item.chart }} --version {{ rook_version }} -d {{ talos_gen_dir }}"
+  args: { creates: "{{ item.tgz }}" }
+  loop:
+    - { chart: rook-ceph,         tgz: "{{ rook_operator_chart_tgz }}" }
+    - { chart: ceph-csi-drivers,  tgz: "{{ rook_csi_chart_tgz }}" }
+    - { chart: rook-ceph-cluster, tgz: "{{ rook_cluster_chart_tgz }}" }
+  loop_control: { label: "{{ item.chart }}" }
+  register: rook_pull
+  retries: 15
+  delay: 5
+  until: rook_pull is not failed
+
+- name: Install rook-ceph operator
+  ansible.builtin.command:
+    argv:
+      - "{{ _h }}"
+      - upgrade
+      - --install
+      - rook-ceph
+      - "{{ rook_operator_chart_tgz }}"
+      - "--namespace={{ rook_namespace }}"
+      - --create-namespace
+      - --wait
+      - --timeout=6m
+  environment: { KUBECONFIG: "{{ rook_kubeconfig }}" }
+  register: rook_op
+  changed_when: "'has been' in rook_op.stdout"
+
+# Rook 1.20: CSI drivers are their own chart, installed between operator and cluster.
+- name: Install ceph-csi-drivers (Rook 1.20 fresh-install step 2)
+  ansible.builtin.command:
+    argv:
+      - "{{ _h }}"
+      - upgrade
+      - --install
+      - ceph-csi-drivers
+      - "{{ rook_csi_chart_tgz }}"
+      - "--namespace={{ rook_namespace }}"
+      - --wait
+      - --timeout=6m
+  environment: { KUBECONFIG: "{{ rook_kubeconfig }}" }
+  register: rook_csi
+  changed_when: "'has been' in rook_csi.stdout"
+
+# Talos enforces PodSecurity baseline cluster-wide; Ceph daemons are privileged (lab-notes #5).
+- name: Label the rook namespace privileged (PSA)
+  ansible.builtin.command: >-
+    {{ _k }} label namespace {{ rook_namespace }}
+    pod-security.kubernetes.io/enforce=privileged
+    pod-security.kubernetes.io/warn=privileged
+    pod-security.kubernetes.io/audit=privileged --overwrite
+  changed_when: true
+
+- name: Render cluster values
+  ansible.builtin.template:
+    src: rook-cluster-values.yaml.j2
+    dest: "{{ talos_gen_dir }}/rook-cluster-values.yaml"
+    mode: "0644"
+
+- name: Install rook-ceph-cluster (CephCluster + block pool + StorageClass)
+  ansible.builtin.command:
+    argv:
+      - "{{ _h }}"
+      - upgrade
+      - --install
+      - rook-ceph-cluster
+      - "{{ rook_cluster_chart_tgz }}"
+      - "--namespace={{ rook_namespace }}"
+      - "--values={{ talos_gen_dir }}/rook-cluster-values.yaml"
+      - --timeout=6m
+  environment: { KUBECONFIG: "{{ rook_kubeconfig }}" }
+  register: rook_cl
+  changed_when: "'has been' in rook_cl.stdout"
+
+- name: RBD VolumeSnapshotClass
+  ansible.builtin.copy:
+    dest: "{{ talos_gen_dir }}/rbd-snapshotclass.yaml"
+    content: "{{ lookup('template', 'rbd-snapshotclass.yaml.j2') }}"
+    mode: "0644"
+
+- name: Apply the RBD VolumeSnapshotClass
+  ansible.builtin.command: "{{ _k }} apply -f {{ talos_gen_dir }}/rbd-snapshotclass.yaml"
+  register: snapclass
+  retries: 10
+  delay: 6
+  until: snapclass.rc == 0
+  changed_when: "'created' in snapclass.stdout or 'configured' in snapclass.stdout"
+
+# ── wait for Ceph health ──
+- name: Wait for the CephCluster to reach Ready/HEALTH_OK
+  ansible.builtin.shell: >-
+    {{ _k }} -n {{ rook_namespace }} get cephcluster -o jsonpath='{.items[0].status.ceph.health}{" "}{.items[0].status.phase}'
+  register: ceph_health
+  until: "'HEALTH_OK' in ceph_health.stdout or 'HEALTH_WARN' in ceph_health.stdout"
+  retries: 60
+  delay: 15
+  changed_when: false
+
+- name: Storage status
+  ansible.builtin.shell: |
+    {{ _k }} -n {{ rook_namespace }} get cephcluster -o wide 2>&1 | tail -3
+    echo "--- storageclasses ---"; {{ _k }} get storageclass 2>&1
+    echo "--- osds ---"; {{ _k }} -n {{ rook_namespace }} get pods -l app=rook-ceph-osd -o wide 2>&1 | tail -6
+  register: storage_status
+  changed_when: false
+
+- name: Show storage status
+  ansible.builtin.debug:
+    msg: "{{ storage_status.stdout_lines }}"
