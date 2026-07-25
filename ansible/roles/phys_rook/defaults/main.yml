@@ -5,17 +5,20 @@ rook_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
 rook_helm_bin: /usr/local/bin/helm
 rook_namespace: rook-ceph
 
-rook_version: "v1.20.2"             # latest Rook (operator + csi-drivers + cluster charts)
-ceph_image: "quay.io/ceph/ceph:v20.2.2"   # Tentacle. NOTE: v20.2.0 has a read-affinity data-corruption
-                                          # bug — must be >= v20.2.1; Rook 1.20.2 ships v20.2.2.
+# Rook 1.19.7, NOT 1.20.x: 1.20 migrated CSI to the ceph-csi-operator model, which needs the
+# ceph-csi-drivers chart (Driver/OperatorConfig CRs + image-set + ServiceAccounts + RBAC) that is
+# NOT published to charts.rook.io/release — so the driver pods never start (rbd-ctrlplugin-sa not
+# found). 1.19.7 uses the mature CSI the operator auto-deploys on CephCluster creation. Revisit 1.20
+# once the ceph-csi-drivers chart is published or its manifests are vendored.
+rook_version: "v1.19.7"
+ceph_image: "quay.io/ceph/ceph:v19.2.4"   # Squid — what Rook 1.19.7 ships; stable
 rook_osd_device_filter: "^vdb$"     # the empty 129G virtio disk attached per node
 rook_block_pool: ceph-blockpool
 rook_storageclass: ceph-block
 rook_replica_size: 3                # host failure domain across the (now schedulable) 3 CP + 1 worker
 snapshotter_version: "v8.6.0"       # external-snapshotter CRDs + controller (not shipped by Talos)
 
-# Two charts: operator + cluster. The operator chart bundles the ceph-csi-operator subchart
-# (csi.installCsiOperator=true) which deploys the CSI drivers — charts.rook.io/release publishes
-# only rook-ceph and rook-ceph-cluster (no standalone ceph-csi-drivers chart).
+# Two charts: operator + cluster. In 1.19 the operator itself deploys the RBD/CephFS CSI drivers
+# (+ their ServiceAccounts + RBAC) automatically when the first CephCluster is created.
 rook_operator_chart_tgz: "{{ talos_gen_dir }}/rook-ceph-{{ rook_version }}.tgz"
 rook_cluster_chart_tgz:  "{{ talos_gen_dir }}/rook-ceph-cluster-{{ rook_version }}.tgz"
