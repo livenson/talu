@@ -19,13 +19,17 @@ operatorConfig:
       priorityClassName: system-cluster-critical
 
 # RBD is the tenant/VM disk class we validate; CephFS on for RWX (live-migration/EFI later).
+# NB: snapshotPolicy is a PER-DRIVER field that overrides driverSpecDefaults and is what actually
+# lands in the Driver CR — set it here or the csi-snapshotter sidecar is omitted.
 drivers:
   rbd:
     enabled: true
     name: {{ rook_namespace }}.rbd.csi.ceph.com
+    snapshotPolicy: "volumeSnapshot"
   cephfs:
     enabled: true
     name: {{ rook_namespace }}.cephfs.csi.ceph.com
+    snapshotPolicy: "volumeSnapshot"
   nfs:
     enabled: false
     name: {{ rook_namespace }}.nfs.csi.ceph.com
