@@ -62,6 +62,17 @@ spec:
             - kind: TimeSeriesQuery
               spec:
                 plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (enforcement) (cilium_policy_endpoint_enforcement_status)" } }
+      xtenant:
+        kind: Panel
+        spec:
+          display: { name: "Cross-namespace policy drops /s (source -> destination)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                # source/destination = namespace (hubble sourceContext/destinationContext). Tenant
+                # isolation evidence: a blocked A->B probe lights up the source=A,destination=B row.
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (source, destination) (rate(hubble_drop_total{reason=\"POLICY_DENIED\"}[2m]))" } }
     layouts:
       - kind: Grid
         spec:
@@ -76,3 +87,8 @@ spec:
             - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/hubbledrops" } }
             - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/l7" } }
             - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/enforcement" } }
+      - kind: Grid
+        spec:
+          display: { title: Tenant isolation }
+          items:
+            - { x: 0, y: 0, width: 24, height: 8, content: { $ref: "#/spec/panels/xtenant" } }
