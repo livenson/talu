@@ -1,0 +1,65 @@
+# Runtime security (Tetragon) — eBPF observation/enforcement signal. Tetragon exposes NO per-policy or
+# enforcement-action metric, so the SIGKILL of an enforce policy is proven via Loki (the JSON event with
+# action=Sigkill + policy name, shipped by Alloy) + the functional block; this dashboard shows the
+# event-rate spike (PROCESS_KPROBE = tracing-policy hits) and eBPF ring-buffer health. Real-HW only (#38).
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-runtime-security
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — Runtime Security (Tetragon)
+    duration: 1h
+    panels:
+      eventsbytype:
+        kind: Panel
+        spec:
+          display: { name: "Tetragon events/s by type (KPROBE = policy hits)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (type) (rate(tetragon_events_total[1m]))" } }
+      kprobehits:
+        kind: Panel
+        spec:
+          display: { name: "Policy (kprobe) events/s by node" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (node) (rate(tetragon_events_total{type=\"PROCESS_KPROBE\"}[1m]))" } }
+      ringbufhealth:
+        kind: Panel
+        spec:
+          display: { name: "eBPF ring-buffer lost events/s (0 = healthy)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum(rate(tetragon_observer_ringbuf_events_lost_total[5m])) + sum(rate(tetragon_notify_overflowed_events_total[5m]))" } }
+      exported:
+        kind: Panel
+        spec:
+          display: { name: "Events exported/s (to Loki via Alloy)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum(rate(tetragon_events_exported_total[1m]))" } }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: "Tetragon" }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/eventsbytype" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/kprobehits" } }
+            - { x: 0,  y: 8, width: 12, height: 8, content: { $ref: "#/spec/panels/ringbufhealth" } }
+            - { x: 12, y: 8, width: 12, height: 8, content: { $ref: "#/spec/panels/exported" } }
