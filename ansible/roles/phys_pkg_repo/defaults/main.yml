@@ -1,0 +1,4 @@
+---
+pkgr_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+pkgr_src: "{{ playbook_dir }}/../components/platform/pkg-repo"
+pkgr_dir: "{{ talos_gen_dir }}/components/platform/pkg-repo"
