@@ -1,6 +1,8 @@
 ---
-# Host-to-host VXLAN overlay for the Talos VM network + DHCP/DNS + NAT on the gateway host.
-# Reversible: `systemctl stop talu-overlay-net` deletes both ifaces; nothing touches bond0/VLANs.
+# L2 substrate for the Talos VM network + DHCP/DNS + NAT on the gateway host. The bridge uplink is a
+# dedicated 802.1Q VLAN on bond0 by DEFAULT (talos_overlay.uplink_mode=vlan — plain Ethernet the 82599
+# can GRO, ~line rate) or the host-to-host VXLAN overlay as a fallback (uplink_mode=vxlan).
+# Reversible: `systemctl stop talu-overlay-net` deletes the uplink + bridge; nothing touches bond0/VLANs.
 
 - name: Overlay bring-up script
   become: true

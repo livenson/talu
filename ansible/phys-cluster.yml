@@ -6,7 +6,8 @@
 #
 # Layers, each validated before the next:
 #   1. phys_libvirt     — libvirt/qemu-kvm on all 4 hosts (non-destructive)
-#   2. phys_vm_network  — host-to-host VXLAN overlay (br-talu), DHCP/DNS + NAT on the gateway
+#   2. phys_vm_network  — L2 for the Talos VM net: br-talu on a dedicated VLAN by default
+#                         (uplink_mode=vlan, no encap → the 82599 GROs it); VXLAN fallback; DHCP/DNS + NAT
 #   3. phys_talos_vms   — boot Talos VMs, apply machineconfig (+ registry-mirror patch), bootstrap
 - name: Talu physical lab — nested Talos cluster
   hosts: phys
