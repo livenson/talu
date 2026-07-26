@@ -66,6 +66,18 @@
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: false
 
+# The external domain, published for the OTHER writer of pomerium-config: the tenancy role's route-sync
+# CronJob re-renders the whole config blob (base routes + per-Service ssh/dashboard routes) every 2 min,
+# so it MUST agree with this role on the domain or it clobbers these routes onto a dead one. Published as
+# data rather than duplicated into components/ — same reason Dex's issuer reads `lab_domain` (#29).
+- name: Publish the external domain (ConfigMap route-sync renders Pomerium routes from)
+  ansible.builtin.shell: |
+    kubectl -n pomerium create configmap talu-platform --from-literal=domain="{{ lab_domain }}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  register: pom_domain_cm
+  changed_when: "'configured' in pom_domain_cm.stdout or 'created' in pom_domain_cm.stdout"
+
 - name: Pomerium ConfigMap (base routes id/whoami/vms)
   ansible.builtin.shell: |
     cat <<EOF | kubectl apply -f -

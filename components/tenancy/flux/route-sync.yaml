@@ -39,7 +39,16 @@ spec:
             - name: sync
               image: docker.io/bitnami/kubectl:latest
               env:
-                - { name: LAB_DOMAIN, value: "203-0-113-10.sslip.io" }
+                # The external domain is a per-environment VALUE, not part of the product — it changes
+                # every time the lab VM is reinstalled with a new floating IP. It comes from the
+                # `talu-platform` ConfigMap the `identity_pomerium` role writes from `lab_domain`, which
+                # is the same source of truth Dex's issuer and Pomerium's authenticate URL use. Hardcoding
+                # it here silently re-renders every route onto a dead domain (Pomerium then 404s every
+                # host, since this job overwrites the whole config blob every 2 min). No default on
+                # purpose: a missing ConfigMap fails the pod loudly instead of writing a wrong domain.
+                - name: LAB_DOMAIN
+                  valueFrom:
+                    configMapKeyRef: { name: talu-platform, key: domain }
               command: ["/bin/bash", "-ceu"]
               args:
                 - |

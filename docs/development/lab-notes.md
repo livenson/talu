@@ -585,3 +585,24 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     cosign `verify-images` rule ships `failurePolicy: Ignore` while it is Audit. All Talu policies ship
     **Audit-first** — findings surface as `PolicyReport` (`kubectl get polr -A`), nothing is blocked;
     promote to Enforce per-env only after PolicyReports confirm no legitimate workload trips a rule.
+
+40. **`pomerium-config` has TWO writers, and route-sync is the one that wins — they must agree on the
+    domain.** The `identity_pomerium` role renders the ConfigMap from `lab_domain`, but the tenancy
+    role's **`route-sync` CronJob re-renders the WHOLE blob every 2 minutes** (base routes + the
+    per-Service `ssh://`/dashboard routes) and applies it last. So route-sync — not the ansible role —
+    decides the live domain. It used to carry a hardcoded `LAB_DOMAIN` (the doc placeholder
+    `203-0-113-10.sslip.io`), which silently rewrote every route onto a dead domain a couple of minutes
+    after Stage 6 finished. Symptom: **envoy answers `404` on every host** (`perses.`, `vms.`,
+    `hubble.`, `alertmanager.`, `id.`) and serves the self-signed *Pomerium PSK CA* cert instead of a
+    Let's Encrypt one — autocert never requests a cert for a hostname it has no route for, so the
+    browser TLS warning is a *symptom*, not the cause. Diagnose by comparing the live config's `from:`
+    hosts to the URL you're typing:
+    `kubectl -n pomerium get cm pomerium-config -o jsonpath='{.data.config\.yaml}' | grep from:`.
+    A 404 on ALL hosts = domain mismatch; a 404 on ONE host = a genuinely missing route.
+    `LAB_DOMAIN` now comes from `configMapKeyRef` → the **`talu-platform`** ConfigMap (key `domain`) that
+    `identity_pomerium` writes from `lab_domain`, so both writers share one source of truth and the
+    domain stays a per-environment *value* rather than being baked into `components/`. There is
+    deliberately no default: a missing ConfigMap fails the job pod loudly instead of writing a wrong
+    domain. Note the `dev/lab/*.sh` helpers (`expose-vm.sh`, `vm-ssh.sh`, `gen-vm-manifests.sh`) still
+    *default* `LAB_DOMAIN` to the same placeholder — export it (or source `env.sh`) before running them.
+    Related: #29 — keep `lab_floating_ip` in sync with the real VM IP after every reinstall.

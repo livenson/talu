@@ -27,7 +27,7 @@ you hit a wall. Update whichever file fits when you burn time on a non-obvious i
 
 ## Critical gotchas (full catalog + access plane + versions in docs/development/lab-notes.md)
 
-Know these before touching the lab — they lock you out or cost hours. The full catalog (#1–#37)
+Know these before touching the lab — they lock you out or cost hours. The full catalog (#1–#40)
 (stable #IDs, cross-referenced from roles/scripts), the identity & access-plane build, and audited
 component versions live in [`docs/development/lab-notes.md`](docs/development/lab-notes.md).
 
@@ -43,6 +43,9 @@ component versions live in [`docs/development/lab-notes.md`](docs/development/la
 - **SSH is Pomerium Native SSH** (Pomerium is the SSH CA) — no OpenBao, no tunnel, no static password. (#21)
 - **Tetragon is real-hardware only** — needs kernel BTF + `/sys/kernel/tracing` the nested lab lacks;
   wired into `example` only, omitted from `rocky-sandbox`. Kyverno runs anywhere (Audit-first). (#38/#39)
+- **`route-sync` owns the live Pomerium routes** — it re-renders the whole `pomerium-config` blob every
+  2 min, so it (not the ansible role) decides the domain. A 404 on *every* host = domain mismatch; both
+  writers read `lab_domain` via the `talu-platform` ConfigMap. (#40)
 
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the
