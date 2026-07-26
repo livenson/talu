@@ -37,6 +37,33 @@
   when: pom_sec.rc != 0
   changed_when: true
 
+# Native SSH — Pomerium is the SSH CA. Generate the User CA + host keys ONCE (never rotated in place;
+# rotation is dev/lab/ca-rotate.sh). The private CA + host keys go in Secret pomerium-ssh (the Deployment
+# mounts it at /ssh, so it MUST exist before Pomerium starts); the CA PUBLIC key goes in ConfigMap
+# pomerium-user-ca, which the tenancy role mirrors into the tenants ns and the tenant chart bakes into
+# each VM's cloud-init as TrustedUserCAKeys. The tenant chart REQUIRES a non-empty sshUserCaPubKey in
+# its default caTrust mode, so this is a hard prerequisite for tenancy, not optional.
+- name: Pomerium SSH CA present?
+  ansible.builtin.command: "{{ id_k }} -n pomerium get secret pomerium-ssh"
+  register: pom_ssh_ca
+  changed_when: false
+  failed_when: false
+
+- name: Generate the Pomerium SSH User CA + host keys (one-time)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; cd "$T"
+    ssh-keygen -t ed25519 -N "" -f user_ca -C "Pomerium User CA (talu phys)" -q
+    ssh-keygen -t ed25519 -N "" -f host_ed25519 -C "pomerium-ssh host" -q
+    ssh-keygen -t rsa -b 4096 -N "" -f host_rsa -q
+    ssh-keygen -t ecdsa -b 521 -N "" -f host_ecdsa -q
+    {{ id_k }} -n pomerium create secret generic pomerium-ssh \
+      --from-file=user_ca=user_ca --from-file=user_ca.pub=user_ca.pub \
+      --from-file=host_ed25519=host_ed25519 --from-file=host_rsa=host_rsa --from-file=host_ecdsa=host_ecdsa
+    {{ id_k }} -n pomerium create configmap pomerium-user-ca --from-file=user_ca.pub=user_ca.pub
+  when: pom_ssh_ca.rc != 0
+  changed_when: true
+
 - name: Deploy Pomerium (IAP)
   ansible.builtin.template:
     src: pomerium.yaml.j2

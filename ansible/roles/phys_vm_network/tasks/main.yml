@@ -92,7 +92,7 @@
     state: enabled
   when: inventory_hostname == talos_overlay.ingress_host
 
-- name: Ingress — forward public :80/:443 to the cluster LB IP
+- name: Ingress — forward public :80/:443/:2222 to the cluster LB IP
   become: true
   ansible.posix.firewalld:
     port_forward:
@@ -101,7 +101,10 @@
     permanent: true
     immediate: true
     state: enabled
-  loop: ["80", "443"]
+  # 80/443 = Pomerium HTTP(S); 2222 = Pomerium Native SSH proxy. All land on the same LB IP (the
+  # Pomerium Service), so the provider forwards an external port for each → this host (the ingress
+  # host) → DNAT here. The trusted-zone masquerade (above) covers the return path for all of them.
+  loop: ["80", "443", "2222"]
   when: inventory_hostname == talos_overlay.ingress_host
 
 - name: Gateway — install dnsmasq

@@ -18,6 +18,16 @@ data:
     # (and the Cilium LB IP :80) has no backing listener and the port is dead. This serves the
     # HTTP→HTTPS redirect AND the Let's Encrypt HTTP-01 ACME challenge on :80 (autocert robustness).
     http_redirect_addr: ":80"
+    # Native SSH proxy — Pomerium IS the SSH CA. It signs short-lived user certs after OIDC, and VMs
+    # trust the CA public key (the tenant chart bakes pomerium-user-ca into each VM's cloud-init as
+    # TrustedUserCAKeys). Users run `ssh <principal>@<vm>@ssh.<host> -p <port>`; the middle token is
+    # the ssh:// route name. The CA private key + host keys live in the pomerium-ssh Secret (generated
+    # by this role), mounted at /ssh below. Per-tenant `ssh://<vm>` routes are appended from Services
+    # labelled talu.io/ssh-expose (route-sync, phys-adaptation pending) — added statically per tenant
+    # meanwhile.
+    ssh_address: ":2222"
+    ssh_user_ca_key_file: /ssh/user_ca
+    ssh_host_key_files: [/ssh/host_ed25519, /ssh/host_rsa, /ssh/host_ecdsa]
     authenticate_service_url: https://authenticate.{{ lab_domain }}
     idp_provider: oidc
     idp_provider_url: https://id.{{ lab_domain }}/dex
@@ -67,15 +77,19 @@ spec:
             - {name: https, containerPort: 443}
             - {name: http, containerPort: 80}
             - {name: metrics, containerPort: 9902}
+            - {name: ssh, containerPort: 2222}   # Native SSH proxy
           volumeMounts:
             - {name: config, mountPath: /pomerium}
             - {name: autocert, mountPath: /data/autocert}
+            - {name: ssh, mountPath: /ssh, readOnly: true}   # user_ca + host keys (pomerium-ssh Secret)
           readinessProbe: {httpGet: {path: /ping, port: 443, scheme: HTTPS}, initialDelaySeconds: 10, periodSeconds: 10}
       volumes:
         - name: config
           configMap: {name: pomerium-config, items: [{key: config.yaml, path: config.yaml}]}
         - name: autocert
           persistentVolumeClaim: {claimName: pomerium-autocert}
+        - name: ssh
+          secret: {secretName: pomerium-ssh, defaultMode: 384}   # 384 == 0600, private keys
 ---
 apiVersion: v1
 kind: Service
@@ -91,6 +105,7 @@ spec:
   ports:
     - {name: https, port: 443, targetPort: 443}
     - {name: http, port: 80, targetPort: 80}
+    - {name: ssh, port: 2222, targetPort: 2222}   # Native SSH proxy (provider must forward an ext port here)
 ---
 apiVersion: v1
 kind: Service
