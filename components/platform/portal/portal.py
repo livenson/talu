@@ -12,6 +12,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CONFIG_PATH = os.environ.get("POMERIUM_CONFIG", "/config/config.yaml")
 LISTEN_PORT = int(os.environ.get("PORT", "8080"))
+# External port the provider forwards to Pomerium's Native SSH proxy (ssh_address :2222). Site-specific:
+# the physical lab forwards :2222 straight through; the old OpenStack lab used :23 (socat→NodePort). Set
+# SSH_PORT per environment on the portal Deployment; default matches Pomerium's own listener.
+SSH_PORT = os.environ.get("SSH_PORT", "2222")
 
 # Friendly names/descriptions per platform route, keyed on the `from` sub-domain. Anything not listed
 # still renders (with its upstream as the description) — so new platform routes never silently vanish.
@@ -150,7 +154,7 @@ def render(domain, routes):
 {''.join(body) or '<p class="desc">No routes found — is pomerium-config present?</p>'}
 <p class="foot">Every route enters through Pomerium (the only ingress). Links open the service;
 you'll be asked to sign in unless the route is marked <span class="acc pub">public</span>.
-SSH routes use Native SSH: <code>ssh &lt;principal&gt;@&lt;vm&gt;@ssh.{dom} -p 23</code>.</p>
+SSH routes use Native SSH: <code>ssh &lt;principal&gt;@&lt;vm&gt;@ssh.{dom} -p {SSH_PORT}</code>.</p>
 </div></body></html>"""
 
 
