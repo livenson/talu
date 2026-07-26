@@ -23,3 +23,4 @@
     - { role: phys_identity,   tags: [identity, access] }
     - { role: phys_portal,     tags: [portal, ui] }
     - { role: phys_tenancy,    tags: [tenancy, tenants] }
+    - { role: phys_backup,     tags: [backup, dr] }
