@@ -249,6 +249,32 @@ Right-sizing the *method* to the current physical lab (`environments/rocky-phys`
 - **Enable IOMMU** (`phys_host_prep` stages `intel_iommu=on`) if SR-IOV passthrough is on the roadmap;
   the NICs expose 63 VFs/port.
 
+### 9.1 Measured density (Phase 4 control plane + Phase 5 boot-storm)
+
+Run on the nested-Talos lab (4 nodes, each ~8 vCPU / ~15 GiB allocatable ≈ 60 GiB total), kube-burner
+v2.7.3 + a cirros boot-storm. Dashboards: `dashboard-controlplane.yaml`, `dashboard-vmlifecycle.yaml`.
+
+- **Control-plane churn: no knee up to 2500 objects @ qps 100.** API write p99 held flat at **~24 ms**
+  (baseline 24.1 → post 23.7), in-flight requests 6→7, **zero 5xx/429**. That write-p99 *includes the
+  etcd commit*, so it doubles as an etcd-fsync-on-SATA proxy — and it shows no strain at sustained
+  ~100 obj/s. The cluster absorbs control-plane churn far above any realistic Talu tenant/VM rate.
+- **Observability GAP (real, logged):** on Talos the **etcd / scheduler / controller-manager metrics
+  are NOT scraped** — those components bind to localhost, so kube-prometheus-stack's
+  kubeEtcd/kubeScheduler/kubeControllerManager targets are empty (no ServiceMonitors/targets exist).
+  The direct `etcd_disk_wal_fsync_duration_seconds` / `scheduler_e2e_*` histograms are therefore
+  unavailable; `dashboard-controlplane.yaml` wires those panels but they read empty until enabled.
+  **Follow-up:** expose etcd `:2381` via a Service+Endpoints + cert-based ServiceMonitor (Talos etcd
+  PKI), and set the scheduler/CM bind addresses in machineconfig. Until then the apiserver write-p99 is
+  the accepted proxy. This does not block Talu — it's a monitoring-completeness item.
+- **VM boot-storm knee: ~80 concurrent VMs, memory-bound (graceful).** 40 cirros VMs (128 MiB guest)
+  reached Running in **~50 s**; ramping to 100 hit the ceiling at **~80 Running** — the scheduler cleanly
+  refused the rest with `0/4 nodes available: 4 Insufficient memory` and held 19 pods Pending (no crash,
+  no thrash, no cascade). Limiter is **node RAM**, exactly as predicted for 4×15 GiB — not CPU, KubeVirt,
+  Ceph, or the network. Boot latency under the storm: **p50 ~25 s, p99 ~46 s** (creation→Running,
+  concurrent containerDisk mounts). VMs balanced across all 4 nodes. Scales linearly with RAM/node on
+  production hardware; the *behaviour at saturation* (graceful scheduler back-pressure) is the
+  representative result, the absolute count is lab-sized.
+
 ---
 
 ## 10. Anti-patterns (don't ship these numbers)
