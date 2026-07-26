@@ -18,6 +18,7 @@
     - { role: phys_monitoring,   tags: [monitoring, obs] }
     - { role: phys_logging,    tags: [logging, obs] }
     - { role: phys_tetragon,   tags: [tetragon, security] }
+    - { role: phys_kyverno,    tags: [kyverno, security, policy] }
     - { role: phys_ingress,    tags: [ingress, lb] }
     - { role: phys_identity,   tags: [identity, access] }
     - { role: phys_portal,     tags: [portal, ui] }

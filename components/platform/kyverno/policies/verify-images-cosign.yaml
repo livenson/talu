@@ -54,7 +54,10 @@ spec:
             - "registry.talu.local/talu/*"
           failureAction: Audit           # env flip -> Enforce
           verifyDigest: true
-          mutateDigest: true             # pin to the verified digest on admission
+          # Kyverno (>=1.14) rejects mutateDigest:true with an Audit failureAction — you can't mutate a
+          # request you're only auditing. Keep it false while Audit-first; the Enforce overlay flips
+          # BOTH failureAction->Enforce AND mutateDigest->true (pin to the verified digest on admission).
+          mutateDigest: false
           attestors:
             - count: 1
               entries:
@@ -76,6 +79,7 @@ spec:
         - imageReferences:
             - "registry.talu.local/talu/*"
           failureAction: Audit
+          mutateDigest: false            # required with Audit (see rule[0]); Enforce overlay flips it
           attestors:
             - count: 1
               entries:
