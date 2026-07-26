@@ -23,6 +23,42 @@
   ansible.builtin.command: "{{ pkgr_k }} -n golden-images rollout status deploy/pkg-repo --timeout=120s"
   changed_when: false
 
+# ---- populate: build + index + publish the talu-ca-trust package (deb + rpm) from the live CA --------
+- name: Is the CA pubkey (pomerium-user-ca) present?  # published by phys_identity — populate needs it
+  ansible.builtin.command: "{{ pkgr_k }} -n pomerium get configmap pomerium-user-ca"
+  register: pkgr_ca
+  changed_when: false
+  failed_when: false
+
+- name: Copy the ca-trust build scripts to the gateway
+  ansible.builtin.copy:
+    src: "{{ pkgr_catrust_src }}/"
+    dest: "{{ pkgr_catrust_dir }}/"
+    mode: "0755"
+  when: pkgr_populate and pkgr_ca.rc == 0
+
+- name: Ensure the rpm toolchain (deb build is pure shell; rpm needs rpmbuild + createrepo_c)
+  ansible.builtin.package:
+    name: [rpm-build, createrepo_c]
+    state: present
+  become: true
+  register: pkgr_tools
+  failed_when: false        # publish.sh gracefully builds deb-only if the rpm toolchain is unavailable
+  when: pkgr_populate and pkgr_ca.rc == 0
+
+- name: Publish talu-ca-trust v{{ pkgr_version }} (build deb+rpm → index → sync into pkg-repo)
+  ansible.builtin.command: "bash {{ pkgr_catrust_dir }}/publish.sh {{ pkgr_version }}"
+  environment:
+    KUBECONFIG: "{{ talos_gen_dir }}/kubeconfig"
+    GPG_SIGN: "false"                               # lab: [trusted=yes]; production sets the signing key
+    CA_REPO_DIR: "{{ talos_gen_dir }}/carepo"
+  register: pkgr_pub
+  changed_when: "'published' in pkgr_pub.stdout"
+  when: pkgr_populate and pkgr_ca.rc == 0
+
 - name: Status
   ansible.builtin.debug:
-    msg: "pkg-repo serving at http://pkg-repo.golden-images.svc/ (empty until the talu-ca-trust package is published)"
+    msg: >-
+      pkg-repo serving at http://pkg-repo.golden-images.svc/
+      {{ '— talu-ca-trust v' ~ pkgr_version ~ ' published (deb+rpm)' if (pkgr_populate and pkgr_ca.rc == 0)
+         else '(not populated — pomerium-user-ca absent or pkgr_populate=false)' }}
