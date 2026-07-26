@@ -1,9 +1,19 @@
 # rocky-phys Cilium overlay — layered ON TOP of components/infrastructure/cilium/values.yaml.
 # Physical 4-node nested-Talos cluster (compute1-4), VMs on a host-to-host VXLAN overlay.
 
-# Routing MTU. Guest NIC MTU is 8950 (host LAN 9000 − 50B host VXLAN). Cilium runs its own VXLAN
-# tunnel (+50B) inside the guests, so pod MTU = 8950 − 50 = 8900. We pin 8850 for a safety margin.
-MTU: 8850
+# NATIVE routing (not tunnel): the Talos guests already ride a host-to-host VXLAN overlay, so a
+# Cilium VXLAN on top was DOUBLE encap (Cilium-VXLAN-in-host-VXLAN) — measured ~3.26 Gbit/s pod-to-pod
+# cross-node vs a 10G bond. All nodes share one L2 (172.18.0.0/16 overlay), so autoDirectNodeRoutes
+# installs a direct route to each peer's pod CIDR via its node IP — the frame is L2-forwarded across
+# the overlay and only the HOST VXLAN wraps it (single encap). ipv4NativeRoutingCIDR marks the pod
+# supernet as un-masqueraded (intra-cluster keeps pod IPs; egress still bpf-masquerades to the node).
+routingMode: native
+autoDirectNodeRoutes: true
+ipv4NativeRoutingCIDR: 10.244.0.0/16
+
+# Routing MTU. Guest NIC MTU is 8950 (host LAN 9000 − 50B host VXLAN). With native routing there is NO
+# Cilium encap, so pod MTU = the guest NIC MTU; pin 8900 for a safety margin (was 8850 under tunnel).
+MTU: 8900
 
 # Real multi-node: eBPF masquerade (Talos nodes are nftables-only, same rationale as the VM lab).
 bpf:
