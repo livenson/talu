@@ -229,29 +229,26 @@ Right-sizing the *method* to the current physical lab (`environments/rocky-phys`
   bare-metal Talos on the same boxes (a values change, not a rebuild).
 - **NUMA matters here** (2 sockets): pin VMs and OSDs to sockets and measure the cross-node penalty —
   it's one of the biggest free wins on this class of hardware.
-- **Network: the pod-to-pod ceiling is ~3.2 Gbit/s, NOT the 10 G bond — measured, and it's a NIC
-  limitation, not a config.** Raw host-to-host over the bond hits **9.9 Gbit/s** (4 streams, healthy),
-  but pod-to-pod across nodes caps at **~3.2 Gbit/s** with the host **98 % idle**. Root cause: the
-  hosts' **Intel 82599 (ixgbe)** cannot GRO-aggregate VXLAN-encapsulated traffic — a documented
-  82599-specific limitation that pins VXLAN throughput at ~3 Gbps
+- **Network: the pod-to-pod VXLAN ceiling (~3.2 Gbit/s) was found, root-caused, and FIXED — now
+  ~9.9 Gbit/s (line rate).** Originally pod-to-pod across nodes capped at **~3.2 Gbit/s** with the host
+  **98 % idle**, while the raw bond did **9.9 Gbit/s**. Root cause: the hosts' **Intel 82599 (ixgbe)**
+  cannot GRO-aggregate VXLAN-encapsulated traffic — a documented 82599-specific limitation
   ([kernel patch](https://patchwork.ozlabs.org/patch/488586/), [Red Hat](https://access.redhat.com/solutions/2780711)).
-  It is NOT movable from userspace — verified: identical ~3.2 Gbit/s under Cilium tunnel vs **native
-  routing**, single-queue vs **virtio multiqueue** (8 queues confirmed active), and with the tunnel/GRO
-  offloads on vs off. The fixes are all substrate-level: **remove the host VXLAN** (L3-routed underlay),
-  **newer NICs** (X710/ConnectX with working VXLAN GRO), or **bare metal** (no host VXLAN at all).
-  **Removal is confirmed viable here:** a port-security probe put a foreign subnet (172.18.222.0/24)
-  straight on `bond0` between two hosts — un-encapsulated, real host MACs, foreign IPs — and it pinged
-  0% loss / ~0.15 ms with ARP replies. So the fabric enforces **no L3 anti-spoofing** (the hosts are
-  **MAAS**-provisioned bare metal — MAAS is a provisioner, not a Neutron-style vSwitch, so there are no
-  security groups in the data path). An **L3-routed CNI underlay** (per-host pod CIDR routed over the
-  bond, no host VXLAN) would therefore carry pod traffic near the 9.9 Gbit/s raw-bond rate; the host
-  VXLAN was a convenience (isolated VM subnet + an L2 domain for the Talos VIP), not a fabric
-  requirement. Until that rework lands, treat pod-network throughput as a ~3.2 Gbit/s overlay ceiling;
-  the bond/LACP itself is fine. compute4's bond runs a single leg (degraded-hardware data point).
-- **Cilium routing mode:** switched to **native** here (`routingMode: native` + `autoDirectNodeRoutes`)
-  to drop the Cilium-VXLAN-in-host-VXLAN double encap. Correct architecturally (+MTU, less CPU) but it
-  does NOT raise throughput on this lab — the 82599/VXLAN ceiling above dominates. The win is real only
-  once the host VXLAN is gone (bare metal / routed fabric).
+  It was not movable from userspace — identical ~3.2 Gbit/s under Cilium tunnel vs native routing,
+  single- vs multi-queue, offloads on/off — because the encapsulation the NIC choked on was the **host**
+  VXLAN (`phys_vm_network`), not Cilium's (already native). **The fix: carry the Talos VM network on a
+  dedicated 802.1Q VLAN instead of the host VXLAN**, so frames hit the wire as plain Ethernet the 82599
+  *can* GRO. Confirmed safe first — a probe showed the **MAAS** fabric (a provisioner, not a Neutron
+  vSwitch → no data-path security groups) forwards foreign IPs *and* foreign VM MACs un-encapsulated
+  with the LACP bond staying healthy, and **VLAN 40 is trunked to all 4 hosts + free**. Cut over live
+  (`talos_overlay.uplink_mode: vlan`, `br-talu` → `bond0.40`, `bond0` untouched, reversible): pod-to-pod
+  **iperf3 = 9.89 Gbit/s** (8 streams), cluster stayed 4/4 Ready / ceph OK. **~3.1× at line rate.**
+  Single-queue virtio turned out not to matter at this rate. compute4's bond runs a single leg
+  (degraded-hardware data point).
+- **Cilium routing mode:** **native** (`routingMode: native` + `autoDirectNodeRoutes`) drops the
+  Cilium-in-host double encap. On its own it didn't raise throughput (the *host* VXLAN dominated), but
+  it is the necessary half — with the host VXLAN now replaced by a plain VLAN, native routing carries
+  pod traffic at line rate (measured above).
 - **Enable IOMMU** (`phys_host_prep` stages `intel_iommu=on`) if SR-IOV passthrough is on the roadmap;
   the NICs expose 63 VFs/port.
 
@@ -292,6 +289,14 @@ v2.7.3 + a cirros boot-storm. Dashboards: `dashboard-controlplane.yaml`, `dashbo
   would allow ~900). So the binding limiter is now a raisable Talos `maxPods` setting, not RAM — a much
   more production-representative result. Raise `maxPods` (Talos `machine.kubelet.extraConfig`) to push
   the density further.
+- **Realistic VM density: ~38 production-sized VMs (Ubuntu 24.04, 4 vCPU / 8 GiB each), memory-bound.**
+  The cirros run is a pod-count stress test; the useful capacity number uses real VMs. At 8 GiB/VM,
+  20 booted in ~40 s and the knee is **~38 Running** with the scheduler refusing more on
+  `0/4 nodes: Insufficient memory` — balanced by node size (cp1/cp2 = 11 each, cp3/w1 = 8 each). Math
+  checks: 38 × ~8.3 GiB ≈ 315 GiB + ~48 GiB system ≈ the 363 GiB allocatable. CPU wasn't binding
+  (KubeVirt doesn't hard-request host cores without `dedicatedCpuPlacement`). So the two density
+  profiles bracket the range: **~323 tiny VMs (pod-count-bound)** vs **~38 real VMs (memory-bound)**,
+  both degrading gracefully. Per-node RAM is the lever for the realistic figure.
 
 ---
 
