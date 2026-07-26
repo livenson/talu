@@ -1,0 +1,74 @@
+# Ceph + performance-saturation alerts. Rook's packaging can ship a CephCluster PrometheusRule, but it
+# needs the operator's monitoring RBAC (granted in the phys_rook role) AND is not always created; these
+# are the essential storage-health + capacity alerts plus the nested-lab saturation signals the perf run
+# cares about (CPU steal, memory pressure, OSD write latency). Prometheus here selects all rules ({}).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: talu-ceph-perf-rules
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: talu-ceph.rules
+      rules:
+        - alert: CephHealthWarning
+          expr: ceph_health_status == 1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "Ceph cluster is HEALTH_WARN (>15m)"
+            description: "ceph_health_status=1. Check `ceph -s` (slow ops, near-full, degraded PGs)."
+        - alert: CephHealthError
+          expr: ceph_health_status == 2
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "Ceph cluster is HEALTH_ERR"
+            description: "ceph_health_status=2 — data availability/redundancy at risk. Investigate now."
+        - alert: CephOSDDown
+          expr: ceph_osd_up == 0
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "Ceph OSD {{ $labels.ceph_daemon }} is down"
+            description: "An OSD has been down >5m — redundancy reduced."
+        - alert: CephOSDNearFull
+          expr: (ceph_osd_stat_bytes_used / clamp_min(ceph_osd_stat_bytes, 1)) > 0.80
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Ceph OSD {{ $labels.ceph_daemon }} >80% full"
+            description: "OSD usage over 80% — rebalance or add capacity before it blocks writes."
+        - alert: CephPoolNearFull
+          expr: (ceph_pool_stored / clamp_min(ceph_pool_stored + ceph_pool_max_avail, 1)) > 0.80
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Ceph pool {{ $labels.name }} >80% full"
+            description: "Pool stored/available over 80%."
+    - name: talu-perf-saturation.rules
+      rules:
+        - alert: HighCPUSteal
+          expr: avg by (instance) (rate(node_cpu_seconds_total{mode="steal"}[5m])) > 0.10
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "High CPU steal on {{ $labels.instance }} (>10%)"
+            description: "Guest is being starved by the host scheduler — the nested-lab saturation knee. Absolute perf numbers are unreliable above this."
+        - alert: NodeMemoryLow
+          expr: (node_memory_MemAvailable_bytes / clamp_min(node_memory_MemTotal_bytes, 1)) < 0.10
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Node {{ $labels.instance }} <10% memory available"
+            description: "Memory pressure — risk of reclaim/OOM; VM density near its ceiling."
+        - alert: CephOSDWriteLatencyHigh
+          expr: (rate(ceph_osd_op_w_latency_sum[5m]) / clamp_min(rate(ceph_osd_op_w_latency_count[5m]), 1)) > 0.1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Ceph OSD {{ $labels.ceph_daemon }} write latency >100ms"
+            description: "Storage write latency elevated — the SATA/qcow2 backend is likely at its IOPS knee."

@@ -15,6 +15,7 @@ resources:
   - backup-rules.yaml
   - node-rules.yaml
   - resource-rules.yaml
+  - ceph-rules.yaml
   # dashboards (Perses, behind Pomerium). The Perses/PersesDashboard/PersesDatasource CRs depend on
   # the operator's CRDs — under Flux the kustomize-controller retries until they exist (or split into
   # a dependent Kustomization for strict ordering).
@@ -22,6 +23,7 @@ resources:
   - perses-operator-helmrelease.yaml
   - perses-instance.yaml
   - dashboard-fleet.yaml
+  - dashboard-perf.yaml
   - dashboard-netsec.yaml
   - dashboard-vmdetail.yaml
   - dashboard-backup.yaml
