@@ -15,6 +15,7 @@
     - { role: phys_kubevirt,   tags: [kubevirt, virt] }
     - { role: phys_cert_manager, tags: [cert-manager, certs, monitoring, obs] }
     - { role: phys_monitoring,   tags: [monitoring, obs] }
+    - { role: phys_logging,    tags: [logging, obs] }
     - { role: phys_tetragon,   tags: [tetragon, security] }
     - { role: phys_ingress,    tags: [ingress, lb] }
     - { role: phys_identity,   tags: [identity, access] }

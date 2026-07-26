@@ -115,6 +115,31 @@
   ansible.builtin.command: "{{ _k }} -n {{ rook_namespace }} rollout status deploy/rook-ceph-operator --timeout=180s"
   changed_when: false
 
+# Rook's packaging omits the operator's RBAC for ServiceMonitors/PrometheusRules (nodedaemon then
+# loops "cannot get servicemonitors.monitoring.coreos.com"), so cephClusterSpec.monitoring.enabled
+# silently creates NO ServiceMonitor and Ceph metrics never reach Prometheus — even though the mgr
+# serves them on :9283. Grant it here so the mgr + ceph-exporter ServiceMonitors get created (the
+# storage IOPS/latency/health signals the monitoring stack + perf run depend on).
+- name: Grant the Rook operator RBAC for ServiceMonitors + PrometheusRules
+  ansible.builtin.shell: |
+    cat <<'YAML' | {{ _k }} apply -f -
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata: {name: rook-ceph-monitor, namespace: {{ rook_namespace }}, labels: {app.kubernetes.io/part-of: talu}}
+    rules:
+      - apiGroups: ["monitoring.coreos.com"]
+        resources: ["servicemonitors", "prometheusrules"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata: {name: rook-ceph-monitor, namespace: {{ rook_namespace }}, labels: {app.kubernetes.io/part-of: talu}}
+    roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: rook-ceph-monitor}
+    subjects:
+      - {kind: ServiceAccount, name: rook-ceph-system, namespace: {{ rook_namespace }}}
+    YAML
+  changed_when: true
+
 # Talos enforces PodSecurity baseline cluster-wide; Ceph daemons are privileged (lab-notes #5).
 # Label BEFORE the CSI/cluster charts so their privileged pods (csi plugins, OSDs) admit.
 - name: Label the rook namespace privileged (PSA)

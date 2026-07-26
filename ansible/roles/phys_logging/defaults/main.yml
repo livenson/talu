@@ -1,0 +1,24 @@
+---
+# Logging / audit tier for the PHYSICAL lab: Loki (store) + Grafana Alloy (collector), with the audit
+# VIEW native in Perses (LokiDatasource + LogsTable dashboards — no Grafana). Mirrors the lab `logging`
+# role; phys differences: storage is Ceph (not local-path), and component files are copied to the
+# gateway (which has no repo checkout) before helm/kubectl run there.
+log_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+log_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+
+log_src: "{{ playbook_dir }}/../components/platform/logging"
+log_dir: "{{ talos_gen_dir }}/components/platform/logging"
+
+# Chart versions (grafana helm repo). Loki 6.x chart = Loki 3.x (SingleBinary line the values target);
+# 7.x exists but adds GEL topology churn — stay on latest 6.x. Alloy chart is 1.x (ships Alloy v1.18).
+loki_chart_version: "6.55.0"
+alloy_chart_version: "1.11.0"
+
+# Loki's SingleBinary PVC — the component values default to local-path (the VM lab); phys has Ceph RBD.
+logging_storage_class: "ceph-block"
+logging_loki_pvc_size: "8Gi"
+
+# loki-ingress-policy (a default-deny on Loki :3100) is skipped by default: on nested Talos the kubelet
+# readiness probe to :3100 may not classify as `host`, and a default-deny then starves it (lab-notes
+# #34). Flip true once the probe classification is confirmed on this cluster.
+logging_apply_ingress_policy: false
