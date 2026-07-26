@@ -14,6 +14,10 @@ data:
     autocert: true
     autocert_dir: /data/autocert
     metrics_address: ":9902"
+    # Bind :80 too — without http_redirect_addr Pomerium listens on :443 ONLY, so the Service's :80
+    # (and the Cilium LB IP :80) has no backing listener and the port is dead. This serves the
+    # HTTP→HTTPS redirect AND the Let's Encrypt HTTP-01 ACME challenge on :80 (autocert robustness).
+    http_redirect_addr: ":80"
     authenticate_service_url: https://authenticate.{{ lab_domain }}
     idp_provider: oidc
     idp_provider_url: https://id.{{ lab_domain }}/dex

@@ -74,12 +74,19 @@
   when: inventory_hostname == talos_overlay.gateway_host
 
 # ── ingress host (compute2): DNAT the provider-forwarded public :80/:443 into the cluster's Cilium
-# LoadBalancer IP on the overlay (talos_ingress_lb_ip). masquerade so the return path comes back here.
-- name: Ingress — masquerade (return path for the DNAT'd traffic)
+# LoadBalancer IP on the overlay (talos_ingress_lb_ip). The DNAT'd packet EGRESSES br-talu (which is
+# in the `trusted` zone), so the masquerade MUST be on the trusted zone — not public. Without SNAT to
+# the br-talu IP, the LB backend replies straight to the original client's source over the overlay
+# (asymmetric), the source IP doesn't match the socket the client opened → RST, connection refused.
+# (Diagnosed via tcpdump 2026-07-26: SYN DNAT'd out br-talu with src UN-masqueraded → SYN-ACK from
+# the LB IP → client RST. Was masked because the provider :80/:443 forward has been down, so the
+# DNAT path was never exercised end-to-end.) masquerade-on-public here is useless: no overlay→WAN
+# egress happens on the ingress host.
+- name: Ingress — masquerade the overlay egress (SNAT the DNAT return path)
   become: true
   ansible.posix.firewalld:
     masquerade: true
-    zone: public
+    zone: trusted     # br-talu's zone — the DNAT'd traffic leaves via br-talu, so SNAT must be here
     permanent: true
     immediate: true
     state: enabled
