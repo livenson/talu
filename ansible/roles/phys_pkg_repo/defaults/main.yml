@@ -1,0 +1,13 @@
+---
+pkgr_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+pkgr_src: "{{ playbook_dir }}/../components/platform/pkg-repo"
+pkgr_dir: "{{ talos_gen_dir }}/components/platform/pkg-repo"
+
+# Populate the repo with the talu-ca-trust package (deb + rpm) built from the live CA. Runs
+# images/ca-trust/publish.sh on the gateway (not the in-cluster Job) — it already has kubectl + the
+# kubeconfig, and avoids the Job's GitHub-clone + fedora-pull over this lab's flaky egress. Needs the
+# pomerium-user-ca ConfigMap (from phys_identity) to exist first. Bump pkgr_version on CA rotation.
+pkgr_populate: true
+pkgr_version: "1"
+pkgr_catrust_src: "{{ playbook_dir }}/../images/ca-trust"
+pkgr_catrust_dir: "{{ talos_gen_dir }}/images/ca-trust"

@@ -1,0 +1,12 @@
+# ANSIBLE MANAGED — talu roles/phys_host_prep (NetworkManager is set to dns=none).
+# Order matters: the internal resolvers answer A and AAAA in <10 ms, while 8.8.8.8 as the first
+# entry cost a flat 5.02 s per getaddrinfo() call on both sleds.
+{% if phys_dns_search | length > 0 %}
+search {{ phys_dns_search }}
+{% endif %}
+{% for ns in phys_nameservers %}
+nameserver {{ ns }}
+{% endfor %}
+{% if phys_dns_options | length > 0 %}
+options {{ phys_dns_options }}
+{% endif %}

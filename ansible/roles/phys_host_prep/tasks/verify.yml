@@ -1,0 +1,186 @@
+---
+# Standalone readiness check — `ansible-playbook phys-phase0.yml --tags verify` runs only this.
+# Hard-fails on things Phase 0 owns; reports (does not fail) on things the provider owns.
+
+- name: Clock — chrony tracking
+  become: true
+  ansible.builtin.command: chronyc -n tracking
+  register: v_tracking
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: Clock — sources
+  become: true
+  ansible.builtin.command: chronyc -n sources
+  register: v_sources
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+# Median of 3, not a single sample: this network loses packets to public resolvers, and one
+# unlucky lookup should not fail the run — a persistently slow resolver should.
+- name: Resolver — time a full A+AAAA lookup (median of 3)
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    RC=0;
+    for i in 1 2 3; do
+      S=$(date +%s%N); getent ahosts quay.io >/dev/null 2>&1 || RC=1;
+      echo $(( ($(date +%s%N) - S) / 1000000 ));
+    done | sort -n | sed -n 2p | tr '\n' ' ';
+    echo "$RC"
+  args:
+    executable: /bin/bash
+  register: v_dns
+  check_mode: false
+  changed_when: false
+
+- name: Boot — running kernel and cmdline
+  ansible.builtin.slurp:
+    src: /proc/cmdline
+  register: v_cmdline
+
+- name: Virtualisation — /dev/kvm
+  ansible.builtin.stat:
+    path: /dev/kvm
+  register: v_kvm
+
+- name: Virtualisation — nested
+  ansible.builtin.slurp:
+    src: /sys/module/kvm_intel/parameters/nested
+  register: v_nested
+  failed_when: false
+
+- name: eBPF — kernel BTF (Tetragon prerequisite, lab-notes #38)
+  ansible.builtin.stat:
+    path: /sys/kernel/btf/vmlinux
+  register: v_btf
+
+- name: eBPF — tracefs (Tetragon prerequisite)
+  ansible.builtin.stat:
+    path: /sys/kernel/tracing/available_events
+  register: v_tracefs
+
+- name: IOMMU — group count
+  ansible.builtin.find:
+    paths: /sys/kernel/iommu_groups
+    file_type: any
+  register: v_iommu
+  failed_when: false
+
+# A NO-CARRIER leg is dropped from the bond entirely rather than listed as "down", so leg COUNT
+# is the real signal, not an MII "down" line. Flag any bond whose enslaved legs < phys_bond_min_legs.
+- name: Network — LACP bond leg health (degraded = fewer legs than expected, provider-owned)
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    for b in /proc/net/bonding/*; do
+      [ -e "$b" ] || continue;
+      slaves=$(grep -c '^Slave Interface:' "$b");
+      updown=$(awk '/^Slave Interface:/{s=$3} /^MII Status:/{if(NR>1 && s){print s"="$3; s=""}}' "$b" | paste -sd, -);
+      flag=""; [ "$slaves" -lt {{ phys_bond_min_legs }} ] && flag=" DEGRADED";
+      echo "$(basename $b) legs=$slaves/{{ phys_bond_min_legs }} [${updown}]$flag";
+    done
+  args:
+    executable: /bin/bash
+  register: v_bond
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: Network — jumbo frames to every peer (DF, 8972 B payload)
+  ansible.builtin.command: >-
+    ping -c2 -W2 -M do -s 8972 -q {{ hostvars[item].phys_internal_ip }}
+  loop: "{{ groups['phys'] | difference([inventory_hostname]) }}"
+  register: v_jumbo
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when:
+    - groups['phys'] | default([]) | length > 1
+    - hostvars[item].phys_internal_ip is defined
+
+- name: Egress — reachability of the registries Phase 1 pulls from
+  ansible.builtin.command: >-
+    curl -s -o /dev/null -m 12 -w '%{http_code}' {{ item }}
+  loop: "{{ phys_egress_endpoints }}"
+  register: v_egress
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: Assert the things Phase 0 owns
+  ansible.builtin.assert:
+    that:
+      - "'Not synchronised' not in v_tracking.stdout"
+      - "'Reference ID' in v_tracking.stdout"
+      - v_dns.stdout.split()[1] | int == 0
+      - v_dns.stdout.split()[0] | int < 1000
+      - v_kvm.stat.exists
+      - (v_nested.content | default('' | b64encode) | b64decode).strip() in ['Y', '1']
+      - v_btf.stat.exists
+      - v_tracefs.stat.exists
+      - ansible_facts.default_ipv4.mtu | default(0) | int == phys_expected_mtu | int
+    fail_msg: |
+      Phase 0 not satisfied on {{ inventory_hostname }}:
+        clock synced ... {{ 'Not synchronised' not in v_tracking.stdout }}
+        dns lookup  ... {{ v_dns.stdout.split()[0] }} ms median-of-3 (rc {{ v_dns.stdout.split()[1] }}), want <1000 ms rc 0
+        /dev/kvm    ... {{ v_kvm.stat.exists }}
+        nested virt ... {{ (v_nested.content | default('' | b64encode) | b64decode).strip() }}
+        BTF/tracefs ... {{ v_btf.stat.exists }} / {{ v_tracefs.stat.exists }}
+        MTU         ... {{ ansible_facts.default_ipv4.mtu | default('?') }} (want {{ phys_expected_mtu }})
+    success_msg: "clock, resolver, KVM+nested, BTF/tracefs and MTU {{ phys_expected_mtu }} all OK"
+
+- name: Assert boot config took effect (only meaningful once rebooted)
+  ansible.builtin.assert:
+    that:
+      - "'+debug' not in ansible_facts.kernel"
+      - v_iommu.matched | default(0) | int > 0
+    fail_msg: >-
+      Still on {{ ansible_facts.kernel }} with {{ v_iommu.matched | default(0) }} IOMMU groups —
+      grub is configured but the host has not been rebooted yet
+      (re-run with `-e phys_reboot=true`).
+    success_msg: "stock kernel {{ ansible_facts.kernel }}, {{ v_iommu.matched | default(0) }} IOMMU groups"
+  when: phys_assert_rebooted | default(false) | bool
+
+- name: Phase 0 report
+  ansible.builtin.debug:
+    msg: |
+      ── {{ inventory_hostname }} ({{ ansible_facts.default_ipv4.address | default('?') }}) ──────────────
+      kernel      : {{ ansible_facts.kernel }}{{ '  ⚠ DEBUG BUILD — perf numbers are worthless' if '+debug' in ansible_facts.kernel else '' }}
+      cmdline     : {{ (v_cmdline.content | b64decode) | trim }}
+      iommu groups: {{ v_iommu.matched | default(0) }}{{ '  ⚠ pending reboot' if (v_iommu.matched | default(0) | int) == 0 else '' }}
+      clock       : {{ v_tracking.stdout_lines | select('search', 'Reference ID|Stratum|System time|Last offset') | join(' | ') }}
+      ntp sources : {{ v_sources.stdout_lines[2:] | join(' ; ') }}
+      dns (A+AAAA): {{ v_dns.stdout.split()[0] }} ms (median of 3), rc {{ v_dns.stdout.split()[1] }}
+      kvm/nested  : {{ v_kvm.stat.exists }} / {{ (v_nested.content | default('' | b64encode) | b64decode).strip() }}
+      btf/tracefs : {{ v_btf.stat.exists }} / {{ v_tracefs.stat.exists }}  (Tetragon prerequisites)
+      mtu         : {{ ansible_facts.default_ipv4.mtu | default('?') }} on {{ ansible_facts.default_ipv4.interface | default('?') }}
+      bond        : {{ v_bond.stdout_lines | join(' ; ') }}
+      ram         : {{ ansible_facts.memtotal_mb }} MB
+      jumbo peers : {{ v_jumbo.results | default([]) | map(attribute='item') | zip(v_jumbo.results | default([]) | map(attribute='rc')) | map('join', '=rc') | join(' ') or 'n/a (single host)' }}
+      egress      : {{ v_egress.results | map(attribute='item') | map('regex_replace', '^https://([^/]+).*$', '\1') | zip(v_egress.results | map(attribute='stdout')) | map('join', ':') | join('  ') }}
+      swap        : {{ ansible_facts.swaptotal_mb }} MB
+      tuned       : {{ phys_tuned_profile | default('(skipped)') }}
+
+- name: Egress warning (provider-owned — Phase 0 reports, does not fix)
+  ansible.builtin.debug:
+    msg: >-
+      ⚠ {{ inventory_hostname }} cannot reach:
+      {{ v_egress.results | selectattr('stdout', 'in', ['000', '']) | map(attribute='item') | join(', ') }}
+      — image pulls will fail non-deterministically. Phase 1 needs either a provider fix or a
+      pull-through mirror (zot is already in the stack).
+  when: v_egress.results | selectattr('stdout', 'in', ['000', '']) | list | length > 0
+
+- name: Fail on missing registry egress (opt-in)
+  ansible.builtin.assert:
+    that: v_egress.results | selectattr('stdout', 'in', ['000', '']) | list | length == 0
+    fail_msg: "registry egress incomplete and phys_require_registry_egress=true"
+  when: phys_require_registry_egress | bool
+
+- name: Bond degradation warning (provider-owned — cabling/switch port)
+  ansible.builtin.debug:
+    msg: >-
+      ⚠ {{ inventory_hostname }} LACP bond is degraded ({{ v_bond.stdout | regex_replace('\n', ' ') }})
+      — running on a single leg, so no NIC redundancy and reduced aggregate bandwidth. This is a
+      cabling/switch-port fault for the provider, not something Phase 0 can fix.
+  when: "'DEGRADED' in v_bond.stdout"

@@ -1,0 +1,19 @@
+---
+# Kyverno (CNCF policy engine) for the PHYSICAL lab. Runs anywhere (plain admission Deployments, no
+# BTF/hostPath) — unlike Tetragon which is real-HW-only (#38). All Talu policies ship Audit-first
+# (`kubectl get polr -A`); promote to Enforce per-env. Mirrors the lab `kyverno` role.
+kyv_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+kyv_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+
+kyv_src: "{{ playbook_dir }}/../components/platform/kyverno"
+kyv_dir: "{{ talos_gen_dir }}/components/platform/kyverno"
+access_src: "{{ playbook_dir }}/../components/platform/access"
+access_dir: "{{ talos_gen_dir }}/components/platform/access"
+kyv_phys_values: "{{ playbook_dir }}/../environments/rocky-phys/kyverno-values.yaml"
+
+kyverno_version: "3.8.2"   # Kyverno chart 3.8.2 (matches the HelmRelease); bump per upstream + retest
+
+# Kyverno's default images come from reg.kyverno.io, which is NOT in the pull-through mirror
+# (docker.io/ghcr.io/quay.io/registry.k8s.io/gcr.io/factory.talos.dev only) → ImagePullBackOff on the
+# flaky WAN. Kyverno mirrors the same images to ghcr.io (which IS mirrored), so override the registry.
+kyverno_image_registry: "ghcr.io"

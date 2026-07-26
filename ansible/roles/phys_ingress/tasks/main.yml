@@ -1,0 +1,55 @@
+---
+# North-south ingress substrate: a Cilium LoadBalancer IP pool on the overlay + L2 announcement, so
+# `type: LoadBalancer` Services get a real IP that Cilium answers ARP for on the overlay segment
+# (reachable from compute2, which DNATs the public :80/:443 to it). No MetalLB, no socat shim.
+# The two CRDs graduate independently — prefer v2, fall back to v2alpha1 per CRD.
+- name: Detect the Cilium LB pool + L2 CRD API versions
+  ansible.builtin.shell: >-
+    kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig
+    get crd {{ item }} -o jsonpath='{.spec.versions[*].name}'
+  loop:
+    - ciliumloadbalancerippools.cilium.io
+    - ciliuml2announcementpolicies.cilium.io
+  register: cilium_crd_vers
+  changed_when: false
+
+- name: Render the LB pool + L2 announcement
+  ansible.builtin.template:
+    src: cilium-lb.yaml.j2
+    dest: "{{ talos_gen_dir }}/cilium-lb.yaml"
+    mode: "0644"
+  vars:
+    cilium_lbpool_api: "{{ 'v2' if 'v2' in cilium_crd_vers.results[0].stdout.split() else 'v2alpha1' }}"
+    cilium_l2_api: "{{ 'v2' if 'v2' in cilium_crd_vers.results[1].stdout.split() else 'v2alpha1' }}"
+
+- name: Apply the LB pool + L2 announcement
+  ansible.builtin.command: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig apply -f {{ talos_gen_dir }}/cilium-lb.yaml"
+  register: ing_apply
+  changed_when: "'created' in ing_apply.stdout or 'configured' in ing_apply.stdout"
+
+- name: Smoke-test — a LoadBalancer Service gets an IP from the pool
+  ansible.builtin.shell: |
+    K="kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+    $K create ns lbtest --dry-run=client -o yaml | $K apply -f - >/dev/null
+    cat <<'YAML' | $K apply -f - >/dev/null
+    apiVersion: v1
+    kind: Service
+    metadata: {name: lbsmoke, namespace: lbtest}
+    spec:
+      type: LoadBalancer
+      ports: [{port: 80}]
+      selector: {app: none}
+    YAML
+    IP=""
+    for i in $(seq 1 15); do
+      IP=$($K -n lbtest get svc lbsmoke -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+      [ -n "$IP" ] && break; sleep 2
+    done
+    echo "LB-IP-ASSIGNED=${IP:-NONE}"
+    $K delete ns lbtest --wait=false >/dev/null 2>&1
+  register: lb_smoke
+  changed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "Ingress LB-IPAM: {{ lb_smoke.stdout_lines | select('search','LB-IP-ASSIGNED') | first }}"

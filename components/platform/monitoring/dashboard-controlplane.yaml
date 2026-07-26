@@ -1,0 +1,107 @@
+# Control-plane observability — API-server RED metrics (the churn knee shows here) PLUS etcd + scheduler,
+# now scraped via controlplane-scrape.yaml (Talos exposes them: etcd :2381 http metrics listener +
+# scheduler/CM bind-address 0.0.0.0, set in phys_talos_vms/cp-patch.yaml.j2). etcd fsync/commit latency is
+# the real storage-bound control-plane signal on SATA; scheduler latency covers pod placement under load.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-control-plane
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — Control Plane (density)
+    duration: 1h
+    panels:
+      apilat:
+        kind: Panel
+        spec:
+          display: { name: "API request p99 latency by verb (s)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "histogram_quantile(0.99, sum by (le, verb) (rate(apiserver_request_duration_seconds_bucket{verb=~\"POST|PUT|DELETE|GET|LIST\"}[5m])))" } }
+      apirate:
+        kind: Panel
+        spec:
+          display: { name: "API request rate by verb (/s)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (verb) (rate(apiserver_request_total[2m]))" } }
+      apierrors:
+        kind: Panel
+        spec:
+          display: { name: "API errors /s (5xx + 429 throttling)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (code) (rate(apiserver_request_total{code=~\"5..|429\"}[2m]))" } }
+      inflight:
+        kind: Panel
+        spec:
+          display: { name: "API in-flight requests (saturation)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (request_kind) (apiserver_current_inflight_requests)" } }
+      etcdfsync:
+        kind: Panel
+        spec:
+          display: { name: "etcd WAL fsync + backend commit p99 (s) — SATA storage-bound signal" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "histogram_quantile(0.99, sum by (le) (rate(etcd_disk_wal_fsync_duration_seconds_bucket[5m])))" } }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "histogram_quantile(0.99, sum by (le) (rate(etcd_disk_backend_commit_duration_seconds_bucket[5m])))" } }
+      etcddb:
+        kind: Panel
+        spec:
+          display: { name: "etcd DB size (bytes) + proposals committed/s" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "max(etcd_mvcc_db_total_size_in_bytes)" } }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum(rate(etcd_server_proposals_committed_total[5m]))" } }
+      schedlat:
+        kind: Panel
+        spec:
+          # k8s 1.35: the scheduling-latency histogram is scheduler_scheduling_attempt_duration_seconds
+          # (the old scheduler_e2e_scheduling_duration_seconds was removed).
+          display: { name: "Scheduler attempt p99 (s) — pod placement latency" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "histogram_quantile(0.99, sum by (le) (rate(scheduler_scheduling_attempt_duration_seconds_bucket[5m])))" } }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: "API server (RED)" }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/apilat" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/apirate" } }
+            - { x: 0,  y: 8, width: 12, height: 8, content: { $ref: "#/spec/panels/apierrors" } }
+            - { x: 12, y: 8, width: 12, height: 8, content: { $ref: "#/spec/panels/inflight" } }
+      - kind: Grid
+        spec:
+          display: { title: "etcd + scheduler" }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/etcdfsync" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/etcddb" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/schedlat" } }

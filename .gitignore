@@ -16,3 +16,6 @@ secrets.yaml
 
 # Ansible retry files
 *.retry
+
+# Physical lab access data (IPs/ports) — never commit.
+/phys-lab.txt

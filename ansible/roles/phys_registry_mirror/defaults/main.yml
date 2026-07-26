@@ -1,0 +1,39 @@
+---
+# Pull-through registry cache on one physical host (compute1). One stock `registry:2` instance
+# per upstream in proxy mode: nodes pull over the reliable 9000 LAN, the flaky WAN is hit once per
+# blob (with registry:2's own retry) and the result is cached on local disk. This is the egress
+# fix — the measured WAN reaches every registry *eventually* (retries converge), so caching once
+# and serving from the LAN removes the per-node, per-pull failure surface.
+
+mirror_bind_ip: "0.0.0.0"                 # published on all host ifaces; firewalld restricts source
+mirror_data_root: /var/lib/registry-mirror
+mirror_write_patch: true
+mirror_talos_patch_path: /home/cloud-user/talu/talos-registry-mirror.patch.yaml
+mirror_registry_image: "docker.io/library/registry:2"
+mirror_allowed_sources:                   # LAN + VM-overlay ranges permitted to reach the caches
+  - 10.8.0.0/16
+  - 10.5.0.0/16
+  - 10.2.0.0/16
+  - 10.3.0.0/16
+  - 172.18.0.0/16                         # the Talos VM overlay (phys_vm_network)
+
+# One cache per upstream. Port → REGISTRY_PROXY_REMOTEURL. Ports are stable so the Talos mirror
+# machineconfig can reference them.
+mirror_upstreams:
+  - { name: dockerio,     port: 5000, remote: "https://registry-1.docker.io" }
+  - { name: ghcr,         port: 5001, remote: "https://ghcr.io" }
+  - { name: quay,         port: 5002, remote: "https://quay.io" }
+  - { name: registryk8s,  port: 5003, remote: "https://registry.k8s.io" }
+  - { name: gcr,          port: 5004, remote: "https://gcr.io" }
+  - { name: k8sgcr,       port: 5005, remote: "https://k8s.gcr.io" }
+  - { name: talosfactory, port: 5006, remote: "https://factory.talos.dev" }
+
+# How the Talos registry host maps onto a cache port (for the generated machineconfig patch).
+mirror_talos_map:
+  docker.io: 5000
+  ghcr.io: 5001
+  quay.io: 5002
+  registry.k8s.io: 5003
+  gcr.io: 5004
+  k8s.gcr.io: 5005
+  factory.talos.dev: 5006

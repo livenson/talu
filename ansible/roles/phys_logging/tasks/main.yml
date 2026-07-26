@@ -1,0 +1,67 @@
+---
+# Copy the logging component to the gateway (helm/kubectl run there; no repo checkout on the gateway).
+- name: Copy logging component to the gateway
+  ansible.builtin.copy:
+    src: "{{ log_src }}/"
+    dest: "{{ log_dir }}/"
+    mode: "0644"
+
+- name: Apply the logging namespace
+  ansible.builtin.command: "{{ log_k }} apply -f {{ log_dir }}/namespace.yaml"
+  changed_when: true
+
+- name: Add + update the grafana helm repo (Loki + Alloy charts)
+  ansible.builtin.shell: |
+    helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
+    helm repo update grafana >/dev/null
+  changed_when: false
+
+# Loki — SingleBinary + filesystem, 14-day retention. Override the PVC storageClass to Ceph (the
+# component values ship local-path for the VM lab). Images pull through the compute1 mirror.
+- name: Install/upgrade Loki (log store)
+  ansible.builtin.command: >
+    helm upgrade --install loki grafana/loki
+    --version {{ loki_chart_version }} --namespace logging
+    -f {{ log_dir }}/loki-values.yaml
+    --set singleBinary.persistence.storageClassName={{ logging_storage_class }}
+    --set singleBinary.persistence.size={{ logging_loki_pvc_size }}
+    --wait --timeout 10m
+  environment: { KUBECONFIG: "{{ log_kubeconfig }}" }
+  changed_when: true
+
+- name: Install/upgrade Grafana Alloy (collector — pod logs via K8s API → Loki)
+  ansible.builtin.command: >
+    helm upgrade --install alloy grafana/alloy
+    --version {{ alloy_chart_version }} --namespace logging
+    -f {{ log_dir }}/alloy-values.yaml --wait --timeout 5m
+  environment: { KUBECONFIG: "{{ log_kubeconfig }}" }
+  changed_when: true
+
+# The audit VIEW is native Perses: a Loki datasource (proxy) + LogsTable dashboards, targeting the
+# operator Perses server in `monitoring` (so the monitoring role must have run first).
+- name: Wire the Perses views (Loki datasource + audit + VM-logs dashboards)
+  ansible.builtin.command: "{{ log_k }} apply -f {{ log_dir }}/{{ item }}"
+  loop:
+    - loki-datasource.yaml
+    - dashboard-audit.yaml
+    - dashboard-vmlogs.yaml
+  changed_when: true
+
+# On real hardware the Loki :3100 ingress lockdown CAN be applied — but only once the kubelet probe
+# is confirmed to classify as `host` (else default-deny starves it, lab-notes #34). Off by default.
+- name: (Optional) Apply the Loki ingress lockdown policy
+  ansible.builtin.command: "{{ log_k }} apply -f {{ log_dir }}/loki-ingress-policy.yaml"
+  when: logging_apply_ingress_policy | bool
+  changed_when: true
+
+- name: Status
+  ansible.builtin.shell: |
+    echo "loki:  $({{ log_k }} -n logging get pods -l app.kubernetes.io/name=loki --no-headers 2>/dev/null | awk '{print $3}' | tr '\n' ' ')"
+    echo "alloy: $({{ log_k }} -n logging get pods -l app.kubernetes.io/name=alloy --no-headers 2>/dev/null | grep -c Running)/$({{ log_k }} -n logging get pods -l app.kubernetes.io/name=alloy --no-headers 2>/dev/null | wc -l) Running"
+    echo "perses loki views: $({{ log_k }} -n monitoring get persesdashboard,persesdatasource 2>/dev/null | grep -ciE 'audit|vmlog|loki')"
+  register: log_status
+  changed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ log_status.stdout_lines }}"

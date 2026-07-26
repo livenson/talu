@@ -1,0 +1,36 @@
+---
+# Rook-Ceph on the physical cluster: real RBD block storage on the per-node /dev/vdb disks — the
+# thing the nested VM lab can't do (it falls back to MicroCeph CephFS, lab-notes #14/#15).
+rook_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+rook_helm_bin: /usr/local/bin/helm
+rook_namespace: rook-ceph
+
+# Rook 1.20.2 (latest). 1.20 migrated CSI to the ceph-csi-operator model: the operator chart ships
+# the csi-operator controller + CRDs, but the per-driver packaging (OperatorConfig + Driver CRs +
+# image-set ConfigMap + the rbd/cephfs ctrlplugin/nodeplugin ServiceAccounts + RBAC) lives in the
+# ceph-csi-drivers chart, which is NOT published to charts.rook.io/release. We VENDOR that packaging
+# into this role (templates/ceph-csi-drivers/) so the driver pods actually start. Ceph v20.2.2
+# (Tentacle) OSDs are known-good on these nested qcow2 disks (v19.2.4 crashed in expand-bluefs).
+rook_version: "v1.20.2"
+ceph_image: "quay.io/ceph/ceph:v20.2.2"   # >= v20.2.1 (v20.2.0 has a read-affinity corruption bug)
+rook_csi_driver_prefix: "rook-ceph"        # driver names are <prefix>.rbd.csi.ceph.com etc.
+rook_osd_device_filter: "^vdb$"     # the empty 129G virtio disk attached per node
+rook_block_pool: ceph-blockpool
+rook_storageclass: ceph-block
+rook_replica_size: 3                # host failure domain across the (now schedulable) 3 CP + 1 worker
+snapshotter_version: "v8.6.0"       # external-snapshotter CRDs + controller (not shipped by Talos)
+
+# Three charts, in order: operator -> ceph-csi-drivers -> cluster.
+#   - rook-ceph (operator): ships the ceph-csi-operator controller + CRDs (csi.installCsiOperator).
+#   - ceph-csi-drivers: the packaging Rook's release OMITS from charts.rook.io/release — it creates
+#     the Driver + OperatorConfig CRs, the rbd/cephfs ctrlplugin+nodeplugin ServiceAccounts, and all
+#     their RBAC. Without it the csi-operator makes driver Deployments that can't start (SA missing).
+#     It IS published, just in the ceph-csi-operator project's own helm repo (pinned by rook's
+#     operator Chart.yaml dependency: ceph-csi-operator 1.0.4).
+#   - rook-ceph-cluster: CephCluster + block pool + StorageClass.
+ceph_csi_operator_helm_repo: "https://ceph.github.io/ceph-csi-operator"
+ceph_csi_drivers_version: "1.0.4"          # == rook 1.20.2's bundled ceph-csi-operator dependency
+
+rook_operator_chart_tgz: "{{ talos_gen_dir }}/rook-ceph-{{ rook_version }}.tgz"
+rook_csi_drivers_chart_tgz: "{{ talos_gen_dir }}/ceph-csi-drivers-{{ ceph_csi_drivers_version }}.tgz"
+rook_cluster_chart_tgz:  "{{ talos_gen_dir }}/rook-ceph-cluster-{{ rook_version }}.tgz"

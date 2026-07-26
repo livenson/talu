@@ -1,0 +1,4 @@
+---
+kvm_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+# kubevirt-manager release (github bundle). v1.5.4 == current latest (verified upstream 2026-07-26).
+kubevirt_manager_version: "v1.5.4"

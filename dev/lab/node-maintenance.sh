@@ -24,8 +24,12 @@ vmis_on_node() {  # list "<ns>/<name>" of VMIs currently on $1
 }
 
 other_schedulable_nodes() {  # Ready, schedulable nodes that are NOT $1
-  kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.unschedulable}{" "}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}' \
-    | awk -v self="$1" '$1!=self && $2!="true" && $3=="True" {print $1}'
+  # Pipe-delimited (NOT space): .spec.unschedulable is ABSENT on a schedulable node, and with a space
+  # separator awk collapses the empty field so the Ready status shifts into $2 and `$3=="True"` never
+  # matches — a false "single-node" verdict on every MULTI-node cluster (the single-node VM lab hid it
+  # because the guard fires there for the right reason anyway). An explicit -F'|' keeps empty fields.
+  kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.spec.unschedulable}{"|"}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' \
+    | awk -F'|' -v self="$1" '$1!=self && $2!="true" && $3=="True" {print $1}'
 }
 
 status() {

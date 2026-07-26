@@ -1,0 +1,29 @@
+---
+# Talu PHYSICAL lab — Phase 0: host prerequisites on the KVM-capable bare metal.
+#
+#   ansible-playbook phys-phase0.yml                      # apply (no reboot)
+#   ansible-playbook phys-phase0.yml --check --diff       # dry run
+#   ansible-playbook phys-phase0.yml --tags verify        # readiness check only
+#   ansible-playbook phys-phase0.yml -e phys_reboot=true  # apply + reboot (see the warning below)
+#
+# ⚠ REBOOT: the BMC network (10.9.0.0/16) is not reachable from these hosts and only :22/:23 are
+#   forwarded inbound, so there is NO console if a host fails to come back. The role verifies the
+#   stock kernel entry and the rescue entry exist before it will change the default. Agree a window
+#   with the provider (they run MAAS — BMC user `maas`) before passing phys_reboot=true.
+#
+# Scope: clock, resolver, boot config (stock kernel + IOMMU), tuning, base tools. NOT in scope:
+# disk layout (blocked on the extra hardware), MTU (the jumbo LAN is correct as-is), firewalld and
+# SELinux (Phase 1 owns the port list), egress filtering (provider-owned — reported, not fixed).
+- name: Talu physical lab — Phase 0 host prep
+  hosts: phys
+  gather_facts: true
+  # One host at a time: never reboot more than one at once. With 3 control-plane VMs (compute1/2/3)
+  # a parallel reboot would break etcd quorum and take down Ceph mons + ingress. serial:1 guarantees
+  # sequential, but it only waits for SSH to return (post_reboot_delay) — NOT for the Talos node to
+  # rejoin quorum. So when rebooting the control-plane hosts, gate each on the cluster being healthy
+  # again before the next: `kubectl get nodes` all Ready + `ceph -s` HEALTH_OK. Validated first on
+  # compute4 (worker-only, quorum-safe) before touching any control-plane host. Prefer:
+  #   ansible-playbook phys-phase0.yml -e phys_reboot=true --limit compute4   # then cp hosts 1-by-1
+  serial: 1
+  roles:
+    - { role: phys_host_prep, tags: [phase0] }

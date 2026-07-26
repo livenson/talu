@@ -1,0 +1,7 @@
+---
+# Identity & access: Dex (OIDC IdP) + Pomerium (IAP) on the physical cluster. Pomerium is exposed
+# on the ingress LB IP (compute2 DNATs the public :80/:443 there); autocert gets Let's Encrypt certs
+# for *.<lab_domain> over that path. Protects Perses + Hubble UI behind Dex OIDC.
+id_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+id_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+pomerium_version: "v0.33.0"        # matches all.yml pin

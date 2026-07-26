@@ -1,0 +1,64 @@
+---
+# pkg-repo — in-cluster OS-package repo (nginx over a PVC) hosting the talu-ca-trust package for
+# mutable guests (the OS-package analog of the image registry). Serving infra only; POPULATING it
+# (the publish-job) needs the talu-pkg-builder image + the CA package build — a follow-on, tied to the
+# Native SSH CA + the tenant chart's caTrust.package=true path. bootc guests don't need it.
+- name: Copy the pkg-repo component to the gateway
+  ansible.builtin.copy:
+    src: "{{ pkgr_src }}/"
+    dest: "{{ pkgr_dir }}/"
+    mode: "0644"
+
+# The golden-images namespace is shared with the CDI golden-image catalog + zot; create it if absent.
+- name: Ensure the golden-images namespace
+  ansible.builtin.shell: "{{ pkgr_k }} create ns golden-images --dry-run=client -o yaml | {{ pkgr_k }} apply -f -"
+  changed_when: true
+
+- name: Deploy pkg-repo (nginx + PVC + Service)
+  ansible.builtin.command: "{{ pkgr_k }} apply -k {{ pkgr_dir }}"
+  register: pkgr_apply
+  changed_when: "'created' in pkgr_apply.stdout or 'configured' in pkgr_apply.stdout"
+
+- name: Wait for pkg-repo ready
+  ansible.builtin.command: "{{ pkgr_k }} -n golden-images rollout status deploy/pkg-repo --timeout=120s"
+  changed_when: false
+
+# ---- populate: build + index + publish the talu-ca-trust package (deb + rpm) from the live CA --------
+- name: Is the CA pubkey (pomerium-user-ca) present?  # published by phys_identity — populate needs it
+  ansible.builtin.command: "{{ pkgr_k }} -n pomerium get configmap pomerium-user-ca"
+  register: pkgr_ca
+  changed_when: false
+  failed_when: false
+
+- name: Copy the ca-trust build scripts to the gateway
+  ansible.builtin.copy:
+    src: "{{ pkgr_catrust_src }}/"
+    dest: "{{ pkgr_catrust_dir }}/"
+    mode: "0755"
+  when: pkgr_populate and pkgr_ca.rc == 0
+
+- name: Ensure the rpm toolchain (deb build is pure shell; rpm needs rpmbuild + createrepo_c)
+  ansible.builtin.package:
+    name: [rpm-build, createrepo_c]
+    state: present
+  become: true
+  register: pkgr_tools
+  failed_when: false        # publish.sh gracefully builds deb-only if the rpm toolchain is unavailable
+  when: pkgr_populate and pkgr_ca.rc == 0
+
+- name: Publish talu-ca-trust v{{ pkgr_version }} (build deb+rpm → index → sync into pkg-repo)
+  ansible.builtin.command: "bash {{ pkgr_catrust_dir }}/publish.sh {{ pkgr_version }}"
+  environment:
+    KUBECONFIG: "{{ talos_gen_dir }}/kubeconfig"
+    GPG_SIGN: "false"                               # lab: [trusted=yes]; production sets the signing key
+    CA_REPO_DIR: "{{ talos_gen_dir }}/carepo"
+  register: pkgr_pub
+  changed_when: "'published' in pkgr_pub.stdout"
+  when: pkgr_populate and pkgr_ca.rc == 0
+
+- name: Status
+  ansible.builtin.debug:
+    msg: >-
+      pkg-repo serving at http://pkg-repo.golden-images.svc/
+      {{ '— talu-ca-trust v' ~ pkgr_version ~ ' published (deb+rpm)' if (pkgr_populate and pkgr_ca.rc == 0)
+         else '(not populated — pomerium-user-ca absent or pkgr_populate=false)' }}

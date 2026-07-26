@@ -12,17 +12,24 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CONFIG_PATH = os.environ.get("POMERIUM_CONFIG", "/config/config.yaml")
 LISTEN_PORT = int(os.environ.get("PORT", "8080"))
+# External port the provider forwards to Pomerium's Native SSH proxy (ssh_address :2222). Site-specific:
+# the physical lab forwards :2222 straight through; the old OpenStack lab used :23 (socat→NodePort). Set
+# SSH_PORT per environment on the portal Deployment; default matches Pomerium's own listener.
+SSH_PORT = os.environ.get("SSH_PORT", "2222")
 
 # Friendly names/descriptions per platform route, keyed on the `from` sub-domain. Anything not listed
 # still renders (with its upstream as the description) — so new platform routes never silently vanish.
 PLATFORM = {
-    "id":           ("Identity", "Dex / OIDC — sign-in &amp; token issuance"),
+    "id":           ("Identity", "Dex / OIDC — sign-in endpoint (used by the login redirect; not a page)"),
     "whoami":       ("Session", "whoami — your current identity &amp; request headers"),
     "vms":          ("VM console", "KubeVirt Manager — create, start/stop, serial console"),
     "perses":       ("Dashboards", "Perses — fleet metrics · Access Audit · VM Logs"),
     "hubble":       ("Network flows", "Hubble UI — live Cilium service map &amp; flows"),
 }
 SKIP_SUBDOMAINS = {"authenticate"}  # the auth service itself is not a user destination
+# OIDC IdP endpoint: reachable only via the OAuth login redirect (/dex/auth?…); its root path 404s, so
+# show it (users like knowing the IdP) but DON'T make it a link that dead-ends on a 404.
+NONLINK_SUBDOMAINS = {"id"}
 
 
 def load_routes():
@@ -84,7 +91,7 @@ def classify(route, domain):
                 "Per-tenant Perses — this tenant's metrics &amp; VM logs", frm, True)
     if sub in PLATFORM:
         title, desc = PLATFORM[sub]
-        return ("Platform", title, desc, frm, True)
+        return ("Platform", title, desc, frm, sub not in NONLINK_SUBDOMAINS)
     # unknown platform-ish route: show it with its upstream so nothing is hidden
     return ("Platform", html.escape(sub), f"upstream: <code>{html.escape(to)}</code>", frm, True)
 
@@ -147,7 +154,7 @@ def render(domain, routes):
 {''.join(body) or '<p class="desc">No routes found — is pomerium-config present?</p>'}
 <p class="foot">Every route enters through Pomerium (the only ingress). Links open the service;
 you'll be asked to sign in unless the route is marked <span class="acc pub">public</span>.
-SSH routes use Native SSH: <code>ssh &lt;principal&gt;@&lt;vm&gt;@ssh.{dom} -p 23</code>.</p>
+SSH routes use Native SSH: <code>ssh &lt;principal&gt;@&lt;vm&gt;@ssh.{dom} -p {SSH_PORT}</code>.</p>
 </div></body></html>"""
 
 

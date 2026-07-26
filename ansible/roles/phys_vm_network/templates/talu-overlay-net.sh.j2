@@ -1,0 +1,63 @@
+#!/bin/bash
+# ANSIBLE MANAGED — talu roles/phys_vm_network. Idempotent L2 substrate for the Talos VM network:
+# {{ talos_overlay.bridge }} + a bridge uplink that is EITHER a dedicated 802.1Q VLAN ('vlan' mode,
+# default — plain Ethernet the 82599 can GRO-offload) OR a head-end-replicated VXLAN ('vxlan' mode,
+# rollback). Reversible: `ip link del` the uplink + bridge. bond0 is never touched.
+set -euo pipefail
+
+BR={{ talos_overlay.bridge }}
+MTU={{ talos_overlay.mtu }}
+
+# 1) bridge
+if ! ip link show "$BR" &>/dev/null; then
+  ip link add "$BR" type bridge
+fi
+ip link set "$BR" mtu "$MTU"
+ip link set "$BR" up
+
+{% if talos_overlay.uplink_mode | default('vxlan') == 'vlan' %}
+# 2) uplink = dedicated 802.1Q VLAN on bond0 (no host IP, no encapsulation). VM/pod frames ride the
+#    fabric as plain tagged Ethernet, so the 82599 GRO-aggregates them → near line-rate pod-to-pod.
+UP={{ talos_overlay.uplink_if }}
+VID={{ talos_overlay.vlan_id }}
+if ! ip link show "$UP" &>/dev/null; then
+  ip link add link bond0 name "$UP" type vlan id "$VID"
+  ip link set "$UP" master "$BR"
+fi
+ip link set "$UP" mtu "$MTU"
+ip link set "$UP" up
+{% else %}
+# 2) uplink = VXLAN over bond0 (recreate only if missing; params are immutable once created)
+VX={{ talos_overlay.vxlan_if }}
+VNI={{ talos_overlay.vni }}
+DPORT={{ talos_overlay.udp_port }}
+LOCAL={{ phys_internal_ip }}
+PEERS=({% for h in groups['phys'] if hostvars[h].phys_internal_ip != phys_internal_ip %}{{ hostvars[h].phys_internal_ip }} {% endfor %})
+if ! ip link show "$VX" &>/dev/null; then
+  ip link add "$VX" type vxlan id "$VNI" local "$LOCAL" dstport "$DPORT" nolearning
+  ip link set "$VX" master "$BR"
+fi
+ip link set "$VX" mtu "$MTU"
+ip link set "$VX" up
+
+# 3) head-end replication: one all-zeros FDB entry per peer → BUM traffic is unicast-flooded to
+#    each peer (works on fabrics without multicast, which we can't assume here).
+#    `self` targets the vxlan device's own FDB (not the master bridge's, which rejects `dst`);
+#    multiple all-zeros entries require `append`, so reset-then-append keeps it idempotent.
+while read -r d; do
+  [ -n "$d" ] && bridge fdb del 00:00:00:00:00:00 dev "$VX" dst "$d" self 2>/dev/null || true
+done < <(bridge fdb show dev "$VX" | awk '$1=="00:00:00:00:00:00"{print $3}')
+for p in "${PEERS[@]}"; do
+  bridge fdb append 00:00:00:00:00:00 dev "$VX" dst "$p" self permanent
+done
+{% endif %}
+
+{% if inventory_hostname == talos_overlay.gateway_host %}
+# 4) gateway host: address on the bridge = VM default route / DNS / mirror endpoint
+ip addr replace {{ talos_overlay.gateway_ip }}/{{ talos_overlay.subnet.split('/')[1] }} dev "$BR"
+{% elif inventory_hostname == talos_overlay.ingress_host %}
+# 4) ingress host: its own overlay address so it can DNAT public :80/:443 to the cluster LB IP.
+ip addr replace {{ talos_overlay.ingress_ip }}/{{ talos_overlay.subnet.split('/')[1] }} dev "$BR"
+{% endif %}
+
+echo "overlay up: $BR mtu $MTU, $VX vni $VNI local $LOCAL peers ${PEERS[*]}"

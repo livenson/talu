@@ -1,0 +1,56 @@
+# rocky-phys Cilium overlay — layered ON TOP of components/infrastructure/cilium/values.yaml.
+# Physical 4-node nested-Talos cluster (compute1-4), VMs on a host-to-host VXLAN overlay.
+
+# NATIVE routing (not tunnel): the Talos guests already ride a host-to-host VXLAN overlay, so a
+# Cilium VXLAN on top was DOUBLE encap (Cilium-VXLAN-in-host-VXLAN) — measured ~3.26 Gbit/s pod-to-pod
+# cross-node vs a 10G bond. All nodes share one L2 (172.18.0.0/16 overlay), so autoDirectNodeRoutes
+# installs a direct route to each peer's pod CIDR via its node IP — the frame is L2-forwarded across
+# the overlay and only the HOST VXLAN wraps it (single encap). ipv4NativeRoutingCIDR marks the pod
+# supernet as un-masqueraded (intra-cluster keeps pod IPs; egress still bpf-masquerades to the node).
+routingMode: native
+autoDirectNodeRoutes: true
+ipv4NativeRoutingCIDR: 10.244.0.0/16
+
+# Routing MTU. Guest NIC MTU is 8950 (host LAN 9000 − 50B host VXLAN). With native routing there is NO
+# Cilium encap, so pod MTU = the guest NIC MTU; pin 8900 for a safety margin (was 8850 under tunnel).
+MTU: 8900
+
+# Real multi-node: eBPF masquerade (Talos nodes are nftables-only, same rationale as the VM lab).
+bpf:
+  masquerade: true
+
+# Node-to-node WireGuard: OFF for the first bring-up to keep the MTU budget simple; flip on once
+# the cluster is validated (costs ~80B MTU — drop Cilium MTU to ~8770 when enabling).
+encryption:
+  enabled: false
+  type: wireguard
+
+# 3 control planes + 1 worker → HA operator.
+operator:
+  replicas: 2
+
+# LB-IPAM + L2 announcements work for real here: Cilium answers ARP for LoadBalancer IPs on the
+# 172.18.0.0/16 overlay L2, reachable from the gateway (no socat shim like the single-node lab).
+l2announcements:
+  enabled: true
+externalIPs:
+  enabled: true
+
+hubble:
+  ui:
+    enabled: true
+  # Add source/destination NAMESPACE context to the drop + flow metrics so cross-tenant traffic is
+  # attributable in Perses/Prometheus (hubble_drop_total{source_namespace,destination_namespace}) — the
+  # visual evidence for the multi-tenant isolation test. The base list has no context. Helm REPLACES
+  # the list (no deep-merge), so restate it in full here.
+  metrics:
+    enabled:
+      - "drop:sourceContext=namespace;destinationContext=namespace"
+      - "flow:sourceContext=namespace;destinationContext=namespace"
+      - dns
+      - tcp
+      - port-distribution
+      - icmp
+      - "httpV2:exemplars=true"
+    serviceMonitor:
+      enabled: true

@@ -1,0 +1,66 @@
+---
+# Tear down the nested Talos cluster (VMs + cluster state) — leaves the host layer intact
+# (libvirt, the VXLAN overlay, dnsmasq, the registry mirror). Used to rebuild the cluster on a new
+# Talos/k8s version. The physical hosts and Rocky are never touched.
+#
+#   ansible-playbook phys-teardown.yml
+- name: Destroy the Talos VMs
+  hosts: phys
+  gather_facts: true
+  tasks:
+    - name: Nodes on this host
+      ansible.builtin.set_fact:
+        my_nodes: "{{ talos_nodes | selectattr('host', 'equalto', inventory_hostname) | list }}"
+
+    - name: Destroy running domains
+      become: true
+      ansible.builtin.command: "virsh destroy {{ item.name }}"
+      loop: "{{ my_nodes }}"
+      loop_control: { label: "{{ item.name }}" }
+      changed_when: true
+      failed_when: false
+
+    - name: Undefine domains + remove their storage
+      become: true
+      ansible.builtin.command: "virsh undefine {{ item.name }} --remove-all-storage --nvram"
+      loop: "{{ my_nodes }}"
+      loop_control: { label: "{{ item.name }}" }
+      changed_when: true
+      failed_when: false
+
+    - name: Remove any leftover per-node disks
+      become: true
+      ansible.builtin.file:
+        path: "{{ talos_image_dir }}/{{ item.0.name }}-{{ item.1 }}.qcow2"
+        state: absent
+      loop: "{{ my_nodes | product(['boot', 'ceph']) | list }}"
+      loop_control: { label: "{{ item.0.name }}-{{ item.1 }}" }
+
+- name: Clear cluster state on the gateway
+  hosts: mirror
+  gather_facts: false
+  tasks:
+    # Wipe generated secrets/configs/kubeconfig + cached charts so the rebuild regenerates fresh.
+    # Keep the registry-mirror patch (it lives outside talos_gen_dir) and the dir itself.
+    - name: Remove generated cluster files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ talos_gen_dir }}/talosconfig"
+        - "{{ talos_gen_dir }}/kubeconfig"
+        - "{{ talos_gen_dir }}/controlplane.yaml"
+        - "{{ talos_gen_dir }}/worker.yaml"
+
+    - name: Remove per-node configs, patches, chart caches, values
+      ansible.builtin.shell: >-
+        rm -f {{ talos_gen_dir }}/talos-*.yaml
+        {{ talos_gen_dir }}/*.tgz
+        {{ talos_gen_dir }}/*-values.yaml
+        {{ talos_gen_dir }}/*-patch.yaml
+        {{ talos_gen_dir }}/rbd-snapshotclass.yaml || true
+      changed_when: true
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "Cluster torn down. Host layer (libvirt, overlay, dnsmasq, mirror) preserved. Rebuild with phys-cluster.yml."

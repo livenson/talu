@@ -1,0 +1,56 @@
+---
+# cert-manager — foundational: the Perses operator, Pomerium, and zot all need it (webhook/serving
+# certs, internal CA, ACME). Installed via the jetstack helm chart with CRDs.
+- name: Facts
+  ansible.builtin.set_fact:
+    cm_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+    cm_helm: /usr/local/bin/helm
+    cm_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+    cert_manager_version: "{{ cert_manager_version | default('v1.21.0') }}"
+
+- name: jetstack helm repo
+  ansible.builtin.command: "{{ cm_helm }} repo add jetstack https://charts.jetstack.io"
+  changed_when: false
+  failed_when: false
+
+- name: Pull the cert-manager chart (retry through flaky egress)
+  ansible.builtin.command: "{{ cm_helm }} pull jetstack/cert-manager --version {{ cert_manager_version }} -d {{ talos_gen_dir }}"
+  args: { creates: "{{ talos_gen_dir }}/cert-manager-{{ cert_manager_version }}.tgz" }
+  register: cm_pull
+  retries: 15
+  delay: 5
+  until: cm_pull is not failed
+
+- name: Install cert-manager (with CRDs)
+  ansible.builtin.command: >-
+    {{ cm_helm }} upgrade --install cert-manager {{ talos_gen_dir }}/cert-manager-{{ cert_manager_version }}.tgz
+    --namespace cert-manager --create-namespace --set crds.enabled=true
+    --wait --timeout 8m
+  environment: { KUBECONFIG: "{{ cm_kubeconfig }}" }
+  register: cm_install
+  changed_when: "'has been' in cm_install.stdout"
+
+- name: Wait for the cert-manager CRDs
+  ansible.builtin.command: "{{ cm_k }} wait --for condition=established crd/certificates.cert-manager.io crd/issuers.cert-manager.io crd/clusterissuers.cert-manager.io --timeout=120s"
+  changed_when: false
+
+# A self-signed ClusterIssuer — the root for internal TLS (Perses/zot/etc.). ACME issuers for
+# public certs are added by the layers that need them (identity/Pomerium does its own autocert).
+- name: Self-signed ClusterIssuer (internal CA root)
+  ansible.builtin.shell: |
+    cat <<'EOF' | {{ cm_k }} apply -f -
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    metadata: {name: selfsigned}
+    spec: {selfSigned: {}}
+    EOF
+  changed_when: true
+
+- name: Status
+  ansible.builtin.command: "{{ cm_k }} -n cert-manager get pods --no-headers"
+  register: cm_status
+  changed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "cert-manager {{ cert_manager_version }}: {{ cm_status.stdout_lines | select('search','Running') | list | length }} pods Running"

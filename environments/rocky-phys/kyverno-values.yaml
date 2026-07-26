@@ -1,0 +1,11 @@
+# rocky-phys Kyverno override — layered over components/platform/kyverno/values.yaml by phys_kyverno.
+# Real 4-node cluster (3 CP + 1 worker), so the admission controller runs HA (2 replicas); the
+# background/reports/cleanup controllers are singletons (their work is not on the request path).
+admissionController:
+  replicas: 2
+backgroundController:
+  replicas: 1
+reportsController:
+  replicas: 1
+cleanupController:
+  replicas: 1

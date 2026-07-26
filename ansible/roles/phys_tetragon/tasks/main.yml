@@ -1,0 +1,56 @@
+---
+- name: Copy the tetragon component files to the gateway
+  ansible.builtin.copy:
+    src: "{{ tetra_src }}/"
+    dest: "{{ tetra_dir }}/"
+    mode: "0644"
+
+- name: Tetragon namespace (privileged — eBPF DaemonSet mounts tracefs/proc)
+  ansible.builtin.command: "{{ tetra_k }} apply -f {{ tetra_dir }}/namespace.yaml"
+  changed_when: true
+
+- name: Cilium helm repo (hosts the tetragon chart)
+  ansible.builtin.command: "{{ tetra_helm }} repo add cilium https://helm.cilium.io"
+  changed_when: false
+  failed_when: false
+
+- name: Pull the tetragon chart (retry through flaky egress)
+  ansible.builtin.command: "{{ tetra_helm }} pull cilium/tetragon --version {{ tetragon_version }} -d {{ talos_gen_dir }}"
+  args: { creates: "{{ tetra_chart_tgz }}" }
+  register: tetra_pull
+  retries: 15
+  delay: 5
+  until: tetra_pull is not failed
+
+- name: Install Tetragon (Talos-tuned values — tracefs mount, policy filter, process creds)
+  ansible.builtin.command: >-
+    {{ tetra_helm }} upgrade --install tetragon {{ tetra_chart_tgz }}
+    --namespace {{ tetra_namespace }} -f {{ tetra_dir }}/values.yaml
+    --wait --timeout 6m
+  environment: { KUBECONFIG: "{{ tetra_kubeconfig }}" }
+  register: tetra_install
+  changed_when: "'has been' in tetra_install.stdout"
+
+- name: Wait for the Tetragon DaemonSet on every node
+  ansible.builtin.command: "{{ tetra_k }} -n {{ tetra_namespace }} rollout status ds/tetragon --timeout=180s"
+  changed_when: false
+
+- name: Apply TracingPolicies + ServiceMonitors
+  ansible.builtin.command: "{{ tetra_k }} apply -f {{ item }}"
+  loop:
+    - "{{ tetra_dir }}/tracingpolicies/"
+    - "{{ tetra_dir }}/servicemonitors.yaml"
+  changed_when: true
+
+- name: Verify — agents Running on all nodes + policies loaded
+  ansible.builtin.shell: |
+    R=$({{ tetra_k }} -n {{ tetra_namespace }} get pods -l app.kubernetes.io/name=tetragon 2>/dev/null | grep -cE 'Running')
+    N=$({{ tetra_k }} get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')
+    echo "tetragon agents Running: $R/$N"
+    echo "tracingpolicies: $({{ tetra_k }} get tracingpolicies.cilium.io -o name 2>/dev/null | wc -l | tr -d ' ') cluster + $({{ tetra_k }} get tracingpoliciesnamespaced.cilium.io -A -o name 2>/dev/null | wc -l | tr -d ' ') namespaced"
+  register: tetra_status
+  changed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ tetra_status.stdout_lines }}"

@@ -1,0 +1,76 @@
+---
+# Runs on the gateway (kubeconfig + egress via the mirror). Images pull through the LAN mirror.
+- name: KubeVirt operator (retried through flaky egress)
+  ansible.builtin.command: "{{ kubevirt_k }} apply -f https://github.com/kubevirt/kubevirt/releases/download/{{ kubevirt_version }}/kubevirt-operator.yaml"
+  register: kv_op
+  retries: 6
+  delay: 5
+  until: kv_op.rc == 0
+  changed_when: "'created' in kv_op.stdout or 'configured' in kv_op.stdout"
+
+- name: KubeVirt CR (useEmulation={{ kubevirt_use_emulation }}, live migration, feature gates)
+  ansible.builtin.shell: |
+    cat <<'EOF' | {{ kubevirt_k }} apply -f -
+    apiVersion: kubevirt.io/v1
+    kind: KubeVirt
+    metadata: {name: kubevirt, namespace: kubevirt}
+    spec:
+      configuration:
+        # Cluster-wide default: every VMI live-migrates (not shut off) when its node is drained.
+        evictionStrategy: LiveMigrate
+        migrations:
+          parallelMigrationsPerCluster: {{ kubevirt_parallel_migrations }}
+          parallelOutboundMigrationsPerNode: {{ kubevirt_parallel_outbound_migrations }}
+        developerConfiguration:
+          useEmulation: {{ kubevirt_use_emulation | lower }}
+          featureGates: [Snapshot, HotplugVolumes]
+    EOF
+  register: kv_cr
+  changed_when: true
+
+- name: CDI operator + CR (retried)
+  ansible.builtin.command: "{{ kubevirt_k }} apply -f https://github.com/kubevirt/containerized-data-importer/releases/download/{{ cdi_version }}/{{ item }}"
+  loop: [cdi-operator.yaml, cdi-cr.yaml]
+  register: cdi_apply
+  retries: 6
+  delay: 5
+  until: cdi_apply.rc == 0
+  changed_when: "'created' in cdi_apply.stdout or 'configured' in cdi_apply.stdout"
+
+- name: Wait for KubeVirt + CDI Deployed (image pulls via mirror can be slow)
+  ansible.builtin.command: "{{ kubevirt_k }} -n {{ item.ns }} wait {{ item.kind }}/{{ item.name }} --for=jsonpath='{.status.phase}'=Deployed --timeout=600s"
+  loop:
+    - { ns: kubevirt, kind: kubevirt, name: kubevirt }
+    - { ns: cdi,      kind: cdi,      name: cdi }
+  changed_when: false
+
+- name: Point CDI scratch space at {{ cdi_scratch_storageclass }}
+  ansible.builtin.command: >-
+    {{ kubevirt_k }} patch cdi cdi --type merge
+    -p '{"spec":{"config":{"scratchSpaceStorageClass":"{{ cdi_scratch_storageclass }}"}}}'
+  changed_when: false
+
+- name: Install virtctl on the gateway
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ virtctl_url }}"
+    dest: /usr/local/bin/virtctl
+    mode: "0755"
+    force: true
+
+- name: KubeVirt status
+  ansible.builtin.shell: |
+    {{ kubevirt_k }} -n kubevirt get kubevirt kubevirt -o jsonpath='{.status.phase}{" ops-version="}{.status.operatorVersion}'; echo
+    {{ kubevirt_k }} -n kubevirt get pods 2>&1 | grep -cE 'virt-(api|controller|handler|operator).*Running' | xargs echo "kubevirt pods running:"
+  register: kv_status
+  changed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ kv_status.stdout_lines }}"
+
+- name: Validate — boot a VM on real KVM + live-migrate between hosts
+  ansible.builtin.include_tasks:
+    file: validate.yml
+    apply: { tags: [kv-validate] }
+  tags: [kv-validate, never]

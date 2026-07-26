@@ -1,0 +1,14 @@
+---
+# Talu physical lab — pull-through registry mirror (the egress fix).
+#
+#   ansible-playbook phys-registry-mirror.yml
+#
+# Stands up stock `registry:2` pull-through caches on the mirror host (compute1), one per upstream
+# registry, served over the reliable 9000 LAN. Nodes pull from the cache; the flaky WAN is hit once
+# per blob and the result is cached. Writes a Talos machineconfig patch that points every node's
+# containerd at the caches. Non-destructive; podman quadlets on top of Rocky.
+- name: Talu physical lab — registry pull-through mirror
+  hosts: mirror
+  gather_facts: true
+  roles:
+    - { role: phys_registry_mirror, tags: [mirror] }

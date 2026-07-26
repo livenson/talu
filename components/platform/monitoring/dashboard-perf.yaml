@@ -1,0 +1,171 @@
+# Performance dashboard — the USE/RED signals for capacity engineering / find-the-knee runs:
+# compute (util + STEAL, the nested-lab saturation tell), storage (Ceph OSD latency/IOPS/capacity),
+# network (Cilium forward/drop, Hubble flows), and KubeVirt VM state. Built on node-exporter + the
+# ceph-exporter/mgr metrics (rook-ceph ServiceMonitors) + cilium/hubble. Admin-only via Pomerium.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-performance
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — Performance (USE/RED)
+    duration: 1h
+    panels:
+      cpuutil:
+        kind: Panel
+        spec:
+          display: { name: "Node CPU utilisation (per node)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))" }
+      cpusteal:
+        kind: Panel
+        spec:
+          display: { name: "CPU steal % (nested-host saturation — the knee)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "avg by (instance) (rate(node_cpu_seconds_total{mode=\"steal\"}[5m]))" }
+      memavail:
+        kind: Panel
+        spec:
+          display: { name: "Node memory available (bytes)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "node_memory_MemAvailable_bytes" } }
+      load:
+        kind: Panel
+        spec:
+          display: { name: "Node load1" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "node_load1" } }
+      osdrlat:
+        kind: Panel
+        spec:
+          display: { name: "Ceph OSD read latency (s)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "rate(ceph_osd_op_r_latency_sum[5m]) / clamp_min(rate(ceph_osd_op_r_latency_count[5m]), 1)" }
+      osdwlat:
+        kind: Panel
+        spec:
+          display: { name: "Ceph OSD write latency (s)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "rate(ceph_osd_op_w_latency_sum[5m]) / clamp_min(rate(ceph_osd_op_w_latency_count[5m]), 1)" }
+      cephiops:
+        kind: Panel
+        spec:
+          display: { name: "Ceph client IOPS (read+write)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum(rate(ceph_osd_op_r_latency_count[5m])) + sum(rate(ceph_osd_op_w_latency_count[5m]))" } }
+      cephcap:
+        kind: Panel
+        spec:
+          display: { name: "Ceph pool used fraction" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "ceph_pool_stored / clamp_min(ceph_pool_stored + ceph_pool_max_avail, 1)" } }
+      cephhealth:
+        kind: Panel
+        spec:
+          display: { name: "Ceph health (0=OK 1=WARN 2=ERR)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "ceph_health_status" } }
+      netfwd:
+        kind: Panel
+        spec:
+          display: { name: "Cilium forward rate (pkt/s)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum(rate(cilium_forward_count_total[5m]))" } }
+      netdrop:
+        kind: Panel
+        spec:
+          display: { name: "Cilium drop rate (pkt/s, by reason)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (reason) (rate(cilium_drop_count_total[5m]))" } }
+      hubbleflows:
+        kind: Panel
+        spec:
+          display: { name: "Hubble flows/s (by verdict)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (verdict) (rate(hubble_flows_processed_total[5m]))" } }
+      vmis:
+        kind: Panel
+        spec:
+          display: { name: "Running VMIs (by node)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "count by (node) (kube_pod_info{pod=~\"virt-launcher-.*\"})" } }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: Compute (USE) }
+          items:
+            - { x: 0,  y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/cpuutil" } }
+            - { x: 6,  y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/cpusteal" } }
+            - { x: 12, y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/memavail" } }
+            - { x: 18, y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/load" } }
+      - kind: Grid
+        spec:
+          display: { title: Storage — Ceph (USE/RED) }
+          items:
+            - { x: 0,  y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/osdrlat" } }
+            - { x: 6,  y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/osdwlat" } }
+            - { x: 12, y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/cephiops" } }
+            - { x: 18, y: 0, width: 3, height: 8, content: { $ref: "#/spec/panels/cephcap" } }
+            - { x: 21, y: 0, width: 3, height: 8, content: { $ref: "#/spec/panels/cephhealth" } }
+      - kind: Grid
+        spec:
+          display: { title: Network (RED) + VMs }
+          items:
+            - { x: 0,  y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/netfwd" } }
+            - { x: 6,  y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/netdrop" } }
+            - { x: 12, y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/hubbleflows" } }
+            - { x: 18, y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/vmis" } }

@@ -1,0 +1,108 @@
+---
+- name: Copy the backup component to the gateway
+  ansible.builtin.copy:
+    src: "{{ bk_src }}/"
+    dest: "{{ bk_dir }}/"
+    mode: "0644"
+
+- name: Apply namespaces (velero PSA privileged for node-agent hostPaths; garage baseline)
+  ansible.builtin.command: "{{ bk_k }} apply -f {{ bk_dir }}/namespace.yaml"
+  changed_when: true
+
+- name: Does garage-secrets exist?
+  ansible.builtin.command: "{{ bk_k }} -n garage get secret garage-secrets"
+  register: garage_secret_check
+  failed_when: false
+  changed_when: false
+
+- name: Create garage-secrets (rpc-secret + admin-token) if absent
+  ansible.builtin.shell: |
+    {{ bk_k }} -n garage create secret generic garage-secrets \
+      --from-literal=rpc-secret="$(openssl rand -hex 32)" \
+      --from-literal=admin-token="$(openssl rand -base64 32)"
+  when: garage_secret_check.rc != 0
+  changed_when: true
+
+# phys override: the component garage.yaml pins storageClassName: local-path (a non-Ceph class); phys
+# only has ceph-block, so rewrite it (lab compromise — see defaults/main.yml).
+- name: Point the Garage PVC at the phys storage class
+  ansible.builtin.replace:
+    path: "{{ bk_dir }}/garage.yaml"
+    regexp: 'storageClassName:\s*local-path'
+    replace: "storageClassName: {{ garage_storage_class }}"
+
+- name: Deploy Garage (ConfigMap + PVC + Deployment + Service)
+  ansible.builtin.command: "{{ bk_k }} apply -f {{ bk_dir }}/garage.yaml"
+  changed_when: true
+
+- name: Wait for Garage ready
+  ansible.builtin.command: "{{ bk_k }} -n garage rollout status deploy/garage --timeout=240s"
+  changed_when: false
+
+- name: Bootstrap Garage (layout + bucket + key) — idempotent; emit the access key
+  ansible.builtin.shell: |
+    set -e
+    POD=$({{ bk_k }} -n garage get pod -l app=garage -o jsonpath='{.items[0].metadata.name}')
+    G="{{ bk_k }} -n garage exec $POD -- /garage"
+    if ! $G layout show 2>/dev/null | grep -q 'dc1'; then
+      NODE=$($G node id -q 2>/dev/null | cut -d@ -f1)
+      $G layout assign -z dc1 -c {{ garage_capacity }} "$NODE" >/dev/null
+      $G layout apply --version 1 >/dev/null
+    fi
+    $G bucket create velero >/dev/null 2>&1 || true
+    if $G key info velero-key --show-secret >/dev/null 2>&1; then
+      INFO=$($G key info velero-key --show-secret 2>/dev/null)
+    else
+      INFO=$($G key create velero-key 2>/dev/null)
+    fi
+    $G bucket allow --read --write --owner velero --key velero-key >/dev/null 2>&1 || true
+    echo "AK=$(echo "$INFO" | awk '/Key ID/{print $NF}')"
+    echo "SK=$(echo "$INFO" | awk '/Secret key/{print $NF}')"
+  register: garage_boot
+  changed_when: true
+
+- name: Parse Garage access key
+  ansible.builtin.set_fact:
+    garage_ak: "{{ garage_boot.stdout | regex_search('AK=(\\S+)', '\\1') | first }}"
+    garage_sk: "{{ garage_boot.stdout | regex_search('SK=(\\S+)', '\\1') | first }}"
+
+- name: Create the Velero credentials Secret (name MUST match values.yaml existingSecret)
+  ansible.builtin.shell: |
+    {{ bk_k }} -n velero create secret generic garage-credentials --from-file=cloud=/dev/stdin --dry-run=client -o yaml <<EOF | {{ bk_k }} apply -f -
+    [default]
+    aws_access_key_id={{ garage_ak }}
+    aws_secret_access_key={{ garage_sk }}
+    EOF
+  no_log: true
+  changed_when: true
+
+- name: Install/upgrade Velero (+ node-agent, fs-backup default, KubeVirt plugin) to Garage
+  ansible.builtin.command: >
+    helm upgrade --install velero vmware-tanzu/velero
+    --version {{ velero_chart_version }} --namespace velero
+    -f {{ bk_dir }}/values.yaml --wait --timeout 8m
+  environment: { KUBECONFIG: "{{ bk_kubeconfig }}" }
+  changed_when: true
+
+- name: Apply Velero + Garage ServiceMonitors + the DR-drill restore-test CronJob
+  ansible.builtin.command: "{{ bk_k }} apply -f {{ bk_dir }}/{{ item }}"
+  loop: [servicemonitors.yaml, restore-test.yaml]
+  changed_when: true
+
+- name: Wait for the BackupStorageLocation to become Available
+  ansible.builtin.command: >
+    {{ bk_k }} -n velero wait backupstoragelocation/default
+    --for=jsonpath='{.status.phase}'=Available --timeout=120s
+  changed_when: false
+
+- name: Status
+  ansible.builtin.shell: |
+    echo "garage: $({{ bk_k }} -n garage get pods --no-headers 2>/dev/null | awk '{print $3}' | tr '\n' ' ') (storageClass={{ garage_storage_class }} — LAB compromise, prod needs off-Ceph)"
+    echo "velero: $({{ bk_k }} -n velero get pods --no-headers 2>/dev/null | grep -c Running) pods Running"
+    echo "BSL: $({{ bk_k }} -n velero get backupstoragelocation default -o jsonpath='{.status.phase}' 2>/dev/null)"
+  register: bk_status
+  changed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ bk_status.stdout_lines }}"

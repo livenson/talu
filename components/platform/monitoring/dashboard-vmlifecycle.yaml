@@ -1,0 +1,141 @@
+# VM lifecycle & density — the operational KubeVirt signals for capacity work: how fast VMs come up
+# (creation→Running), how many run per node, and live-migration health/speed. Built on KubeVirt's
+# kubevirt_vmi_* metrics (the `kubevirt` ServiceMonitor) + kube-state-metrics for the per-node count
+# (KubeVirt v1.8 does not export kubevirt_vmi_phase_count, so density comes from virt-launcher pods).
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-vm-lifecycle
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — VM Lifecycle & Density
+    duration: 1h
+    panels:
+      bootp50:
+        kind: Panel
+        spec:
+          display: { name: "VM boot time p50 (creation → Running, s)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "histogram_quantile(0.5, sum by (le) (rate(kubevirt_vmi_phase_transition_time_from_creation_seconds_bucket{phase=\"Running\"}[10m])))" }
+      bootp95:
+        kind: Panel
+        spec:
+          display: { name: "VM boot time p95 (creation → Running, s)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "histogram_quantile(0.95, sum by (le) (rate(kubevirt_vmi_phase_transition_time_from_creation_seconds_bucket{phase=\"Running\"}[10m])))" }
+      schedp95:
+        kind: Panel
+        spec:
+          display: { name: "Scheduling latency p95 (creation → Scheduled, s)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "histogram_quantile(0.95, sum by (le) (rate(kubevirt_vmi_phase_transition_time_from_creation_seconds_bucket{phase=\"Scheduled\"}[10m])))" }
+      vmspernode:
+        kind: Panel
+        spec:
+          display: { name: "VMs per node (running virt-launchers)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "count by (node) (kube_pod_info{pod=~\"virt-launcher-.*\"})" }
+      vmstotal:
+        kind: Panel
+        spec:
+          display: { name: "Total running VMs" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "count(kube_pod_info{pod=~\"virt-launcher-.*\"})" }
+      migactive:
+        kind: Panel
+        spec:
+          display: { name: "Live migrations in flight (running+pending+scheduling)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(kubevirt_vmi_migrations_in_running_phase) + sum(kubevirt_vmi_migrations_in_pending_phase) + sum(kubevirt_vmi_migrations_in_scheduling_phase)" }
+      migtime:
+        kind: Panel
+        spec:
+          display: { name: "Live migration duration p95 (s)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "histogram_quantile(0.95, sum by (le) (rate(kubevirt_vmi_migration_phase_transition_time_from_creation_seconds_bucket[10m])))" }
+      migsucceeded:
+        kind: Panel
+        spec:
+          display: { name: "Migrations succeeded (rate/5m)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(rate(kubevirt_vmi_migration_succeeded[5m]))" }
+      outdated:
+        kind: Panel
+        spec:
+          display: { name: "VMIs outdated (need restart after KubeVirt update)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "kubevirt_vmi_number_of_outdated" }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: "Creation speed (RED)" }
+          items:
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/bootp50" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/bootp95" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/schedp95" } }
+      - kind: Grid
+        spec:
+          display: { title: "Density (USE)" }
+          items:
+            - { x: 0,  y: 0, width: 16, height: 8, content: { $ref: "#/spec/panels/vmspernode" } }
+            - { x: 16, y: 0, width: 8,  height: 8, content: { $ref: "#/spec/panels/vmstotal" } }
+      - kind: Grid
+        spec:
+          display: { title: "Live migration" }
+          items:
+            - { x: 0,  y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/migactive" } }
+            - { x: 6,  y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/migtime" } }
+            - { x: 12, y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/migsucceeded" } }
+            - { x: 18, y: 0, width: 6, height: 8, content: { $ref: "#/spec/panels/outdated" } }

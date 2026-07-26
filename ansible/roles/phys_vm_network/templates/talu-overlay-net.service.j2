@@ -1,0 +1,17 @@
+{% set uplink = talos_overlay.uplink_if if (talos_overlay.uplink_mode | default('vxlan') == 'vlan') else talos_overlay.vxlan_if %}
+# ANSIBLE MANAGED — talu roles/phys_vm_network
+[Unit]
+Description=Talu Talos-VM network ({{ talos_overlay.bridge }} / {{ uplink }}, {{ talos_overlay.uplink_mode | default('vxlan') }})
+After=network-online.target
+Wants=network-online.target
+# bond0 must be up first (the VLAN/VXLAN underlay); network-online covers it.
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/sbin/talu-overlay-net.sh
+ExecStop=-/usr/sbin/ip link del {{ uplink }}
+ExecStop=-/usr/sbin/ip link del {{ talos_overlay.bridge }}
+
+[Install]
+WantedBy=multi-user.target

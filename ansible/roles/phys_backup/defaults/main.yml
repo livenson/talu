@@ -1,0 +1,17 @@
+---
+# Backup tier-3 for the PHYSICAL lab: Velero (+ node-agent kopia fs-backup, KubeVirt plugin) writing
+# to a Garage S3 bucket. Mirrors the lab `backup` role + components/platform/backup.
+bk_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+bk_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+
+bk_src: "{{ playbook_dir }}/../components/platform/backup"
+bk_dir: "{{ talos_gen_dir }}/components/platform/backup"
+
+velero_chart_version: "12.1.0"     # app v1.18.1 (matches the HelmRelease)
+garage_capacity: "10G"
+
+# ⚠ phys has ONLY ceph-block. The component deliberately puts Garage on a NON-Ceph class (a backup
+# target must not depend on the storage it protects). Using ceph-block here is a LAB compromise to
+# validate the backup/restore MECHANISM — production MUST give Garage genuinely off-Ceph storage
+# (local-path on a separate disk, or an external Garage). Flagged in the role status output.
+garage_storage_class: "ceph-block"

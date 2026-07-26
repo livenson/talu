@@ -1,0 +1,119 @@
+---
+- name: Deploy Dex (OIDC IdP)
+  ansible.builtin.template:
+    src: dex.yaml.j2
+    dest: "{{ talos_gen_dir }}/dex.yaml"
+    mode: "0644"
+
+- name: Apply Dex
+  ansible.builtin.command: "{{ id_k }} apply -f {{ talos_gen_dir }}/dex.yaml"
+  register: dex_apply
+  changed_when: "'created' in dex_apply.stdout or 'configured' in dex_apply.stdout"
+
+- name: Wait for Dex ready
+  ansible.builtin.command: "{{ id_k }} -n identity rollout status deploy/dex --timeout=120s"
+  changed_when: false
+
+# Pomerium shared + cookie secrets — 32 random bytes each, created once (never rotated in place).
+- name: Pomerium namespace
+  ansible.builtin.command: "{{ id_k }} create ns pomerium --dry-run=client -o yaml"
+  register: pom_ns
+  changed_when: false
+- ansible.builtin.command: "{{ id_k }} apply -f -"
+  args: { stdin: "{{ pom_ns.stdout }}" }
+  changed_when: true
+
+- name: Pomerium secrets present?
+  ansible.builtin.command: "{{ id_k }} -n pomerium get secret pomerium-secrets"
+  register: pom_sec
+  changed_when: false
+  failed_when: false
+
+- name: Create pomerium-secrets (shared + cookie)
+  ansible.builtin.shell: |
+    {{ id_k }} -n pomerium create secret generic pomerium-secrets \
+      --from-literal=SHARED_SECRET="$(openssl rand -base64 32)" \
+      --from-literal=COOKIE_SECRET="$(openssl rand -base64 32)"
+  when: pom_sec.rc != 0
+  changed_when: true
+
+# Native SSH — Pomerium is the SSH CA. Generate the User CA + host keys ONCE (never rotated in place;
+# rotation is dev/lab/ca-rotate.sh). The private CA + host keys go in Secret pomerium-ssh (the Deployment
+# mounts it at /ssh, so it MUST exist before Pomerium starts); the CA PUBLIC key goes in ConfigMap
+# pomerium-user-ca, which the tenancy role mirrors into the tenants ns and the tenant chart bakes into
+# each VM's cloud-init as TrustedUserCAKeys. The tenant chart REQUIRES a non-empty sshUserCaPubKey in
+# its default caTrust mode, so this is a hard prerequisite for tenancy, not optional.
+- name: Pomerium SSH CA present?
+  ansible.builtin.command: "{{ id_k }} -n pomerium get secret pomerium-ssh"
+  register: pom_ssh_ca
+  changed_when: false
+  failed_when: false
+
+- name: Generate the Pomerium SSH User CA + host keys (one-time)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; cd "$T"
+    ssh-keygen -t ed25519 -N "" -f user_ca -C "Pomerium User CA (talu phys)" -q
+    ssh-keygen -t ed25519 -N "" -f host_ed25519 -C "pomerium-ssh host" -q
+    ssh-keygen -t rsa -b 4096 -N "" -f host_rsa -q
+    ssh-keygen -t ecdsa -b 521 -N "" -f host_ecdsa -q
+    {{ id_k }} -n pomerium create secret generic pomerium-ssh \
+      --from-file=user_ca=user_ca --from-file=user_ca.pub=user_ca.pub \
+      --from-file=host_ed25519=host_ed25519 --from-file=host_rsa=host_rsa --from-file=host_ecdsa=host_ecdsa
+    {{ id_k }} -n pomerium create configmap pomerium-user-ca --from-file=user_ca.pub=user_ca.pub
+  when: pom_ssh_ca.rc != 0
+  changed_when: true
+
+# The external domain is a per-environment VALUE (it tracks the floating IP). Both Pomerium's route
+# renderer (route-sync) and any other consumer read it from the talu-platform ConfigMap — the single
+# source of truth (gotcha #40), so a reinstall with a new IP updates one place. Without it route-sync's
+# pod fails its env ref and never runs, leaving the routes stale.
+- name: Publish the external domain (talu-platform ConfigMap, pomerium ns — route-sync reads it there)
+  ansible.builtin.shell: >-
+    {{ id_k }} -n pomerium create configmap talu-platform
+    --from-literal=domain={{ lab_domain }} --dry-run=client -o yaml | {{ id_k }} apply -f -
+  changed_when: true
+
+# The static Pomerium base for route-sync (route-sync appends the dynamic per-Service routes on top).
+- name: Publish the Pomerium base config (pomerium-base ConfigMap)
+  ansible.builtin.template:
+    src: pomerium-base.yaml.j2
+    dest: "{{ talos_gen_dir }}/pomerium-base.yaml"
+    mode: "0644"
+- ansible.builtin.command: "{{ id_k }} apply -f {{ talos_gen_dir }}/pomerium-base.yaml"
+  changed_when: true
+
+- name: Deploy Pomerium (IAP)
+  ansible.builtin.template:
+    src: pomerium.yaml.j2
+    dest: "{{ talos_gen_dir }}/pomerium.yaml"
+    mode: "0644"
+
+- name: Apply Pomerium
+  ansible.builtin.command: "{{ id_k }} apply -f {{ talos_gen_dir }}/pomerium.yaml"
+  register: pom_apply
+  changed_when: "'created' in pom_apply.stdout or 'configured' in pom_apply.stdout"
+
+- name: Wait for Pomerium ready (autocert can take a minute)
+  ansible.builtin.command: "{{ id_k }} -n pomerium rollout status deploy/pomerium --timeout=240s"
+  changed_when: false
+  failed_when: false
+  register: pom_ready
+
+- name: Read the assigned LB IP
+  ansible.builtin.command: "{{ id_k }} -n pomerium get svc pomerium -o jsonpath={.status.loadBalancer.ingress[0].ip}"
+  register: pom_lbip
+  changed_when: false
+
+- name: Status
+  ansible.builtin.shell: |
+    echo "dex:      $({{ id_k }} -n identity get pods -l app=dex --no-headers 2>/dev/null | awk '{print $3}')"
+    echo "pomerium: $({{ id_k }} -n pomerium get pods -l app=pomerium --no-headers 2>/dev/null | awk '{print $3}')"
+    echo "pomerium LB IP: {{ pom_lbip.stdout | default('none') }} (want {{ talos_ingress_lb_ip }})"
+    echo "routes: id.{{ lab_domain }} (dex) · perses.{{ lab_domain }} · hubble.{{ lab_domain }}"
+  register: id_status
+  changed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ id_status.stdout_lines }}"

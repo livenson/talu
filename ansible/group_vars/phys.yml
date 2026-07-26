@@ -1,0 +1,88 @@
+---
+# Physical lab (KVM-capable bare metal) — overrides for the `phys` group.
+# group_vars/all.yml is written for the no-KVM VM lab; nothing there applies to these hosts, and
+# in particular `primary_iface_mtu: 1400` must NEVER be applied here (the LAN is jumbo 9000 and
+# lowering it would be the lab-notes #1 failure mode on hardware with no console).
+
+ansible_user: cloud-user
+ansible_python_interpreter: /usr/bin/python3
+
+# Real hardware: no emulation, jumbo frames, Tetragon available.
+kubevirt_use_emulation: false
+cilium_version: "1.19.6"
+cilium_mtu: 8850            # overlay MTU (8950) - 50 for Cilium's own VXLAN inside the guests.
+prometheus_operator_crd_version: "v0.92.1"   # cilium ServiceMonitors need these CRDs pre-installed
+helm_version: "v3.16.4"
+primary_iface_mtu: 9000     # documented, not applied — the role never touches MTU.
+
+# ── Nested Talos cluster topology ───────────────────────────────────────────────────────────
+# The Talos nodes are libvirt VMs spread across the 4 physical hosts, joined by a host-to-host
+# VXLAN overlay (so no provider IP coordination is needed — the VM subnet is private and lives
+# only inside the overlay).
+#   compute1 = overlay gateway + DHCP/DNS + NAT + registry mirror.
+#   compute2 = the north-south INGRESS host: the provider forwards the public :80/:443 here, and
+#              compute2 DNATs them into the cluster's Cilium LoadBalancer IP (L2-announced on the
+#              overlay). It carries its own overlay address so it can reach that LB IP. Splitting
+#              ingress off compute1 keeps the gateway/mirror host from also terminating all traffic.
+talos_overlay:
+  bridge: br-talu
+  # Bridge uplink substrate: 'vlan' (default) rides a dedicated 802.1Q VLAN on bond0 — plain Ethernet the
+  # 82599 CAN GRO-offload, so pod-to-pod runs near line rate; 'vxlan' is the old head-end-replicated
+  # overlay (kept for rollback: set uplink_mode=vxlan and re-run). The VXLAN capped pod-to-pod at
+  # ~3.2 Gbit/s because the 82599 (ixgbe) cannot GRO-aggregate VXLAN. VLAN 40 was verified trunked to all
+  # 4 host port-channels and free (no port security, foreign MACs forward — probed). See docs perf §9.
+  uplink_mode: vlan          # 'vlan' | 'vxlan'
+  uplink_if: vlan-talu       # bridge uplink iface in vlan mode (script-owned, like vxlan_if was)
+  vlan_id: 40                # dedicated VM-network VLAN, trunked to all 4 hosts, no host IP
+  vxlan_if: vxlan-talu       # ── vxlan-mode (rollback) params below ──
+  vni: 4711
+  udp_port: 4789
+  mtu: 8950                 # host LAN 9000 − 50B VXLAN (vlan mode can go 9000; kept 8950 for parity)
+  subnet: "172.18.0.0/16"
+  gateway_ip: "172.18.0.1"  # compute1's br-talu address; VM default route + DNS + mirror endpoint
+  gateway_host: compute1
+  ingress_host: compute2    # provider forwards public :80/:443 here (access-plane ingress)
+  ingress_ip: "172.18.0.2"  # compute2's br-talu address, so it can DNAT inbound to the cluster LB IP
+  dhcp_range: "172.18.9.100,172.18.9.200,12h"
+  upstream_dns: [10.8.0.10, 10.3.0.10]
+
+# Cilium LoadBalancer pool for north-south ingress. The access-plane Service (Pomerium) requests
+# ingress_lb_ip; Cilium L2-announces it on the overlay; compute2 DNATs :80/:443 → this address.
+# (Real L2 LB IPs — the reason this hardware beats the single-node VM lab's socat shim.)
+talos_ingress_lb_ip: "172.18.200.10"
+
+talos_vip: "172.18.0.10"    # Talos shared control-plane VIP = the Kubernetes API endpoint
+talos_cluster_name: talu-phys
+talos_gen_dir: /home/cloud-user/talu/talos-phys        # cluster secrets/configs/kubeconfig (gateway)
+talos_image_dir: /var/lib/libvirt/images/talu          # Talos base image + per-node VM disks (each host)
+talos_registry_patch: /home/cloud-user/talu/talos-registry-mirror.patch.yaml
+talos_version: "v1.13.7"    # latest Talos (was v1.11.2); the metal disk image + installer tag
+kubernetes_version: "v1.35.7"   # KubeVirt v1.8 targets k8s <=1.35 — do NOT jump to 1.36
+
+# Control planes on the 3 healthy-bond hosts; worker on compute4 (its bond leg is dead — keep etcd off
+# it). MACs are fixed so DHCP hands out stable IPs. Sizing = one node VM per host, taking most of the
+# host: compute1/2 have 125 GiB / 80 threads, compute3/4 have 94 GiB / 80 threads. Each VM leaves ~16 GiB
+# + 32 threads for the host OS, qemu overhead, and (compute1) the on-host registry mirror. Existing VMs
+# don't hot-resize — bumping these needs a `virsh` redefine + reboot per node (drain-gated, quorum-safe).
+talos_nodes:
+  - { name: talos-cp1, role: controlplane, host: compute1, ip: "172.18.1.11", mac: "52:54:00:7a:10:11", vcpu: 48, ram_mib: 110592, disk_gb: 60, ceph_gb: 120 }
+  - { name: talos-cp2, role: controlplane, host: compute2, ip: "172.18.1.12", mac: "52:54:00:7a:10:12", vcpu: 48, ram_mib: 110592, disk_gb: 60, ceph_gb: 120 }
+  - { name: talos-cp3, role: controlplane, host: compute3, ip: "172.18.1.13", mac: "52:54:00:7a:10:13", vcpu: 48, ram_mib: 79872, disk_gb: 60, ceph_gb: 120 }
+  - { name: talos-w1,  role: worker,       host: compute4, ip: "172.18.1.21", mac: "52:54:00:7a:10:21", vcpu: 48, ram_mib: 79872, disk_gb: 60, ceph_gb: 120 }
+
+# Observability versions (override all.yml lab pins with current-latest).
+kube_prometheus_stack_version: "87.19.1"
+perses_operator_version: "0.4.0"
+
+# ── Identity / access plane ──────────────────────────────────────────────────────────────────
+# The lab's public NAT IP — SITE-SPECIFIC. Placeholder uses the RFC 5737 documentation range; set the
+# real IP in your own (uncommitted) inventory/group_vars, or export LAB_FLOATING_IP, so it never lands
+# in git. lab_domain derives from it (dots -> dashes) via sslip.io, so nothing else needs editing.
+lab_floating_ip: "{{ lookup('env', 'LAB_FLOATING_IP') | default('203.0.113.10', true) }}"
+lab_domain: "{{ lab_floating_ip | replace('.', '-') }}.sslip.io"   # e.g. 203-0-113-10.sslip.io
+# Dex OIDC (reuses the product component config; bcrypt of the demo password).
+dex_user_email: "alice@talu.local"
+dex_user_name: "alice"
+dex_user_bcrypt: "$2a$10$Yq.nLkSyi65yz/8AdmXpW.FEgnh6qXPfmuJDKLDDz67UoJJJKlpea"
+dex_version: "v2.45.1"
+pomerium_idp_client_secret: "pomerium-secret-phys"

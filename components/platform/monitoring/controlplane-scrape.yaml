@@ -1,0 +1,75 @@
+# Scrape the Kubernetes control-plane components (etcd, scheduler, controller-manager). Talos binds these
+# to localhost by default, so kube-prometheus-stack's built-in kubeEtcd/kubeScheduler/kubeControllerManager
+# jobs see nothing — they stay disabled and these manifests replace them. REQUIRES the machineconfig change
+# in phys_talos_vms/cp-patch.yaml.j2 (etcd listen-metrics-urls :2381 http; scheduler/CM bind-address 0.0.0.0).
+#
+# scheduler + controller-manager run as *host-network static pods*, so a selector Service auto-populates
+# Endpoints with the control-plane node IPs — no hardcoded addresses. etcd is NOT a Kubernetes object on
+# Talos (it's a host service), so its Endpoints (the CP node IPs) are environment-specific and provided by
+# the phys_monitoring role (controlplane-etcd-endpoints.yaml.j2); the Service + ServiceMonitor here are the
+# env-agnostic half. Feeds dashboard-controlplane.yaml (etcd fsync, scheduler e2e latency).
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: talu-kube-scheduler
+  namespace: kube-system
+  labels: { app.kubernetes.io/part-of: talu, talu.io/scrape: control-plane }
+spec:
+  clusterIP: None
+  selector: { k8s-app: kube-scheduler }   # Talos static-pod label; host-network → Endpoints = CP node IPs
+  ports: [{ name: https-metrics, port: 10259, targetPort: 10259, protocol: TCP }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: talu-kube-controller-manager
+  namespace: kube-system
+  labels: { app.kubernetes.io/part-of: talu, talu.io/scrape: control-plane }
+spec:
+  clusterIP: None
+  selector: { k8s-app: kube-controller-manager }
+  ports: [{ name: https-metrics, port: 10257, targetPort: 10257, protocol: TCP }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: talu-kube-etcd
+  namespace: kube-system
+  labels: { app.kubernetes.io/part-of: talu, talu.io/scrape: control-plane }
+spec:
+  clusterIP: None                          # selector-less: Endpoints supplied per-environment (CP node IPs)
+  ports: [{ name: http-metrics, port: 2381, targetPort: 2381, protocol: TCP }]
+---
+# One HTTPS ServiceMonitor covers BOTH scheduler and controller-manager — they share the port name
+# (https-metrics), scheme, and bearer-token auth; the etcd Service's port is named differently so it is
+# not matched here. Prometheus' serviceMonitorSelector is empty (match-all), so no release label is needed.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: talu-kube-cp-https
+  namespace: kube-system
+  labels: { app.kubernetes.io/part-of: talu, release: kube-prometheus-stack }
+spec:
+  selector: { matchLabels: { talu.io/scrape: control-plane } }
+  namespaceSelector: { matchNames: [kube-system] }
+  endpoints:
+    - port: https-metrics
+      scheme: https
+      interval: 30s
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig: { insecureSkipVerify: true }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: talu-kube-etcd
+  namespace: kube-system
+  labels: { app.kubernetes.io/part-of: talu, release: kube-prometheus-stack }
+spec:
+  selector: { matchLabels: { talu.io/scrape: control-plane } }
+  namespaceSelector: { matchNames: [kube-system] }
+  endpoints:
+    - port: http-metrics                   # etcd :2381 is a dedicated plain-HTTP metrics listener (no TLS)
+      scheme: http
+      interval: 30s

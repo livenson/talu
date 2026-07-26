@@ -1,0 +1,15 @@
+# ANSIBLE MANAGED — talu roles/phys_host_prep. Local edits are overwritten.
+# The image ships `server 10.0.7.100 iburst`, which is unreachable from both sleds (Reach 0).
+{% for s in phys_ntp_servers %}
+server {{ s }} iburst
+{% endfor %}
+{% if phys_ntp_pool | length > 0 %}
+# Fallback. Note egress is filtered asymmetrically per host, so the pool may resolve to an
+# address one sled can reach and the other cannot — hence the internal servers come first.
+pool {{ phys_ntp_pool }} iburst maxsources 3
+{% endif %}
+
+driftfile /var/lib/chrony/drift
+makestep 1.0 3
+rtcsync
+logdir /var/log/chrony

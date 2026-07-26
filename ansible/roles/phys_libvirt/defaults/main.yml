@@ -1,0 +1,13 @@
+---
+# libvirt/KVM host enablement for the nested Talos cluster. Non-destructive: adds virtualization
+# on top of Rocky, which stays as the recovery floor. All packages are in Rocky AppStream (no EPEL).
+libvirt_packages:
+  - libvirt-daemon-kvm
+  - qemu-kvm
+  - virt-install
+  - libvirt-client
+  - guestfs-tools      # virt-* image tooling (customize/sparsify Talos disks)
+  - edk2-ovmf          # UEFI firmware (KubeVirt guests later; Talos nodes boot BIOS)
+  - swtpm              # vTPM, for later KubeVirt VMs that want it
+  - qemu-img
+libvirt_admin_user: cloud-user     # gets group libvirt so `virsh` works without sudo

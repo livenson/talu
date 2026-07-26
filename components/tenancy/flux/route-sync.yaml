@@ -39,11 +39,35 @@ spec:
             - name: sync
               image: docker.io/bitnami/kubectl:latest
               env:
-                - { name: LAB_DOMAIN, value: "203-0-113-10.sslip.io" }
+                # The external domain is a per-environment VALUE, not part of the product — it changes
+                # every time the lab VM is reinstalled with a new floating IP. It comes from the
+                # `talu-platform` ConfigMap the `identity_pomerium` role writes from `lab_domain`, which
+                # is the same source of truth Dex's issuer and Pomerium's authenticate URL use. Hardcoding
+                # it here silently re-renders every route onto a dead domain (Pomerium then 404s every
+                # host, since this job overwrites the whole config blob every 2 min). No default on
+                # purpose: a missing ConfigMap fails the pod loudly instead of writing a wrong domain.
+                - name: LAB_DOMAIN
+                  valueFrom:
+                    configMapKeyRef: { name: talu-platform, key: domain }
+                # The STATIC half of the Pomerium config (listeners + base routes) differs per
+                # environment — the phys deployment binds :80 (http_redirect_addr), fronts an apex
+                # portal, and uses its own Dex client secret, none of which the built-in lab base below
+                # has. So the environment MAY supply its base verbatim via the `pomerium-base` ConfigMap
+                # (key base.yaml, with `__DOMAIN__` as the domain placeholder); when absent this job
+                # falls back to the built-in lab base. Either way the dynamic per-Service routes are
+                # appended the same way. optional:true keeps the lab (no such CM) working unchanged.
+                - name: POMERIUM_BASE
+                  valueFrom:
+                    configMapKeyRef: { name: pomerium-base, key: base.yaml, optional: true }
               command: ["/bin/bash", "-ceu"]
               args:
                 - |
                   D="$LAB_DOMAIN"
+                  if [ -n "${POMERIUM_BASE:-}" ]; then
+                  # environment-supplied base (phys): use verbatim, expanding the domain placeholder
+                  CFG="${POMERIUM_BASE//__DOMAIN__/$D}"
+                  else
+                  # built-in lab base (no pomerium-base ConfigMap present)
                   CFG="
                   autocert: true
                   autocert_dir: /data/autocert
@@ -82,6 +106,7 @@ spec:
                       allowed_users: [alice@talu.local]
                       allow_websockets: true
                   "
+                  fi
                   # ssh://<vm> routes from talu.io/ssh-expose Services
                   while read -r vm svc ns au _; do
                     [ -z "$vm" ] && continue

@@ -1,0 +1,101 @@
+---
+# Per-host: fetch the Talos metal image once, then virt-install each node assigned to this host.
+- name: Tooling (zstd for the image, curl already present)
+  become: true
+  ansible.builtin.dnf:
+    name: [zstd]
+    state: present
+
+- name: Image directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ talos_image_dir }}"
+    state: directory
+    mode: "0711"
+
+- name: Base Talos metal image present?
+  ansible.builtin.stat:
+    path: "{{ talos_base_image }}"
+  register: base_img
+
+- name: Download + decompress the Talos metal image (retry through flaky egress)
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd {{ talos_image_dir }}
+    curl -fL --retry 8 --retry-all-errors --retry-delay 5 -o talos.raw.zst "{{ talos_image_url }}"
+    zstd -f -d talos.raw.zst -o "{{ talos_base_image }}"
+    rm -f talos.raw.zst
+  args:
+    creates: "{{ talos_base_image }}"
+  when: not base_img.stat.exists
+
+- name: Nodes assigned to this host
+  ansible.builtin.set_fact:
+    my_nodes: "{{ talos_nodes | selectattr('host', 'equalto', inventory_hostname) | list }}"
+
+- name: Existing libvirt domains
+  become: true
+  ansible.builtin.command: virsh list --all --name
+  register: existing_doms
+  changed_when: false
+
+- name: Per-node boot disk (qcow2 CoW overlay on the shared base image)
+  become: true
+  ansible.builtin.command: >-
+    qemu-img create -f qcow2 -F raw -b {{ talos_base_image }}
+    {{ talos_image_dir }}/{{ item.name }}-boot.qcow2 {{ item.disk_gb }}G
+  args:
+    creates: "{{ talos_image_dir }}/{{ item.name }}-boot.qcow2"
+  loop: "{{ my_nodes }}"
+  loop_control: { label: "{{ item.name }}" }
+
+- name: Per-node Ceph/OSD data disk (empty qcow2 → real RBD block device)
+  become: true
+  ansible.builtin.command: >-
+    qemu-img create -f qcow2 {{ talos_image_dir }}/{{ item.name }}-ceph.qcow2 {{ item.ceph_gb }}G
+  args:
+    creates: "{{ talos_image_dir }}/{{ item.name }}-ceph.qcow2"
+  loop: "{{ my_nodes }}"
+  loop_control: { label: "{{ item.name }}" }
+
+- name: virt-install each node (import the metal disk; BIOS boot; virtio net with fixed MAC)
+  become: true
+  ansible.builtin.command: >-
+    virt-install
+    --name {{ item.name }}
+    --memory {{ item.ram_mib }}
+    --vcpus {{ item.vcpu }}
+    --cpu host-passthrough
+    --osinfo require=off,name=linux2022
+    --disk path={{ talos_image_dir }}/{{ item.name }}-boot.qcow2,bus=virtio,format=qcow2
+    --disk path={{ talos_image_dir }}/{{ item.name }}-ceph.qcow2,bus=virtio,format=qcow2
+    --network network={{ libvirt_network }},model=virtio,mac={{ item.mac }},driver.name=vhost,driver.queues={{ item.vcpu }}
+    --import --noautoconsole --graphics none
+    --console pty,target_type=serial
+  # driver.queues=<vcpus> = virtio-net MULTIQUEUE. Single-queue virtio funnels all pod NIC softirq
+  # through one vCPU — measured as the pod-to-pod throughput ceiling (~3.3 Gbit/s vs 9.9 Gbit/s raw
+  # bond host-to-host). Talos auto-activates the queues (verified: 8 vhost threads/VM). Existing VMs
+  # need `virsh` redefine + reboot to pick this up (this only affects fresh virt-installs).
+  loop: "{{ my_nodes }}"
+  loop_control: { label: "{{ item.name }} on {{ inventory_hostname }}" }
+  when: item.name not in existing_doms.stdout.split()
+  register: virt_created
+
+- name: Ensure each node domain is running + autostarts
+  become: true
+  ansible.builtin.command: "virsh {{ item[1] }} {{ item[0].name }}"
+  loop: "{{ my_nodes | product(['autostart', 'start']) | list }}"
+  loop_control: { label: "{{ item[1] }} {{ item[0].name }}" }
+  changed_when: false
+  failed_when: false
+
+- name: Report VMs on this host
+  become: true
+  ansible.builtin.command: "virsh list --name --state-running"
+  register: running_vms
+  changed_when: false
+
+- name: Show running VMs
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: {{ running_vms.stdout_lines | select | list }}"

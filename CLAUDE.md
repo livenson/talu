@@ -18,6 +18,23 @@ you hit a wall. Update whichever file fits when you burn time on a non-obvious i
   controlplane container, forwards it to `LAB_TALOS_PORT`, and writes a rewritten talosconfig so
   `talosctl` works locally too.
 
+## The physical lab (KVM bare-metal) — the primary perf/validation env
+
+- 4 KVM-capable hosts **compute1–4** (Rocky, libvirt/qemu) running **nested Talos VMs** (3 CP + 1 worker;
+  `environments/rocky-phys`, `ansible/phys-cluster.yml`, `phys_*` roles). Access via the gateway:
+  `ssh cloud-user@<gw> -p 22|23|24` = compute1|2|3, compute4 over ProxyJump via :24. kubeconfig +
+  talosconfig live on the gateway under `/home/cloud-user/talu/talos-phys/` (`sudo talosctl --talosconfig
+  …`). Topology/gotchas: memory `talu-phys-lab.md`; perf findings: `docs/architecture/performance-testing.md §9`.
+- **It's real KVM, so most VM-lab gotchas below INVERT.** RBD works (Rook-Ceph **block + CephFS**, not
+  CephFS-only, and **not** MicroCeph — Rook operator); live migration works; no Podman pids-limit; host
+  MTU is **9000 not 1400**. Still nested, so **Tetragon enforce fails** (cgroup-id resolution) even on
+  real hardware, and etcd/scheduler/CM metrics need the `cp-patch` args + a node reboot to scrape.
+- **Pod network is a dedicated 802.1Q VLAN on bond0, NOT VXLAN** (`talos_overlay.uplink_mode: vlan`,
+  VXLAN is the rollback). The host VXLAN capped pod-to-pod at ~3.2 Gbit/s (the Intel 82599 can't GRO
+  VXLAN); the VLAN runs at line rate (~9.9). **Never touch `bond0`** (management/SSH path — no console =
+  lockout). Node VMs are sized to the hosts (108/78 GiB, 48 vCPU). SSH into VMs is Pomerium Native SSH on
+  the provider-forwarded **`:2222`** → `ssh <principal>@<vm>@ssh.<domain> -p 2222`.
+
 ## Workflow
 
 - `make lab-push` → rsync repo + run `bootstrap/rocky/bootstrap.sh` (Stage 0).
@@ -27,9 +44,11 @@ you hit a wall. Update whichever file fits when you burn time on a non-obvious i
 
 ## Critical gotchas (full catalog + access plane + versions in docs/development/lab-notes.md)
 
-Know these before touching the lab — they lock you out or cost hours. The full catalog (#1–#37)
-(stable #IDs, cross-referenced from roles/scripts), the identity & access-plane build, and audited
-component versions live in [`docs/development/lab-notes.md`](docs/development/lab-notes.md).
+Know these before touching the lab — they lock you out or cost hours. These are the **no-KVM VM lab**
+gotchas; several INVERT on the physical lab (see that section above — RBD/Rook works, MTU 9000, no
+pids-limit). The full catalog (#1–#40) (stable #IDs, cross-referenced from roles/scripts), the identity
+& access-plane build, and audited component versions live in
+[`docs/development/lab-notes.md`](docs/development/lab-notes.md).
 
 - **Host MTU 1400 BEFORE any container engine** — else PMTU blackholes the SSH key exchange and
   **locks out all SSH** (recover via the cloud console); bootstrap sets it first. (#1)
@@ -43,6 +62,9 @@ component versions live in [`docs/development/lab-notes.md`](docs/development/la
 - **SSH is Pomerium Native SSH** (Pomerium is the SSH CA) — no OpenBao, no tunnel, no static password. (#21)
 - **Tetragon is real-hardware only** — needs kernel BTF + `/sys/kernel/tracing` the nested lab lacks;
   wired into `example` only, omitted from `rocky-sandbox`. Kyverno runs anywhere (Audit-first). (#38/#39)
+- **`route-sync` owns the live Pomerium routes** — it re-renders the whole `pomerium-config` blob every
+  2 min, so it (not the ansible role) decides the domain. A 404 on *every* host = domain mismatch; both
+  writers read `lab_domain` via the `talu-platform` ConfigMap. (#40)
 
 ## Debugging discipline (learned the hard way)
 - **`kubectl describe <obj>` first.** For a stuck DataVolume/PVC/pod, `kubectl describe` shows the

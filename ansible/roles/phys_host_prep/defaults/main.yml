@@ -1,0 +1,93 @@
+---
+# Phase 0 host prep for the PHYSICAL lab (KVM-capable bare metal). Defaults are safe:
+# nothing here reboots a host or touches the network path unless you opt in.
+
+# --- Clock ---------------------------------------------------------------------------------
+# The shipped /etc/chrony.conf points at 10.0.7.100, which is unreachable from both sleds
+# (chronyc shows Reach 0, stratum 0, ref time = epoch). These two answer NTP in ~1 ms from BOTH
+# hosts — but they sit a consistent +71 ms off true time, so with the pool also configured chrony
+# marks them falsetickers (`^x`) and selects a pool server instead. Keep them: if egress to the
+# pool dies they agree with each other and become the selected source. The pool is what makes
+# the majority vote possible, which is why both are configured rather than either alone.
+phys_ntp_servers:
+  - 10.8.0.10
+  - 10.3.0.10
+phys_ntp_pool: "2.rocky.pool.ntp.org"
+phys_ntp_wait_sync: true          # block until chrony reports a real reference
+phys_ntp_wait_seconds: 90
+
+# --- Resolver ------------------------------------------------------------------------------
+# getaddrinfo() stalled a flat 5.02 s per lookup on both hosts because the image puts 8.8.8.8
+# first — and 8.8.8.8 is unreachable from compute2 (10/10 timeouts, measured). 1.1.1.1 drops
+# ~2/10. The two internal resolvers answer A and AAAA in ~75 ms with 0/10 loss, so they go first
+# and public resolvers are last-resort only. NO `rotate`: it spreads queries onto the lossy
+# public resolver and reintroduces second-scale stalls (seen as a 3.0 s outlier).
+# We own resolv.conf (NM dns=none) so cloud-init/NM cannot put 8.8.8.8 back on top.
+phys_manage_resolv: true
+phys_nameservers:
+  - 10.8.0.10
+  - 10.3.0.10
+  - 1.1.1.1
+# DNS search domain — SITE-SPECIFIC, so no default is committed here. Set it in your own (typically
+# uncommitted) inventory/group_vars if your hosts resolve short internal names, e.g.
+#   phys_dns_search: "internal.example.com"
+# Empty → resolv.conf.j2 omits the `search` line entirely (fully-qualified names still resolve).
+phys_dns_search: ""
+phys_dns_options: "timeout:1 attempts:2"
+
+# --- Boot configuration (requires a reboot to take effect) ---------------------------------
+# The sleds boot the +debug kernel and the stock kernel is ALREADY installed — but this is NOT
+# just a default-entry change. `grubby --set-default` only rewrites grubenv's saved_entry, and
+# these Rocky 10 UEFI images ship an EFI grub.cfg generated with GRUB_DEFAULT=0, so its else-branch
+# is literally `set default="0"` — saved_entry is never consulted. Even forcing GRUB_DEFAULT=saved,
+# blscfg's id-matching did not reliably pick the stock entry while a "+debug" entry sorted ahead of
+# it (validated the hard way on compute4: two reboots stayed on +debug until the entry was removed).
+# So the deterministic fix — and the right end-state for a perf host, where the debug kernel's
+# lock/alloc instrumentation invalidates every latency number — is to DROP the +debug boot entry so
+# stock becomes the first BLS entry. We also set GRUB_DEFAULT=saved for future kernel installs.
+phys_set_stock_kernel: true
+phys_remove_debug_kernel: true    # remove +debug BLS entries (deterministic; see the note above)
+# IOMMU is off (0 groups, no intel_iommu on the cmdline) => no VFIO/SR-IOV passthrough into VMs.
+phys_kernel_args: "intel_iommu=on iommu=pt"
+
+# Rebooting is the one irreversible-ish step here: the BMC net (10.9.0.0/16) is NOT reachable
+# from these hosts and only :22/:23 are forwarded inbound, so there is no console if a host
+# fails to come back. Opt in explicitly:  -e phys_reboot=true
+phys_reboot: false
+phys_reboot_timeout: 900
+
+# --- Tuning ---------------------------------------------------------------------------------
+# tuned is not installed. 'virtual-host' is the KVM-host profile (throughput-performance +
+# host-side VM tweaks) — Phase 1 runs Talos as KVM guests here. Set to "" to skip entirely.
+phys_tuned_profile: "virtual-host"
+
+# Host swap (7 GiB, same SATA SSD as /) can stall guests. Off by default — flip when the
+# storage layout is settled.
+phys_disable_swap: false
+
+# --- Convenience ------------------------------------------------------------------------------
+phys_base_packages:
+  - chrony
+  - git
+  - make
+  - jq
+  - tar
+  - rsync
+  - bind-utils
+  - traceroute
+  - ipmitool          # in-band KCS works even though the BMC LAN is unreachable from here
+phys_manage_hosts_entries: true
+
+# --- Verification ------------------------------------------------------------------------------
+# Egress is filtered asymmetrically per host (compute2 cannot reach registry.k8s.io at all,
+# 3/3 timeouts, while compute1 gets 200 3/3). Phase 0 cannot fix that — it reports it, so the
+# mirror/pull-through decision is taken on evidence. Flip to true to make it a hard failure.
+phys_require_registry_egress: false
+phys_egress_endpoints:
+  - https://registry.k8s.io/v2/
+  - https://ghcr.io/v2/
+  - https://quay.io/v2/
+  - https://factory.talos.dev/
+  - https://github.com
+phys_expected_mtu: 9000           # LAN is jumbo; do NOT lower it (lab-notes #1 is about the VM lab)
+phys_bond_min_legs: 2             # LACP bond should carry 2×10G; fewer = a down NIC/cable (reported)

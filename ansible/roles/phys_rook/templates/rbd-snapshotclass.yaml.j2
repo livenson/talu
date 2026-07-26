@@ -1,0 +1,11 @@
+# ANSIBLE MANAGED — RBD VolumeSnapshotClass (smart clones off snapshots).
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: csi-rbdplugin-snapclass
+driver: {{ rook_namespace }}.rbd.csi.ceph.com
+deletionPolicy: Delete
+parameters:
+  clusterID: {{ rook_namespace }}
+  csi.storage.k8s.io/snapshotter-secret-name: rook-csi-rbd-provisioner
+  csi.storage.k8s.io/snapshotter-secret-namespace: {{ rook_namespace }}

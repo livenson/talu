@@ -1,0 +1,124 @@
+# ANSIBLE MANAGED — talu phys Pomerium (IAP). Exposed on the ingress LB IP; autocert via Let's
+# Encrypt over the public :80/:443 → compute2 → LB IP path. Protects dashboards behind Dex OIDC.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pomerium
+  labels: {app.kubernetes.io/part-of: talu}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: pomerium-config, namespace: pomerium}
+data:
+  config.yaml: |
+    autocert: true
+    autocert_dir: /data/autocert
+    metrics_address: ":9902"
+    # Bind :80 too — without http_redirect_addr Pomerium listens on :443 ONLY, so the Service's :80
+    # (and the Cilium LB IP :80) has no backing listener and the port is dead. This serves the
+    # HTTP→HTTPS redirect AND the Let's Encrypt HTTP-01 ACME challenge on :80 (autocert robustness).
+    http_redirect_addr: ":80"
+    # Native SSH proxy — Pomerium IS the SSH CA. It signs short-lived user certs after OIDC, and VMs
+    # trust the CA public key (the tenant chart bakes pomerium-user-ca into each VM's cloud-init as
+    # TrustedUserCAKeys). Users run `ssh <principal>@<vm>@ssh.<host> -p <port>`; the middle token is
+    # the ssh:// route name. The CA private key + host keys live in the pomerium-ssh Secret (generated
+    # by this role), mounted at /ssh below. Per-tenant `ssh://<vm>` routes are appended from Services
+    # labelled talu.io/ssh-expose (route-sync, phys-adaptation pending) — added statically per tenant
+    # meanwhile.
+    ssh_address: ":2222"
+    ssh_user_ca_key_file: /ssh/user_ca
+    ssh_host_key_files: [/ssh/host_ed25519, /ssh/host_rsa, /ssh/host_ecdsa]
+    authenticate_service_url: https://authenticate.{{ lab_domain }}
+    idp_provider: oidc
+    idp_provider_url: https://id.{{ lab_domain }}/dex
+    idp_client_id: pomerium
+    idp_client_secret: {{ pomerium_idp_client_secret }}
+    idp_scopes: [openid, profile, email]
+    routes:
+      - from: https://id.{{ lab_domain }}
+        to: http://dex.identity.svc:5556
+        allow_public_unauthenticated_access: true
+        preserve_host_header: true
+      - from: https://{{ lab_domain }}
+        # apex landing page (portal) — public route directory
+        to: http://talu-portal.pomerium.svc:80
+        allow_public_unauthenticated_access: true
+      - from: https://vms.{{ lab_domain }}
+        # kubevirt-manager VM web UI (admin-only)
+        to: http://kubevirt-manager.kubevirt-manager.svc:8080
+        allowed_users: [{{ dex_user_email }}]
+        allow_websockets: true
+      - from: https://perses.{{ lab_domain }}
+        # the Perses server Service is named after the Perses CR ("talu"), not "perses".
+        to: http://talu.monitoring.svc:8080
+        allowed_users: [{{ dex_user_email }}]
+        allow_websockets: true
+      - from: https://hubble.{{ lab_domain }}
+        to: http://hubble-ui.kube-system.svc:80
+        allowed_users: [{{ dex_user_email }}]
+        allow_websockets: true
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: pomerium-autocert, namespace: pomerium}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ceph-block
+  resources: {requests: {storage: 1Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: pomerium, namespace: pomerium}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}   # single RWO autocert PVC
+  selector: {matchLabels: {app: pomerium}}
+  template:
+    metadata:
+      labels: {app: pomerium}
+      annotations: {checksum/config: "{{ pomerium_config_checksum | default('0') }}"}
+    spec:
+      containers:
+        - name: pomerium
+          image: pomerium/pomerium:{{ pomerium_version }}
+          envFrom: [{secretRef: {name: pomerium-secrets}}]
+          ports:
+            - {name: https, containerPort: 443}
+            - {name: http, containerPort: 80}
+            - {name: metrics, containerPort: 9902}
+            - {name: ssh, containerPort: 2222}   # Native SSH proxy
+          volumeMounts:
+            - {name: config, mountPath: /pomerium}
+            - {name: autocert, mountPath: /data/autocert}
+            - {name: ssh, mountPath: /ssh, readOnly: true}   # user_ca + host keys (pomerium-ssh Secret)
+          readinessProbe: {httpGet: {path: /ping, port: 443, scheme: HTTPS}, initialDelaySeconds: 10, periodSeconds: 10}
+      volumes:
+        - name: config
+          configMap: {name: pomerium-config, items: [{key: config.yaml, path: config.yaml}]}
+        - name: autocert
+          persistentVolumeClaim: {claimName: pomerium-autocert}
+        - name: ssh
+          secret: {secretName: pomerium-ssh, defaultMode: 384}   # 384 == 0600, private keys
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pomerium
+  namespace: pomerium
+  annotations:
+    # pin the ingress LB IP (compute2 DNATs public :80/:443 here)
+    lbipam.cilium.io/ips: "{{ talos_ingress_lb_ip }}"
+spec:
+  type: LoadBalancer
+  selector: {app: pomerium}
+  ports:
+    - {name: https, port: 443, targetPort: 443}
+    - {name: http, port: 80, targetPort: 80}
+    - {name: ssh, port: 2222, targetPort: 2222}   # Native SSH proxy (provider must forward an ext port here)
+---
+apiVersion: v1
+kind: Service
+metadata: {name: pomerium-metrics, namespace: pomerium}
+spec:
+  selector: {app: pomerium}
+  ports: [{name: metrics, port: 9902, targetPort: 9902}]

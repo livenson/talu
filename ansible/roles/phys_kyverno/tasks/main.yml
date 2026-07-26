@@ -1,0 +1,54 @@
+---
+# Copy the kyverno + access components to the gateway (helm/kubectl run there; no repo checkout).
+- name: Copy kyverno + access components to the gateway
+  ansible.builtin.copy:
+    src: "{{ item.src }}/"
+    dest: "{{ item.dest }}/"
+    mode: "0644"
+  loop:
+    - { src: "{{ kyv_src }}", dest: "{{ kyv_dir }}" }
+    - { src: "{{ access_src }}", dest: "{{ access_dir }}" }
+
+- name: Apply the kyverno namespace
+  ansible.builtin.command: "{{ kyv_k }} apply -f {{ kyv_dir }}/namespace.yaml"
+  changed_when: true
+
+# Base values (production defaults) + the rocky-phys override (HA admission). Images pull via the mirror.
+- name: Install/upgrade Kyverno
+  ansible.builtin.shell: |
+    helm repo add kyverno https://kyverno.github.io/kyverno/ >/dev/null 2>&1 || true
+    helm repo update kyverno >/dev/null
+    helm upgrade --install kyverno kyverno/kyverno --version {{ kyverno_version }} --namespace kyverno \
+      --set global.image.registry={{ kyverno_image_registry }} \
+      -f {{ kyv_dir }}/values.yaml \
+      -f {{ kyv_phys_values }} \
+      --wait --timeout 8m
+  environment: { KUBECONFIG: "{{ kyv_kubeconfig }}" }
+  changed_when: true
+
+- name: Wait for the Kyverno ClusterPolicy CRD to register
+  ansible.builtin.command: "{{ kyv_k }} wait --for condition=established crd/clusterpolicies.kyverno.io --timeout=120s"
+  changed_when: false
+
+# Policies match KubeVirt VirtualMachine / CDI DataVolume kinds, so this role runs AFTER kubevirt in
+# phys-stack (the CRDs exist → policies register cleanly). kubectl apply is idempotent.
+- name: Apply the Talu policies (Audit) + the VM-access guardrail
+  ansible.builtin.command: "{{ kyv_k }} apply -f {{ item }}"
+  loop:
+    - "{{ kyv_dir }}/policies/require-project-uuid.yaml"
+    - "{{ kyv_dir }}/policies/restrict-privileged.yaml"
+    - "{{ kyv_dir }}/policies/verify-images-cosign.yaml"
+    - "{{ access_dir }}/kyverno-guardrails.yaml"
+  changed_when: true
+
+- name: Status — Kyverno rollout + policies + any Audit findings
+  ansible.builtin.shell: |
+    {{ kyv_k }} -n kyverno rollout status deploy/kyverno-admission-controller --timeout=180s
+    echo "policies: $({{ kyv_k }} get cpol -o custom-columns=N:.metadata.name,A:.spec.validationFailureAction --no-headers 2>/dev/null | tr '\n' ' ')"
+    echo "PolicyReports: $({{ kyv_k }} get polr -A --no-headers 2>/dev/null | wc -l) namespaces reporting"
+  register: kyv_status
+  changed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ kyv_status.stdout_lines }}"

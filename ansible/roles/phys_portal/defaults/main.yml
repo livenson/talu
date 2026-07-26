@@ -1,0 +1,4 @@
+---
+portal_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+portal_src: "{{ playbook_dir }}/../components/platform/portal"
+portal_dir: "{{ talos_gen_dir }}/components/platform/portal"

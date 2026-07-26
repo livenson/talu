@@ -1,0 +1,99 @@
+# ANSIBLE MANAGED — talu phys rook-ceph-cluster values.
+toolbox:
+  enabled: true
+
+cephClusterSpec:
+  cephVersion:
+    image: {{ ceph_image }}
+    allowUnsupported: false
+  mon:
+    count: 3
+    allowMultiplePerNode: false
+  mgr:
+    count: 2
+  dashboard:
+    enabled: true
+    ssl: false
+  # Rook creates the mgr Prometheus ServiceMonitor (in-cluster Ceph metrics for the monitoring stack).
+  monitoring:
+    enabled: true
+  # Nested-lab OSDs live on a single qcow2-backed SATA disk per node — real block semantics, not
+  # real spindles. Filter to the empty /dev/vdb; the boot disk (vda) is untouched.
+  storage:
+    useAllNodes: true
+    useAllDevices: false
+    deviceFilter: "{{ rook_osd_device_filter }}"
+  # Small cluster: let mons/mgr/osds co-locate rather than demand separate nodes.
+  placement:
+    all:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+  resources:
+    mgr:
+      requests: { cpu: "250m", memory: "512Mi" }
+    mon:
+      requests: { cpu: "250m", memory: "512Mi" }
+    osd:
+      requests: { cpu: "500m", memory: "1Gi" }
+
+# RBD block pool + its StorageClass (default). This is the tenant/VM disk class.
+cephBlockPools:
+  - name: {{ rook_block_pool }}
+    spec:
+      failureDomain: host
+      replicated:
+        size: {{ rook_replica_size }}
+    storageClass:
+      enabled: true
+      name: {{ rook_storageclass }}
+      isDefault: true
+      reclaimPolicy: Delete
+      allowVolumeExpansion: true
+      parameters:
+        imageFormat: "2"
+        imageFeatures: layering
+        csi.storage.k8s.io/fstype: ext4
+        # Providing `parameters` overrides the chart defaults, so the CSI secret refs must be set
+        # explicitly or the provisioner fails with "provided secret is empty". Names match the
+        # secrets the rook operator creates in {{ rook_namespace }}.
+        csi.storage.k8s.io/provisioner-secret-name: rook-csi-rbd-provisioner
+        csi.storage.k8s.io/provisioner-secret-namespace: {{ rook_namespace }}
+        csi.storage.k8s.io/controller-expand-secret-name: rook-csi-rbd-provisioner
+        csi.storage.k8s.io/controller-expand-secret-namespace: {{ rook_namespace }}
+        csi.storage.k8s.io/node-stage-secret-name: rook-csi-rbd-node
+        csi.storage.k8s.io/node-stage-secret-namespace: {{ rook_namespace }}
+
+# CephFS provides RWX **filesystem** storage — needed for live-migratable KubeVirt VM disks (RBD is
+# RWO/block-only; a shared filesystem disk.img migrates cleanly) and persistent-EFI/RWX workloads.
+cephFileSystems:
+  - name: ceph-filesystem
+    spec:
+      metadataPool:
+        replicated:
+          size: {{ rook_replica_size }}
+      dataPools:
+        - name: data0
+          failureDomain: host
+          replicated:
+            size: {{ rook_replica_size }}
+      metadataServer:
+        activeCount: 1
+        activeStandby: true
+        resources:
+          requests: { cpu: "250m", memory: "512Mi" }
+    storageClass:
+      enabled: true
+      name: ceph-filesystem
+      isDefault: false
+      reclaimPolicy: Delete
+      allowVolumeExpansion: true
+      parameters:
+        csi.storage.k8s.io/fstype: ext4
+        csi.storage.k8s.io/provisioner-secret-name: rook-csi-cephfs-provisioner
+        csi.storage.k8s.io/provisioner-secret-namespace: {{ rook_namespace }}
+        csi.storage.k8s.io/controller-expand-secret-name: rook-csi-cephfs-provisioner
+        csi.storage.k8s.io/controller-expand-secret-namespace: {{ rook_namespace }}
+        csi.storage.k8s.io/node-stage-secret-name: rook-csi-cephfs-node
+        csi.storage.k8s.io/node-stage-secret-namespace: {{ rook_namespace }}
+cephObjectStores: []

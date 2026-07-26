@@ -1,0 +1,17 @@
+---
+# Tenancy — the tenant API, delivered as tenant-as-HelmRelease. Flux's source + helm controllers
+# render the talu-tenant chart (published to an in-cluster registry) into one HelmRelease per tenant
+# file under environments/rocky-phys/tenants/, each carrying talu.io/project-uuid. The culmination:
+# a tenant values-file reconciles to a working namespace + VMs, orchestrator-free.
+ten_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+ten_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+flux_bin: /usr/local/bin/flux
+flux_version: "2.9.3"          # latest; OCIRepository graduated to v1 in Flux 2.6+ (the chart uses v1)
+
+# Component files (control node → gateway).
+ten_src: "{{ playbook_dir }}/../components/tenancy"
+ten_dir: "{{ talos_gen_dir }}/components/tenancy"
+tenants_src: "{{ playbook_dir }}/../environments/rocky-phys/tenants"
+tenants_dir: "{{ talos_gen_dir }}/tenants"
+
+tenant_release_namespace: tenants
