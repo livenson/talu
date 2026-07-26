@@ -1,16 +1,12 @@
 #!/bin/bash
-# ANSIBLE MANAGED — talu roles/phys_vm_network. Idempotent VXLAN overlay for the Talos VM network.
-# Creates {{ talos_overlay.bridge }} + {{ talos_overlay.vxlan_if }} (VNI {{ talos_overlay.vni }})
-# over bond0, with head-end replication to the peer hosts. Reversible: `ip link del` both ifaces.
+# ANSIBLE MANAGED — talu roles/phys_vm_network. Idempotent L2 substrate for the Talos VM network:
+# {{ talos_overlay.bridge }} + a bridge uplink that is EITHER a dedicated 802.1Q VLAN ('vlan' mode,
+# default — plain Ethernet the 82599 can GRO-offload) OR a head-end-replicated VXLAN ('vxlan' mode,
+# rollback). Reversible: `ip link del` the uplink + bridge. bond0 is never touched.
 set -euo pipefail
 
 BR={{ talos_overlay.bridge }}
-VX={{ talos_overlay.vxlan_if }}
-VNI={{ talos_overlay.vni }}
-DPORT={{ talos_overlay.udp_port }}
 MTU={{ talos_overlay.mtu }}
-LOCAL={{ phys_internal_ip }}
-PEERS=({% for h in groups['phys'] if hostvars[h].phys_internal_ip != phys_internal_ip %}{{ hostvars[h].phys_internal_ip }} {% endfor %})
 
 # 1) bridge
 if ! ip link show "$BR" &>/dev/null; then
@@ -19,7 +15,24 @@ fi
 ip link set "$BR" mtu "$MTU"
 ip link set "$BR" up
 
-# 2) vxlan (recreate only if missing; params are immutable once created)
+{% if talos_overlay.uplink_mode | default('vxlan') == 'vlan' %}
+# 2) uplink = dedicated 802.1Q VLAN on bond0 (no host IP, no encapsulation). VM/pod frames ride the
+#    fabric as plain tagged Ethernet, so the 82599 GRO-aggregates them → near line-rate pod-to-pod.
+UP={{ talos_overlay.uplink_if }}
+VID={{ talos_overlay.vlan_id }}
+if ! ip link show "$UP" &>/dev/null; then
+  ip link add link bond0 name "$UP" type vlan id "$VID"
+  ip link set "$UP" master "$BR"
+fi
+ip link set "$UP" mtu "$MTU"
+ip link set "$UP" up
+{% else %}
+# 2) uplink = VXLAN over bond0 (recreate only if missing; params are immutable once created)
+VX={{ talos_overlay.vxlan_if }}
+VNI={{ talos_overlay.vni }}
+DPORT={{ talos_overlay.udp_port }}
+LOCAL={{ phys_internal_ip }}
+PEERS=({% for h in groups['phys'] if hostvars[h].phys_internal_ip != phys_internal_ip %}{{ hostvars[h].phys_internal_ip }} {% endfor %})
 if ! ip link show "$VX" &>/dev/null; then
   ip link add "$VX" type vxlan id "$VNI" local "$LOCAL" dstport "$DPORT" nolearning
   ip link set "$VX" master "$BR"
@@ -37,6 +50,7 @@ done < <(bridge fdb show dev "$VX" | awk '$1=="00:00:00:00:00:00"{print $3}')
 for p in "${PEERS[@]}"; do
   bridge fdb append 00:00:00:00:00:00 dev "$VX" dst "$p" self permanent
 done
+{% endif %}
 
 {% if inventory_hostname == talos_overlay.gateway_host %}
 # 4) gateway host: address on the bridge = VM default route / DNS / mirror endpoint

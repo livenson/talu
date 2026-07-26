@@ -26,10 +26,18 @@ primary_iface_mtu: 9000     # documented, not applied — the role never touches
 #              ingress off compute1 keeps the gateway/mirror host from also terminating all traffic.
 talos_overlay:
   bridge: br-talu
-  vxlan_if: vxlan-talu
+  # Bridge uplink substrate: 'vlan' (default) rides a dedicated 802.1Q VLAN on bond0 — plain Ethernet the
+  # 82599 CAN GRO-offload, so pod-to-pod runs near line rate; 'vxlan' is the old head-end-replicated
+  # overlay (kept for rollback: set uplink_mode=vxlan and re-run). The VXLAN capped pod-to-pod at
+  # ~3.2 Gbit/s because the 82599 (ixgbe) cannot GRO-aggregate VXLAN. VLAN 40 was verified trunked to all
+  # 4 host port-channels and free (no port security, foreign MACs forward — probed). See docs perf §9.
+  uplink_mode: vlan          # 'vlan' | 'vxlan'
+  uplink_if: vlan-talu       # bridge uplink iface in vlan mode (script-owned, like vxlan_if was)
+  vlan_id: 40                # dedicated VM-network VLAN, trunked to all 4 hosts, no host IP
+  vxlan_if: vxlan-talu       # ── vxlan-mode (rollback) params below ──
   vni: 4711
   udp_port: 4789
-  mtu: 8950                 # host LAN 9000 − 50B VXLAN
+  mtu: 8950                 # host LAN 9000 − 50B VXLAN (vlan mode can go 9000; kept 8950 for parity)
   subnet: "172.18.0.0/16"
   gateway_ip: "172.18.0.1"  # compute1's br-talu address; VM default route + DNS + mirror endpoint
   gateway_host: compute1

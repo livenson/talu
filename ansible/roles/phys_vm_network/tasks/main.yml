@@ -43,7 +43,8 @@
 
 # ── firewalld ────────────────────────────────────────────────────────────────────────────────
 # VXLAN travels host→host as UDP/4789 on bond0 (public zone, which only allows ssh) — open it from
-# the underlay subnet on every host, or the overlay silently blackholes.
+# the underlay subnet on every host, or the overlay silently blackholes. Not needed in vlan mode
+# (a tagged VLAN is plain L2, no UDP tunnel).
 - name: Allow VXLAN (UDP 4789) from the underlay LAN
   become: true
   ansible.posix.firewalld:
@@ -51,6 +52,7 @@
     permanent: true
     immediate: true
     state: enabled
+  when: talos_overlay.uplink_mode | default('vxlan') == 'vxlan'
 
 # The overlay bridge is fully trusted (VM↔VM and VM↔host services incl. the registry mirror).
 - name: Put the overlay bridge in the trusted zone
@@ -163,11 +165,11 @@
   when: inventory_hostname == talos_overlay.gateway_host
 
 # ── validation ────────────────────────────────────────────────────────────────────────────────
-- name: Verify the bridge + vxlan exist and are up
+- name: Verify the bridge + uplink exist and are up
   ansible.builtin.command: "ip -br link show {{ item }}"
   loop:
     - "{{ talos_overlay.bridge }}"
-    - "{{ talos_overlay.vxlan_if }}"
+    - "{{ talos_overlay.uplink_if if (talos_overlay.uplink_mode | default('vxlan') == 'vlan') else talos_overlay.vxlan_if }}"
   register: overlay_links
   changed_when: false
   failed_when: "'UP' not in overlay_links.stdout and 'UNKNOWN' not in overlay_links.stdout"
