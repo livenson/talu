@@ -222,6 +222,15 @@ Right-sizing the *method* to the current physical lab (`environments/rocky-phys`
   will cap IOPS far below the network or CPU. Perf-*correctness* (RBD semantics, replication behaviour,
   recovery) is valid here; absolute IOPS numbers are not representative — flag every storage result as
   "SATA-bound, not production-representative". Real numbers need NVMe.
+- **But Ceph is network-sensitive, and the VXLAN removal (§ above) lifted it measurably.** `rados bench`
+  on the RBD pool (size 3) *after* the VLAN cutover: **write 439 MB/s** (109 IOPS, 146 ms avg),
+  **seq read 1449 MB/s**, **rand read 1481 MB/s** (~370 IOPS, ~42 ms). Reads at ~1.48 GB/s ≈ 11.8 Gbit/s
+  aggregate — on the old ~3.2 Gbit/s pod network they were capped near ~400 MB/s, so removing the host
+  VXLAN bought **~3.7× on Ceph reads**. Writes drive ~877 MB/s of ×3 replication (~7 Gbit/s) — that fits
+  the new 9.9 Gbit/s but would have throttled on 3.2, so writes improved too and are now **SATA-bound**
+  (~330 MB/s/OSD ≈ SATA write speed). Takeaway: on encapsulated/slow pod networks Ceph replication and
+  reads are network-bound long before the disks are; fix the network first, then the disk (NVMe) is the
+  next lever.
 - **Boot the non-`+debug` kernel** before any measurement (`phys_host_prep` stages this) — the debug
   kernel's lock/alloc instrumentation invalidates every latency figure.
 - **Nested vs bare metal:** the current cluster runs Talos as *libvirt VMs* (reversible). Nested KVM
