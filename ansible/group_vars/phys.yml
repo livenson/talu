@@ -51,13 +51,16 @@ talos_registry_patch: /home/cloud-user/talu/talos-registry-mirror.patch.yaml
 talos_version: "v1.13.7"    # latest Talos (was v1.11.2); the metal disk image + installer tag
 kubernetes_version: "v1.35.7"   # KubeVirt v1.8 targets k8s <=1.35 — do NOT jump to 1.36
 
-# Control planes on the 3 healthy-bond hosts (1/2 also have more RAM); worker on compute4 (its
-# bond leg is dead — keep etcd off it). MACs are fixed so DHCP hands out stable IPs.
+# Control planes on the 3 healthy-bond hosts; worker on compute4 (its bond leg is dead — keep etcd off
+# it). MACs are fixed so DHCP hands out stable IPs. Sizing = one node VM per host, taking most of the
+# host: compute1/2 have 125 GiB / 80 threads, compute3/4 have 94 GiB / 80 threads. Each VM leaves ~16 GiB
+# + 32 threads for the host OS, qemu overhead, and (compute1) the on-host registry mirror. Existing VMs
+# don't hot-resize — bumping these needs a `virsh` redefine + reboot per node (drain-gated, quorum-safe).
 talos_nodes:
-  - { name: talos-cp1, role: controlplane, host: compute1, ip: "172.18.1.11", mac: "52:54:00:7a:10:11", vcpu: 8, ram_mib: 16384, disk_gb: 60, ceph_gb: 120 }
-  - { name: talos-cp2, role: controlplane, host: compute2, ip: "172.18.1.12", mac: "52:54:00:7a:10:12", vcpu: 8, ram_mib: 16384, disk_gb: 60, ceph_gb: 120 }
-  - { name: talos-cp3, role: controlplane, host: compute3, ip: "172.18.1.13", mac: "52:54:00:7a:10:13", vcpu: 8, ram_mib: 16384, disk_gb: 60, ceph_gb: 120 }
-  - { name: talos-w1,  role: worker,       host: compute4, ip: "172.18.1.21", mac: "52:54:00:7a:10:21", vcpu: 8, ram_mib: 16384, disk_gb: 60, ceph_gb: 120 }
+  - { name: talos-cp1, role: controlplane, host: compute1, ip: "172.18.1.11", mac: "52:54:00:7a:10:11", vcpu: 48, ram_mib: 110592, disk_gb: 60, ceph_gb: 120 }
+  - { name: talos-cp2, role: controlplane, host: compute2, ip: "172.18.1.12", mac: "52:54:00:7a:10:12", vcpu: 48, ram_mib: 110592, disk_gb: 60, ceph_gb: 120 }
+  - { name: talos-cp3, role: controlplane, host: compute3, ip: "172.18.1.13", mac: "52:54:00:7a:10:13", vcpu: 48, ram_mib: 79872, disk_gb: 60, ceph_gb: 120 }
+  - { name: talos-w1,  role: worker,       host: compute4, ip: "172.18.1.21", mac: "52:54:00:7a:10:21", vcpu: 48, ram_mib: 79872, disk_gb: 60, ceph_gb: 120 }
 
 # Observability versions (override all.yml lab pins with current-latest).
 kube_prometheus_stack_version: "87.19.1"
