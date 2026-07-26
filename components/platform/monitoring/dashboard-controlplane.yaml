@@ -1,8 +1,7 @@
-# Control-plane density — API-server latency/rate/errors/inflight (the churn knee shows here). NOTE:
-# on THIS Talos cluster etcd + scheduler + controller-manager metrics are NOT scraped (no
-# ServiceMonitors/targets — Talos binds those to localhost / needs cert-based etcd :2381 scraping), so
-# the etcd-fsync knee is not directly observable yet. The etcd/scheduler panels below are wired for
-# when that scrape is enabled; until then they read empty. FINDING logged in the perf/test notes.
+# Control-plane observability — API-server RED metrics (the churn knee shows here) PLUS etcd + scheduler,
+# now scraped via controlplane-scrape.yaml (Talos exposes them: etcd :2381 http metrics listener +
+# scheduler/CM bind-address 0.0.0.0, set in phys_talos_vms/cp-patch.yaml.j2). etcd fsync/commit latency is
+# the real storage-bound control-plane signal on SATA; scheduler latency covers pod placement under load.
 apiVersion: perses.dev/v1alpha2
 kind: PersesDashboard
 metadata:
@@ -58,21 +57,38 @@ spec:
       etcdfsync:
         kind: Panel
         spec:
-          display: { name: "etcd WAL fsync p99 (s) — NEEDS Talos etcd scrape (empty until enabled)" }
+          display: { name: "etcd WAL fsync + backend commit p99 (s) — SATA storage-bound signal" }
           plugin: { kind: TimeSeriesChart, spec: {} }
           queries:
             - kind: TimeSeriesQuery
               spec:
                 plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "histogram_quantile(0.99, sum by (le) (rate(etcd_disk_wal_fsync_duration_seconds_bucket[5m])))" } }
-      schedlat:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "histogram_quantile(0.99, sum by (le) (rate(etcd_disk_backend_commit_duration_seconds_bucket[5m])))" } }
+      etcddb:
         kind: Panel
         spec:
-          display: { name: "Scheduler e2e p99 (s) — NEEDS scheduler scrape (empty until enabled)" }
+          display: { name: "etcd DB size (bytes) + proposals committed/s" }
           plugin: { kind: TimeSeriesChart, spec: {} }
           queries:
             - kind: TimeSeriesQuery
               spec:
-                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "histogram_quantile(0.99, sum by (le) (rate(scheduler_e2e_scheduling_duration_seconds_bucket[5m])))" } }
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "max(etcd_mvcc_db_total_size_in_bytes)" } }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum(rate(etcd_server_proposals_committed_total[5m]))" } }
+      schedlat:
+        kind: Panel
+        spec:
+          # k8s 1.35: the scheduling-latency histogram is scheduler_scheduling_attempt_duration_seconds
+          # (the old scheduler_e2e_scheduling_duration_seconds was removed).
+          display: { name: "Scheduler attempt p99 (s) — pod placement latency" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "histogram_quantile(0.99, sum by (le) (rate(scheduler_scheduling_attempt_duration_seconds_bucket[5m])))" } }
     layouts:
       - kind: Grid
         spec:
@@ -84,7 +100,8 @@ spec:
             - { x: 12, y: 8, width: 12, height: 8, content: { $ref: "#/spec/panels/inflight" } }
       - kind: Grid
         spec:
-          display: { title: "etcd + scheduler (pending Talos CP scrape)" }
+          display: { title: "etcd + scheduler" }
           items:
-            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/etcdfsync" } }
-            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/schedlat" } }
+            - { x: 0,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/etcdfsync" } }
+            - { x: 8,  y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/etcddb" } }
+            - { x: 16, y: 0, width: 8, height: 8, content: { $ref: "#/spec/panels/schedlat" } }

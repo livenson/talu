@@ -21,6 +21,7 @@ perses_chart_tgz: "{{ talos_gen_dir }}/perses-operator-{{ perses_operator_versio
 # Rules/SMs to apply (Velero/backup ones deferred until the backup layer exists).
 mon_rules:
   - servicemonitors.yaml
+  - controlplane-scrape.yaml   # etcd/scheduler/CM Services + ServiceMonitors (needs cp-patch metrics args)
   - recording-rules.yaml
   - node-rules.yaml
   - resource-rules.yaml

@@ -1,0 +1,16 @@
+# ANSIBLE MANAGED — Endpoints for the selector-less talu-kube-etcd Service (components/platform/monitoring/
+# controlplane-scrape.yaml). Talos etcd is a host service, not a Kubernetes pod, so a selector cannot
+# discover it — the addresses are supplied here from the control-plane node IPs (group_vars/phys.yml).
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: talu-kube-etcd
+  namespace: kube-system
+  labels: { app.kubernetes.io/part-of: talu, talu.io/scrape: control-plane }
+subsets:
+  - addresses:
+{% for n in talos_nodes | selectattr('role', 'equalto', 'controlplane') %}
+      - { ip: "{{ n.ip }}" }
+{% endfor %}
+    ports:
+      - { name: http-metrics, port: 2381, protocol: TCP }

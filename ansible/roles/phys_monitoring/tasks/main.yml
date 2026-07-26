@@ -55,6 +55,15 @@
   loop: "{{ mon_rules }}"
   changed_when: true
 
+# etcd is a Talos host service (not a pod) — supply its scrape Endpoints from the CP node IPs. The
+# scheduler/controller-manager Services in controlplane-scrape.yaml self-populate (host-network pods).
+- name: Render + apply the etcd scrape Endpoints (control-plane node IPs)
+  ansible.builtin.shell: |
+    cat <<'EOF' | {{ mon_k }} apply -f -
+    {{ lookup('template', 'controlplane-etcd-endpoints.yaml.j2') }}
+    EOF
+  changed_when: true
+
 - name: Apply the Perses instance + dashboards
   ansible.builtin.command: "{{ mon_k }} apply -f {{ mon_dir }}/{{ item }}"
   loop: "{{ mon_dashboards }}"

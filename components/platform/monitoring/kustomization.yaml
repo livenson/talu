@@ -11,6 +11,7 @@ resources:
   - helmrepository.yaml
   - helmrelease.yaml
   - servicemonitors.yaml
+  - controlplane-scrape.yaml
   - recording-rules.yaml
   - backup-rules.yaml
   - node-rules.yaml

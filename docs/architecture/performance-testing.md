@@ -258,14 +258,16 @@ v2.7.3 + a cirros boot-storm. Dashboards: `dashboard-controlplane.yaml`, `dashbo
   (baseline 24.1 → post 23.7), in-flight requests 6→7, **zero 5xx/429**. That write-p99 *includes the
   etcd commit*, so it doubles as an etcd-fsync-on-SATA proxy — and it shows no strain at sustained
   ~100 obj/s. The cluster absorbs control-plane churn far above any realistic Talu tenant/VM rate.
-- **Observability GAP (real, logged):** on Talos the **etcd / scheduler / controller-manager metrics
-  are NOT scraped** — those components bind to localhost, so kube-prometheus-stack's
-  kubeEtcd/kubeScheduler/kubeControllerManager targets are empty (no ServiceMonitors/targets exist).
-  The direct `etcd_disk_wal_fsync_duration_seconds` / `scheduler_e2e_*` histograms are therefore
-  unavailable; `dashboard-controlplane.yaml` wires those panels but they read empty until enabled.
-  **Follow-up:** expose etcd `:2381` via a Service+Endpoints + cert-based ServiceMonitor (Talos etcd
-  PKI), and set the scheduler/CM bind addresses in machineconfig. Until then the apiserver write-p99 is
-  the accepted proxy. This does not block Talu — it's a monitoring-completeness item.
+- **Control-plane component metrics (etcd / scheduler / controller-manager): now scraped.** Talos binds
+  these to localhost by default, so kube-prometheus-stack's built-in kubeEtcd/kubeScheduler/kubeCM jobs
+  see nothing. Enabled via a machineconfig change (`phys_talos_vms/cp-patch.yaml.j2`: etcd
+  `listen-metrics-urls: http://0.0.0.0:2381`, scheduler/CM `bind-address: 0.0.0.0`) + Service/ServiceMonitor
+  manifests (`controlplane-scrape.yaml`; etcd Endpoints from the CP node IPs). **The etcd `listen-metrics-urls`
+  change needs a node reboot — Talos etcd can't be restarted via API** (scheduler/CM pick up their bind-address
+  live). **Measured on SATA: etcd WAL fsync p99 ≈ 2.9 ms, backend commit p99 ≈ 3.4 ms** — healthy, and
+  consistent with the flat ~24 ms apiserver write-p99 above. So on this lab etcd fsync is *not* the
+  control-plane bottleneck at the churn rates tested; the earlier proxy conclusion holds, now confirmed
+  directly. `dashboard-controlplane.yaml` renders etcd fsync/commit/db-size/proposals + scheduler latency.
 - **VM boot-storm knee: ~80 concurrent VMs, memory-bound (graceful).** 40 cirros VMs (128 MiB guest)
   reached Running in **~50 s**; ramping to 100 hit the ceiling at **~80 Running** — the scheduler cleanly
   refused the rest with `0/4 nodes available: 4 Insufficient memory` and held 19 pods Pending (no crash,
