@@ -229,8 +229,23 @@ Right-sizing the *method* to the current physical lab (`environments/rocky-phys`
   bare-metal Talos on the same boxes (a values change, not a rebuild).
 - **NUMA matters here** (2 sockets): pin VMs and OSDs to sockets and measure the cross-node penalty —
   it's one of the biggest free wins on this class of hardware.
-- **The 10 G bond** is the likely network ceiling; validate LACP hashing spreads multi-flow across
-  both legs (compute4's bond currently runs a single leg — a degraded-hardware data point).
+- **Network: the pod-to-pod ceiling is ~3.2 Gbit/s, NOT the 10 G bond — measured, and it's a NIC
+  limitation, not a config.** Raw host-to-host over the bond hits **9.9 Gbit/s** (4 streams, healthy),
+  but pod-to-pod across nodes caps at **~3.2 Gbit/s** with the host **98 % idle**. Root cause: the
+  hosts' **Intel 82599 (ixgbe)** cannot GRO-aggregate VXLAN-encapsulated traffic — a documented
+  82599-specific limitation that pins VXLAN throughput at ~3 Gbps
+  ([kernel patch](https://patchwork.ozlabs.org/patch/488586/), [Red Hat](https://access.redhat.com/solutions/2780711)).
+  It is NOT movable from userspace — verified: identical ~3.2 Gbit/s under Cilium tunnel vs **native
+  routing**, single-queue vs **virtio multiqueue** (8 queues confirmed active), and with the tunnel/GRO
+  offloads on vs off. The fixes are all substrate-level: **remove the host VXLAN** (routed provider
+  VLAN or an L3 host fabric), **newer NICs** (X710/ConnectX with working VXLAN GRO), or **bare metal**
+  (Phase 2 — no host VXLAN at all). So on this lab, treat pod-network throughput as a fixed ~3.2 Gbit/s
+  overlay ceiling; the bond/LACP itself is fine (validate multi-leg hashing on the raw path, not the
+  overlay). compute4's bond runs a single leg (degraded-hardware data point).
+- **Cilium routing mode:** switched to **native** here (`routingMode: native` + `autoDirectNodeRoutes`)
+  to drop the Cilium-VXLAN-in-host-VXLAN double encap. Correct architecturally (+MTU, less CPU) but it
+  does NOT raise throughput on this lab — the 82599/VXLAN ceiling above dominates. The win is real only
+  once the host VXLAN is gone (bare metal / routed fabric).
 - **Enable IOMMU** (`phys_host_prep` stages `intel_iommu=on`) if SR-IOV passthrough is on the roadmap;
   the NICs expose 63 VFs/port.
 
