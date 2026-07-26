@@ -70,9 +70,13 @@
     --osinfo require=off,name=linux2022
     --disk path={{ talos_image_dir }}/{{ item.name }}-boot.qcow2,bus=virtio,format=qcow2
     --disk path={{ talos_image_dir }}/{{ item.name }}-ceph.qcow2,bus=virtio,format=qcow2
-    --network network={{ libvirt_network }},model=virtio,mac={{ item.mac }}
+    --network network={{ libvirt_network }},model=virtio,mac={{ item.mac }},driver.name=vhost,driver.queues={{ item.vcpu }}
     --import --noautoconsole --graphics none
     --console pty,target_type=serial
+  # driver.queues=<vcpus> = virtio-net MULTIQUEUE. Single-queue virtio funnels all pod NIC softirq
+  # through one vCPU — measured as the pod-to-pod throughput ceiling (~3.3 Gbit/s vs 9.9 Gbit/s raw
+  # bond host-to-host). Talos auto-activates the queues (verified: 8 vhost threads/VM). Existing VMs
+  # need `virsh` redefine + reboot to pick this up (this only affects fresh virt-installs).
   loop: "{{ my_nodes }}"
   loop_control: { label: "{{ item.name }} on {{ inventory_hostname }}" }
   when: item.name not in existing_doms.stdout.split()
