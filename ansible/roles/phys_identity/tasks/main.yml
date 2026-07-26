@@ -64,6 +64,25 @@
   when: pom_ssh_ca.rc != 0
   changed_when: true
 
+# The external domain is a per-environment VALUE (it tracks the floating IP). Both Pomerium's route
+# renderer (route-sync) and any other consumer read it from the talu-platform ConfigMap — the single
+# source of truth (gotcha #40), so a reinstall with a new IP updates one place. Without it route-sync's
+# pod fails its env ref and never runs, leaving the routes stale.
+- name: Publish the external domain (talu-platform ConfigMap, pomerium ns — route-sync reads it there)
+  ansible.builtin.shell: >-
+    {{ id_k }} -n pomerium create configmap talu-platform
+    --from-literal=domain={{ lab_domain }} --dry-run=client -o yaml | {{ id_k }} apply -f -
+  changed_when: true
+
+# The static Pomerium base for route-sync (route-sync appends the dynamic per-Service routes on top).
+- name: Publish the Pomerium base config (pomerium-base ConfigMap)
+  ansible.builtin.template:
+    src: pomerium-base.yaml.j2
+    dest: "{{ talos_gen_dir }}/pomerium-base.yaml"
+    mode: "0644"
+- ansible.builtin.command: "{{ id_k }} apply -f {{ talos_gen_dir }}/pomerium-base.yaml"
+  changed_when: true
+
 - name: Deploy Pomerium (IAP)
   ansible.builtin.template:
     src: pomerium.yaml.j2
