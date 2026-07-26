@@ -72,3 +72,26 @@ spec:
           annotations:
             summary: "Ceph OSD {{ $labels.ceph_daemon }} write latency >100ms"
             description: "Storage write latency elevated — the SATA/qcow2 backend is likely at its IOPS knee."
+    - name: talu-vm-lifecycle.rules
+      rules:
+        - alert: VMBootSlow
+          expr: histogram_quantile(0.95, sum by (le) (rate(kubevirt_vmi_phase_transition_time_from_creation_seconds_bucket{phase="Running"}[15m]))) > 180
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "VM boot time p95 >180s"
+            description: "VMs are taking a long time from creation to Running — image-pull (mirror), scheduling, or storage provisioning pressure."
+        - alert: VMLiveMigrationStuck
+          expr: sum(kubevirt_vmi_migrations_in_running_phase) > 0
+          for: 20m
+          labels: { severity: warning }
+          annotations:
+            summary: "A live migration has been running >20m"
+            description: "kubevirt_vmi_migrations_in_running_phase stayed >0 — a migration is likely stuck (memory dirty-rate > the ~3.2 Gbit/s overlay bandwidth, or storage). Check the VM Lifecycle dashboard."
+        - alert: VMIsOutdated
+          expr: kubevirt_vmi_number_of_outdated > 0
+          for: 1h
+          labels: { severity: info }
+          annotations:
+            summary: "{{ $value }} VMI(s) outdated after a KubeVirt update"
+            description: "These VMIs run an older virt-launcher and need a restart/live-migrate to adopt the new version."
