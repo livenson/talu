@@ -1,0 +1,23 @@
+---
+# portal — the read-only apex landing page (lists every Pomerium route + allow-list). Stdlib HTTP
+# server (portal.py on python:3.12-slim), mounts pomerium-config read-only, deployed into the pomerium
+# namespace. Public read (allow_public_unauthenticated_access); exposed as the apex `https://<domain>`
+# Pomerium route (defined in phys_identity). Self-registers via talu.io/landing-expose=true.
+- name: Copy the portal component to the gateway
+  ansible.builtin.copy:
+    src: "{{ portal_src }}/"
+    dest: "{{ portal_dir }}/"
+    mode: "0644"
+
+- name: Deploy the portal (into the pomerium namespace)
+  ansible.builtin.command: "{{ portal_k }} apply -k {{ portal_dir }}"
+  register: portal_apply
+  changed_when: "'configured' in portal_apply.stdout or 'created' in portal_apply.stdout"
+
+- name: Wait for the portal ready
+  ansible.builtin.command: "{{ portal_k }} -n pomerium rollout status deploy/talu-portal --timeout=120s"
+  changed_when: false
+
+- name: Status
+  ansible.builtin.debug:
+    msg: "portal: apex landing at https://{{ lab_domain }}/ (public route directory)"

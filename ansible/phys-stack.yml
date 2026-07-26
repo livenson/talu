@@ -13,10 +13,12 @@
     - { role: phys_cilium,   tags: [cilium, cni] }
     - { role: phys_rook,     tags: [rook, storage] }
     - { role: phys_kubevirt,   tags: [kubevirt, virt] }
+    - { role: phys_kubevirt_manager, tags: [kubevirt-manager, virt, ui] }
     - { role: phys_cert_manager, tags: [cert-manager, certs, monitoring, obs] }
     - { role: phys_monitoring,   tags: [monitoring, obs] }
     - { role: phys_logging,    tags: [logging, obs] }
     - { role: phys_tetragon,   tags: [tetragon, security] }
     - { role: phys_ingress,    tags: [ingress, lb] }
     - { role: phys_identity,   tags: [identity, access] }
+    - { role: phys_portal,     tags: [portal, ui] }
     - { role: phys_tenancy,    tags: [tenancy, tenants] }

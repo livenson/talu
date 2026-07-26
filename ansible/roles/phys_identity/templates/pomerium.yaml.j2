@@ -39,6 +39,15 @@ data:
         to: http://dex.identity.svc:5556
         allow_public_unauthenticated_access: true
         preserve_host_header: true
+      - from: https://{{ lab_domain }}
+        # apex landing page (portal) — public route directory
+        to: http://talu-portal.pomerium.svc:80
+        allow_public_unauthenticated_access: true
+      - from: https://vms.{{ lab_domain }}
+        # kubevirt-manager VM web UI (admin-only)
+        to: http://kubevirt-manager.kubevirt-manager.svc:8080
+        allowed_users: [{{ dex_user_email }}]
+        allow_websockets: true
       - from: https://perses.{{ lab_domain }}
         # the Perses server Service is named after the Perses CR ("talu"), not "perses".
         to: http://talu.monitoring.svc:8080

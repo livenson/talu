@@ -1,0 +1,46 @@
+---
+# kubevirt-manager — the VM web UI (exposed as the Pomerium `vms.<domain>` route, defined in
+# phys_identity). ns kubevirt-manager, ClusterRole to drive KubeVirt/CDI, ClusterIP :8080.
+- name: Apply the kubevirt-manager bundle ({{ kubevirt_manager_version }})
+  ansible.builtin.command: >-
+    {{ kvm_k }} apply -f
+    https://github.com/kubevirt-manager/kubevirt-manager/releases/download/{{ kubevirt_manager_version }}/bundled-{{ kubevirt_manager_version }}.yaml
+  register: kvm_apply
+  retries: 5
+  delay: 8
+  until: kvm_apply.rc == 0
+  changed_when: "'configured' in kvm_apply.stdout or 'created' in kvm_apply.stdout"
+
+- name: Wait for kubevirt-manager ready
+  ansible.builtin.command: "{{ kvm_k }} -n kubevirt-manager rollout status deploy/kubevirt-manager --timeout=180s"
+  changed_when: false
+
+# Seed the image catalog (images.kubevirt-manager.io) so the UI's /imagelist is non-empty. Our VMs boot
+# from containerDisk directly; these registry entries let the UI offer them (pulled via the mirror).
+- name: Seed the kubevirt-manager image catalog
+  ansible.builtin.shell: |
+    cat <<'IMG' | {{ kvm_k }} apply -f -
+    apiVersion: kubevirt-manager.io/v1
+    kind: Image
+    metadata: {name: ubuntu-2404, namespace: kubevirt-manager}
+    spec: {type: registry, readableName: "Ubuntu 24.04 LTS", readableDescription: "Ubuntu 24.04 containerDisk", registry: {url: "quay.io/containerdisks/ubuntu:24.04"}}
+    ---
+    apiVersion: kubevirt-manager.io/v1
+    kind: Image
+    metadata: {name: cirros-06, namespace: kubevirt-manager}
+    spec: {type: registry, readableName: "CirrOS 0.6", readableDescription: "Tiny demo image", registry: {url: "quay.io/kubevirt/cirros-container-disk-demo:latest"}}
+    ---
+    apiVersion: kubevirt-manager.io/v1
+    kind: Image
+    metadata: {name: fedora-40, namespace: kubevirt-manager}
+    spec: {type: registry, readableName: "Fedora 40", readableDescription: "Fedora 40 cloud containerDisk", registry: {url: "quay.io/containerdisks/fedora:40"}}
+    IMG
+  register: kvm_images
+  changed_when: "'configured' in kvm_images.stdout or 'created' in kvm_images.stdout"
+
+- name: Status
+  ansible.builtin.command: "{{ kvm_k }} -n kubevirt-manager get pods --no-headers"
+  register: kvm_status
+  changed_when: false
+- ansible.builtin.debug:
+    msg: "kubevirt-manager: {{ kvm_status.stdout_lines }} — UI at https://vms.{{ lab_domain }}"
