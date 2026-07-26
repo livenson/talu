@@ -28,7 +28,11 @@ phys_nameservers:
   - 10.8.0.10
   - 10.3.0.10
   - 1.1.1.1
-phys_dns_search: "no-stb.serverant.com"
+# DNS search domain — SITE-SPECIFIC, so no default is committed here. Set it in your own (typically
+# uncommitted) inventory/group_vars if your hosts resolve short internal names, e.g.
+#   phys_dns_search: "internal.example.com"
+# Empty → resolv.conf.j2 omits the `search` line entirely (fully-qualified names still resolve).
+phys_dns_search: ""
 phys_dns_options: "timeout:1 attempts:2"
 
 # --- Boot configuration (requires a reboot to take effect) ---------------------------------

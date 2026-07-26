@@ -64,8 +64,11 @@ kube_prometheus_stack_version: "87.19.1"
 perses_operator_version: "0.4.0"
 
 # ── Identity / access plane ──────────────────────────────────────────────────────────────────
-lab_floating_ip: "92.220.16.211"                         # the physical lab's public NAT IP
-lab_domain: "{{ lab_floating_ip | replace('.', '-') }}.sslip.io"   # 92-220-16-211.sslip.io
+# The lab's public NAT IP — SITE-SPECIFIC. Placeholder uses the RFC 5737 documentation range; set the
+# real IP in your own (uncommitted) inventory/group_vars, or export LAB_FLOATING_IP, so it never lands
+# in git. lab_domain derives from it (dots -> dashes) via sslip.io, so nothing else needs editing.
+lab_floating_ip: "{{ lookup('env', 'LAB_FLOATING_IP') | default('203.0.113.10', true) }}"
+lab_domain: "{{ lab_floating_ip | replace('.', '-') }}.sslip.io"   # e.g. 203-0-113-10.sslip.io
 # Dex OIDC (reuses the product component config; bcrypt of the demo password).
 dex_user_email: "alice@talu.local"
 dex_user_name: "alice"
