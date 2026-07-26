@@ -25,6 +25,7 @@ resources:
   - dashboard-fleet.yaml
   - dashboard-perf.yaml
   - dashboard-vmlifecycle.yaml
+  - dashboard-cdi.yaml
   - dashboard-netsec.yaml
   - dashboard-vmdetail.yaml
   - dashboard-backup.yaml

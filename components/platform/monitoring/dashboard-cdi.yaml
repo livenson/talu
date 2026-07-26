@@ -1,0 +1,100 @@
+# CDI golden-image pipeline — DataImportCron freshness, in-flight DataVolumes, pipeline health, and the
+# golden-image + clone storage footprint. NOTE: CDI does NOT export an import/clone *progress* or
+# *duration* metric (those live on the DataVolume .status); measure durations from object timestamps.
+# Series verified live: talu:image_outdated, kubevirt_cdi_datavolume_pending, kubevirt_cdi_*_ready/up,
+# kubevirt_cdi_*_pods_high_restart, ceph_pool_stored.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-cdi-pipeline
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — CDI Golden-Image Pipeline
+    duration: 6h
+    panels:
+      freshness:
+        kind: Panel
+        spec:
+          display: { name: "Golden-image freshness (0=current, 1=newer upstream available)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "talu:image_outdated" } }
+      dvpending:
+        kind: Panel
+        spec:
+          display: { name: "CDI DataVolumes pending (import/clone in flight)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "kubevirt_cdi_datavolume_pending" } }
+      cdihealth:
+        kind: Panel
+        spec:
+          display: { name: "CDI health (operator up + CR ready)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "kubevirt_cdi_operator_up" } }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "kubevirt_cdi_cr_ready" } }
+      podrestarts:
+        kind: Panel
+        spec:
+          display: { name: "Import/clone/upload pods with high restarts (pipeline trouble)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "kubevirt_cdi_import_pods_high_restart + kubevirt_cdi_clone_pods_high_restart + kubevirt_cdi_upload_pods_high_restart" } }
+      goldenstorage:
+        kind: Panel
+        spec:
+          display: { name: "golden-images PVC storage requested (bytes)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum(kube_persistentvolumeclaim_resource_requests_storage_bytes{namespace=\"golden-images\"})" } }
+      poolstored:
+        kind: Panel
+        spec:
+          display: { name: "Ceph pool stored + objects (thin-clone footprint)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum(ceph_pool_stored)" } }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum(ceph_pool_objects)" } }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: "Pipeline state" }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/freshness" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/dvpending" } }
+      - kind: Grid
+        spec:
+          display: { title: "Health" }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/cdihealth" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/podrestarts" } }
+      - kind: Grid
+        spec:
+          display: { title: "Storage footprint" }
+          items:
+            - { x: 0,  y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/goldenstorage" } }
+            - { x: 12, y: 0, width: 12, height: 8, content: { $ref: "#/spec/panels/poolstored" } }
