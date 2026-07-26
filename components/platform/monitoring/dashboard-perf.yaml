@@ -142,7 +142,7 @@ spec:
           queries:
             - kind: TimeSeriesQuery
               spec:
-                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "sum by (node) (kubevirt_vmi_phase_count{phase=\"Running\"})" } }
+                plugin: { kind: PrometheusTimeSeriesQuery, spec: { query: "count by (node) (kube_pod_info{pod=~\"virt-launcher-.*\"})" } }
     layouts:
       - kind: Grid
         spec:

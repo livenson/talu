@@ -39,3 +39,18 @@ externalIPs:
 hubble:
   ui:
     enabled: true
+  # Add source/destination NAMESPACE context to the drop + flow metrics so cross-tenant traffic is
+  # attributable in Perses/Prometheus (hubble_drop_total{source_namespace,destination_namespace}) — the
+  # visual evidence for the multi-tenant isolation test. The base list has no context. Helm REPLACES
+  # the list (no deep-merge), so restate it in full here.
+  metrics:
+    enabled:
+      - "drop:sourceContext=namespace;destinationContext=namespace"
+      - "flow:sourceContext=namespace;destinationContext=namespace"
+      - dns
+      - tcp
+      - port-distribution
+      - icmp
+      - "httpV2:exemplars=true"
+    serviceMonitor:
+      enabled: true
