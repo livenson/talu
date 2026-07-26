@@ -113,13 +113,43 @@
   register: dnsmasq_conf
   when: inventory_hostname == talos_overlay.gateway_host
 
-# dnsmasq must start AFTER the overlay bridge has its IP, else bind-interfaces fails.
+# dnsmasq must start AFTER the overlay bridge has its IP, else the bind to gateway_ip fails with
+# "Cannot assign requested address". The ansible play orders this correctly, but on a REBOOT there
+# is no systemd dependency, so dnsmasq races the overlay bring-up and fails (hit on compute1's
+# stock-kernel reboot). Drop-in: order after the overlay unit AND retry-on-failure so it converges
+# even if the bridge IP lands a moment after talu-overlay-net reports started.
+- name: Gateway — dnsmasq ordering + retry drop-in (survive reboot race)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/dnsmasq.service.d/10-talu-overlay.conf
+    mode: "0644"
+    content: |
+      [Unit]
+      After=talu-overlay-net.service network-online.target
+      Wants=talu-overlay-net.service
+      StartLimitIntervalSec=300
+      StartLimitBurst=40
+
+      [Service]
+      Restart=on-failure
+      RestartSec=5
+  register: dnsmasq_dropin
+  when: inventory_hostname == talos_overlay.gateway_host
+
+- name: Gateway — reload systemd if the dnsmasq drop-in changed
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - inventory_hostname == talos_overlay.gateway_host
+    - dnsmasq_dropin.changed
+
 - name: Gateway — enable + (re)start dnsmasq
   become: true
   ansible.builtin.systemd:
     name: dnsmasq
     enabled: true
-    state: "{{ 'restarted' if dnsmasq_conf.changed else 'started' }}"
+    state: "{{ 'restarted' if (dnsmasq_conf.changed or dnsmasq_dropin.changed) else 'started' }}"
   when: inventory_hostname == talos_overlay.gateway_host
 
 # ── validation ────────────────────────────────────────────────────────────────────────────────
