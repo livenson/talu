@@ -1,0 +1,24 @@
+---
+# Kamaji (hosted tenant Kubernetes control planes) for the PHYSICAL lab — the KaaS layer.
+# Tenant control planes (kube-apiserver/CM/scheduler + konnectivity) run as pods in the management
+# cluster; the datastore is the chart's default 3-replica kamaji-etcd on ceph-block PVCs.
+# PoC compromise (validated 2026-07-27): the default etcd is SHARED across tenant control planes and
+# sits on RBD. Production wants per-tenant etcd on LOCAL storage (etcd is fsync-latency-bound; the
+# Cozystack precedent) — revisit before more than a handful of tenant clusters.
+kam_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+kam_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+kam_dir: "{{ talos_gen_dir }}/kamaji"
+
+# Clastix stopped semver OSS releases (July 2024): OSS = monthly "edge" images, and the ONLY public
+# chart version is the floating "0.0.0+latest" from https://clastix.github.io/charts (stable/LTS
+# charts are subscription-only). So this pin selects the channel, not a version — record the deployed
+# image (clastix/kamaji:latest digest) when validating.
+kamaji_chart_version: "0.0.0+latest"
+
+# Demo TenantControlPlane — proves the KaaS path end-to-end (apply → Ready → kubectl smoke).
+kamaji_demo_tcp: true
+kamaji_demo_namespace: "kaas-demo"
+kamaji_demo_name: "demo"
+kamaji_demo_project_uuid: "11111111-2222-3333-4444-555555555555"
+# Tenant k8s version: kubeadm-lineage, keep <= management version (v1.35.7 validated).
+kamaji_demo_k8s_version: "{{ kubernetes_version }}"

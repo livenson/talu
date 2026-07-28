@@ -24,4 +24,5 @@
     - { role: phys_portal,     tags: [portal, ui] }
     - { role: phys_pkg_repo,   tags: [pkg-repo, packages] }
     - { role: phys_tenancy,    tags: [tenancy, tenants] }
+    - { role: phys_kamaji,     tags: [kamaji, kaas] }
     - { role: phys_backup,     tags: [backup, dr] }
