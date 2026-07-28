@@ -86,6 +86,22 @@
   register: kc_probe
   changed_when: false
 
+# Convenience: surface the console admin password on the (admin-only, Pomerium-gated) KaaS dashboard
+# so an operator doesn't need kubectl. The committed dashboard carries a __KAMAJI_CONSOLE_PASSWORD__
+# placeholder; substitute the real value into the LIVE PersesDashboard only (never into git). No-op if
+# the dashboard isn't present yet (monitoring applies it).
+- name: Inject the console password into the live KaaS dashboard (if present)
+  ansible.builtin.shell: |
+    set -e
+    {{ kc_k }} -n monitoring get persesdashboard talu-kaas >/dev/null 2>&1 || { echo "no dashboard yet"; exit 0; }
+    export PW=$({{ kc_k }} -n {{ kamaji_console_namespace }} get secret kamaji-console -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d)
+    {{ kc_k }} -n monitoring get persesdashboard talu-kaas -o json \
+      | python3 -c "import json,sys,os; sys.stdout.write(json.dumps(json.load(sys.stdin)).replace('__KAMAJI_CONSOLE_PASSWORD__', os.environ['PW']))" \
+      | {{ kc_k }} apply -f - >/dev/null
+    echo "console password injected into talu-kaas dashboard"
+  register: kc_dash
+  changed_when: "'injected' in kc_dash.stdout"
+
 - ansible.builtin.debug:
     msg: >-
       kamaji-console at https://clusters.{{ lab_domain }}/ui (app uses a /ui basePath — bare / is a

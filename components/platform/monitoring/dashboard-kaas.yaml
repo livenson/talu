@@ -72,11 +72,25 @@ spec:
       access:
         kind: Panel
         spec:
-          display: { name: "How to connect (kubectl)" }
+          display: { name: "How to connect" }
           plugin:
             kind: Markdown
             spec:
+              # NOTE: this panel is admin-only (Pomerium-gated, like the whole operator dashboard), so
+              # showing the console credential here doesn't widen access. The password is a PLACEHOLDER
+              # in git — phys_kamaji_console substitutes the real value into the LIVE dashboard from the
+              # kamaji-console Secret. Never commit the plaintext.
               text: |
+                ### Kamaji Console (web UI)
+
+                `https://clusters.<domain>/ui` — admin-only behind Pomerium (SSO). The console then has
+                its own login (it ships static credentials, no OIDC):
+
+                - **User:** `alice@talu.local`
+                - **Password:** `__KAMAJI_CONSOLE_PASSWORD__`
+
+                ---
+
                 ### Access a tenant cluster
 
                 Tenant Kubernetes APIs are **private** (LB-IPAM endpoints reachable only in-cluster
