@@ -29,5 +29,13 @@ kaas_svc_cidr: "10.95.0.0/16"
 # must default to Filesystem/RWO (Block-mode CDI import is broken on Talos) — enforced by a task.
 kaas_infra_storageclass: "ceph-block"
 
+# Datastore. Production default = a DEDICATED kamaji-etcd on local-path (etcd is fsync-bound; measured
+# ~50x better p99 fsync than the shared RBD default — 2.6 ms vs 100-227 ms). Set kaas_dedicated_etcd
+# false to fall back to the shared "default" datastore for throwaway/lab clusters.
+kaas_dedicated_etcd: true
+kaas_etcd_chart_version: "0.17.0"
+kaas_etcd_size: "8Gi"
+kaas_datastore: "{{ (kaas_tenant_name + '-local') if kaas_dedicated_etcd else 'default' }}"
+
 # Pomerium kubectl access (impersonation model). The admin user gets cluster-admin inside the tenant.
 kaas_admin_user: "{{ dex_user_email }}"

@@ -1,0 +1,20 @@
+# Dedicated per-tenant kamaji-etcd on local-path (NVMe/SATA), not the shared RBD default.
+# Measured 2026-07-28: local-path WAL fsync p99 2.6-3.6 ms vs shared-RBD 75-227 ms (~50x). etcd is
+# fsync-latency-bound, so this removes the shared-datastore noisy-neighbour coupling (Cozystack does
+# the same: dedicated etcd per tenant). local-path is node-local + WaitForFirstConsumer, so the
+# spread constraint keeps the 3 members on distinct nodes for real quorum.
+replicas: 3
+datastore:
+  enabled: true
+  name: {{ kaas_tenant_name }}-local
+persistentVolumeClaim:
+  size: {{ kaas_etcd_size | default('8Gi') }}
+  storageClassName: local-path
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: kamaji-etcd
+        app.kubernetes.io/instance: etcd-{{ kaas_tenant_name }}

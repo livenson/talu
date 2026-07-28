@@ -10,6 +10,59 @@
   register: kt_pubkey
   changed_when: false
 
+# ── 0. Dedicated per-tenant etcd on local-path (production default) ─────────────────────────
+# etcd is fsync-bound — the shared RBD default's ~100-227 ms p99 fsync starves it; local-path gives
+# ~2.6 ms. Install local-path-provisioner once (idempotent), then a dedicated etcd + DataStore.
+- name: Copy the local-path manifest to the gateway
+  ansible.builtin.copy:
+    src: local-path-storage.yaml
+    dest: "{{ kt_dir }}/local-path-storage.yaml"
+    mode: "0644"
+  when: kaas_dedicated_etcd | bool
+
+- name: Install local-path-provisioner (Talos-safe /var path; privileged ns for its hostPath helpers)
+  ansible.builtin.shell: |
+    set -e
+    {{ kt_k }} apply -f {{ kt_dir }}/local-path-storage.yaml
+    {{ kt_k }} label ns local-path-storage pod-security.kubernetes.io/enforce=privileged --overwrite
+    {{ kt_k }} -n local-path-storage rollout status deploy/local-path-provisioner --timeout=240s
+  when: kaas_dedicated_etcd | bool
+  changed_when: true
+
+- name: Pull the kamaji-etcd chart (WAN retries)
+  ansible.builtin.shell: |
+    helm repo add clastix https://clastix.github.io/charts >/dev/null 2>&1 || true
+    helm repo update clastix >/dev/null
+    for i in 1 2 3 4 5; do
+      helm pull clastix/kamaji-etcd --version {{ kaas_etcd_chart_version }} -d {{ kt_dir }} && exit 0
+      sleep 5
+    done
+    exit 1
+  args: { creates: "{{ kt_dir }}/kamaji-etcd-{{ kaas_etcd_chart_version }}.tgz" }
+  when: kaas_dedicated_etcd | bool
+
+- name: Render dedicated-etcd values
+  ansible.builtin.template:
+    src: etcd-local-values.yaml.j2
+    dest: "{{ kt_dir }}/etcd-local-values.yaml"
+    mode: "0644"
+  when: kaas_dedicated_etcd | bool
+
+- name: Deploy the dedicated per-tenant etcd + DataStore
+  ansible.builtin.command: >
+    helm upgrade --install etcd-{{ kaas_tenant_name }}
+    {{ kt_dir }}/kamaji-etcd-{{ kaas_etcd_chart_version }}.tgz
+    -n kamaji-system -f {{ kt_dir }}/etcd-local-values.yaml --wait --timeout 8m
+  environment: { KUBECONFIG: "{{ kt_kubeconfig }}" }
+  when: kaas_dedicated_etcd | bool
+  changed_when: true
+
+- name: Wait for the tenant DataStore Ready
+  ansible.builtin.command: >
+    {{ kt_k }} wait --for=jsonpath={.status.ready}=true datastore/{{ kaas_datastore }} --timeout=180s
+  when: kaas_dedicated_etcd | bool
+  changed_when: false
+
 # ── 1. The CAPI cluster ─────────────────────────────────────────────────────────────────────
 - name: Render + apply the tenant cluster (Kamaji CP + KubeVirt workers)
   vars:

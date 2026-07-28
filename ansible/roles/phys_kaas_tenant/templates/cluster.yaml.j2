@@ -60,7 +60,7 @@ metadata:
   name: {{ kaas_tenant_name }}
   namespace: {{ kaas_namespace }}
 spec:
-  dataStoreName: default
+  dataStoreName: {{ kaas_datastore }}
   replicas: {{ kaas_cp_replicas }}            # v1alpha2: top-level `replicas`, NOT `deployment.replicas`
   addons:
     coreDNS: {}
