@@ -23,15 +23,15 @@
     fi
     JWT=$(openssl rand -hex 32)
     PW=$(openssl rand -base64 18)
-    # The console (Auth.js v5) consumes the secret via envFrom, so the KEYS are the env var names —
-    # they MUST be the exact UPPERCASE names the app validates (NEXTAUTH_URL/JWT_SECRET/ADMIN_*), not
-    # the camelCase field names from the chart's values doc. Empty SVELTOS_* satisfy the env schema.
+    # The console (Auth.js v5) consumes the secret via envFrom, so the KEYS are the env var names.
+    # They MUST be the exact UPPERCASE names the app validates (NEXTAUTH_URL/JWT_SECRET/ADMIN_*), not
+    # the camelCase field names from the chart values doc. SVELTOS_* are optional and omitted.
+    # (Keep comments apostrophe-free: ansible split_args reads a stray "'" as an unbalanced quote.)
     {{ kc_k }} -n {{ kamaji_console_namespace }} create secret generic kamaji-console \
       --from-literal=NEXTAUTH_URL="https://clusters.{{ lab_domain }}/ui" \
       --from-literal=JWT_SECRET="$JWT" \
       --from-literal=ADMIN_EMAIL="{{ kamaji_console_admin_email }}" \
-      --from-literal=ADMIN_PASSWORD="$PW" \
-      --from-literal=SVELTOS_URL="" --from-literal=SVELTOS_NAMESPACE="" --from-literal=SVELTOS_SECRET_NAME=""
+      --from-literal=ADMIN_PASSWORD="$PW"
     echo "created (admin password stored in secret kamaji-console/ADMIN_PASSWORD)"
   register: kc_secret
   changed_when: "'created' in kc_secret.stdout"
@@ -87,9 +87,9 @@
   changed_when: false
 
 # Convenience: surface the console admin password on the (admin-only, Pomerium-gated) KaaS dashboard
-# so an operator doesn't need kubectl. The committed dashboard carries a __KAMAJI_CONSOLE_PASSWORD__
+# so an operator need not use kubectl. The committed dashboard carries a __KAMAJI_CONSOLE_PASSWORD__
 # placeholder; substitute the real value into the LIVE PersesDashboard only (never into git). No-op if
-# the dashboard isn't present yet (monitoring applies it).
+# the dashboard is not present yet (monitoring applies it).
 - name: Inject the console password into the live KaaS dashboard (if present)
   ansible.builtin.shell: |
     set -e
