@@ -34,6 +34,12 @@ you hit a wall. Update whichever file fits when you burn time on a non-obvious i
   VXLAN); the VLAN runs at line rate (~9.9). **Never touch `bond0`** (management/SSH path — no console =
   lockout). Node VMs are sized to the hosts (108/78 GiB, 48 vCPU). SSH into VMs is Pomerium Native SSH on
   the provider-forwarded **`:2222`** → `ssh <principal>@<vm>@ssh.<domain> -p 2222`.
+- **Managed tenant Kubernetes (KaaS)** is validated here: Cluster API + Kamaji hosted control planes +
+  KubeVirt workers. Provision a tenant cluster with `phys_capi` (once) + `phys_kaas_tenant`
+  (`--tags kaas-tenant`, per-tenant vars). Design + resilience results: `docs/architecture/kaas.md`,
+  `docs/development/kaas-test-{plan,results}.md`; the values-file chart is
+  `components/tenancy/cluster-chart/`. Default is per-tenant etcd on local-path (~50× lower fsync than
+  the shared RBD default). `sudo talosctl` needs the FULL path `/usr/local/bin/talosctl` (secure_path).
 
 ## Workflow
 

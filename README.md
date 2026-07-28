@@ -31,6 +31,13 @@ An external billing/portal/automation system is an **optional** consumer of a st
   `talosctl etcd snapshot` and KubeVirt `VirtualMachineSnapshot`. See
   [`docs/operations/backup-restore.md`](docs/operations/backup-restore.md).
 
+**Managed tenant Kubernetes (KaaS)** — on the same substrate, a tenant can get its **own Kubernetes
+cluster** (Cluster API + Kamaji hosted control planes + KubeVirt workers), rendered from a values file
+just like a VM tenant. Dedicated per-tenant etcd on local-path (~50× lower fsync than shared), tenant
+storage via kubevirt-csi → Ceph, tenant LoadBalancers via Cilium LB-IPAM, and Pomerium-gated `kubectl`.
+Validated end-to-end incl. a full resilience suite. See [`docs/architecture/kaas.md`](docs/architecture/kaas.md)
+and the [`talu-cluster` chart](components/tenancy/cluster-chart/).
+
 > Status: **early scaffold.** The architecture is settled (see `docs/architecture/`); the
 > component manifests are being implemented per the single-node pilot plan. The
 > remote-lab dev loop and the Rocky 10 validation path are runnable today.

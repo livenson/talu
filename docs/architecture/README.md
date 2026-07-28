@@ -4,10 +4,13 @@ Talu is an open-source, multitenant **VM platform** built on a Kubernetes + Kube
 Its entire management surface is the **Kubernetes declarative API plus the Prometheus HTTP API** —
 there is no proprietary control plane. That makes it **API-first and orchestrator-agnostic**: an
 external billing/portal/automation system drives Talu through a stable contract, and Talu also runs
-fully standalone (Git-first, no orchestrator at all).
+fully standalone (Git-first, no orchestrator at all). On the same substrate it also offers tenants
+their own **managed Kubernetes clusters** ([`kaas.md`](kaas.md)) — the same values-file contract,
+one layer up.
 
 - **Runtime flows with sequence diagrams:** [`flows.md`](flows.md).
 - **Network architecture** (Cilium, VM security, L2/L3, IPv4/IPv6, IPAM, LB): [`networking.md`](networking.md).
+- **Managed tenant Kubernetes (KaaS)** — Kamaji hosted control planes + CAPI/KubeVirt: [`kaas.md`](kaas.md).
 - **How Talu compares** (Cozystack, Harvester, OpenShift Virt, OpenStack, Proxmox…): [`comparison.md`](comparison.md).
 - Driving Talu from an external system: [`../integrations/`](../integrations/).
 - Operating guide & validated gotchas (the hard-won lab lessons): [`../../CLAUDE.md`](../../CLAUDE.md)

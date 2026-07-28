@@ -1,0 +1,199 @@
+{{- include "talu-cluster.validate" . -}}
+{{- $ns := .Values.namespace | default "kaas-capi" -}}
+# Managed tenant Kubernetes cluster — the DECLARATIVE half (CAPI + Kamaji + KubeVirt workers).
+# A faithful chart-rendering of the validated reference
+# (ansible/roles/phys_kamaji/files/capi-tenant-reference.yaml — keep that the annotated source of
+# truth). The cross-cluster wiring (dedicated etcd + DataStore, kubevirt-csi creds, cloud-provider,
+# Pomerium route) needs the tenant's generated kubeconfig/CA and is a post-provision step — see the
+# chart README and ansible/roles/phys_kaas_tenant.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    talu.io/project-uuid: {{ .Values.projectUuid | quote }}
+    # worker VMs (virt-launcher) run here — PSA baseline would reject them (lab-notes #5)
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ $ns }}
+  labels:
+    cni: cilium          # HelmChartProxy selector — Cilium auto-installs into the tenant
+    {{- include "talu-cluster.labels" . | nindent 4 }}
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: [{{ .Values.podCidr | default "10.243.0.0/16" | quote }}]
+    services:
+      cidrBlocks: [{{ .Values.serviceCidr | default "10.95.0.0/16" | quote }}]
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1alpha2
+    kind: KamajiControlPlane
+    name: {{ .Values.name }}
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtCluster
+    name: {{ .Values.name }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ $ns }}
+  annotations:
+    # REQUIRED: Kamaji owns the CP endpoint; without this CAPK creates a competing LB Service (and
+    # skips ssh-keypair generation — hence debugPublicKey below for node break-glass).
+    cluster.x-k8s.io/managed-by: kamaji
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha2
+kind: KamajiControlPlane
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ $ns }}
+spec:
+  # Default: a DEDICATED per-tenant etcd on local-path (~50x lower fsync than shared RBD). The
+  # DataStore of this name must be created first (kamaji-etcd helm release) — see README.
+  dataStoreName: {{ .Values.dataStore | default (printf "%s-local" .Values.name) }}
+  replicas: {{ .Values.controlPlane.replicas | default 2 }}
+  addons:
+    coreDNS: {}
+    kubeProxy: {}
+    konnectivity: {}     # CP→kubelet tunnel; lets workers stay behind masquerade NAT
+  kubelet:
+    cgroupfs: systemd
+    preferredAddressTypes: [InternalIP]
+  network:
+    serviceType: LoadBalancer   # LB-IPAM assigns the endpoint from the tenant pool
+  version: {{ .Values.kubernetesVersion | default "v1.34.1" }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: {{ .Values.name }}-md-0
+  namespace: {{ $ns }}
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: ssh
+      virtualMachineTemplate:
+        metadata:
+          namespace: {{ $ns }}
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: {{ .Values.workers.cores | default 4 }}
+                memory:
+                  guest: {{ .Values.workers.memory | default "8Gi" }}
+                devices:
+                  networkInterfaceMultiqueue: true
+                  disks:
+                    - name: containervolume
+                      disk:
+                        bus: virtio
+              evictionStrategy: External
+              volumes:
+                - name: containervolume
+                  containerDisk:
+                    # tenant k8s tracks the newest quay.io/capk containerdisk, NOT the mgmt version
+                    image: quay.io/capk/ubuntu-2404-container-disk:{{ .Values.kubernetesVersion | default "v1.34.1" }}
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: KubeadmConfigTemplate
+metadata:
+  name: {{ .Values.name }}-md-0
+  namespace: {{ $ns }}
+spec:
+  template:
+    spec:
+      # NOTE: never render `joinConfiguration.nodeRegistration: {}` — an empty nodeRegistration fails
+      # CRD validation and the MachineSet loops silently (error only in capi-controller logs).
+      preKubeadmCommands:
+        # Kamaji edge renders k8s-1.35 kubelet-config fields a v1.34 kubelet strictly rejects
+        # (memoryReservationPolicy / crashLoopBackOff.maxContainerRestartPeriod /
+        # imagePullCredentialsVerificationPolicy). kubeadm only warns; the kubelet then crashloops.
+        # Strip them before every kubelet start. printf, NOT a heredoc (survives ssh/YAML/cloud-init
+        # layers; an unquoted delimiter expands $f to empty → `sed` no-input → ExecStartPre exit 4).
+        # Drop when capk ships a containerdisk matching Kamaji's config version.
+        - printf "#!/bin/sh\nsed -i -e \"/^crashLoopBackOff:/,+1d\" -e \"/^imagePullCredentialsVerificationPolicy:/d\" -e \"/^memoryReservationPolicy:/d\" /var/lib/kubelet/config.yaml 2>/dev/null\nexit 0\n" > /usr/local/bin/talu-kubelet-config-fix.sh
+        - chmod +x /usr/local/bin/talu-kubelet-config-fix.sh
+        - mkdir -p /etc/systemd/system/kubelet.service.d
+        - printf "[Service]\nExecStartPre=-/usr/local/bin/talu-kubelet-config-fix.sh\n" > /etc/systemd/system/kubelet.service.d/10-talu-config-fix.conf
+        - systemctl daemon-reload
+      users:
+        - name: capk
+          sudo: "ALL=(ALL) NOPASSWD:ALL"
+          sshAuthorizedKeys:
+            - {{ .Values.debugPublicKey | quote }}
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: {{ .Values.name }}-md-0
+  namespace: {{ $ns }}
+  labels:
+    {{- include "talu-cluster.labels" . | nindent 4 }}
+spec:
+  clusterName: {{ .Values.name }}
+  replicas: {{ .Values.workers.replicas | default 2 }}
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      clusterName: {{ .Values.name }}
+      version: {{ .Values.kubernetesVersion | default "v1.34.1" }}
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: KubeadmConfigTemplate
+          name: {{ .Values.name }}-md-0
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KubevirtMachineTemplate
+        name: {{ .Values.name }}-md-0
+---
+# Auto-remediation: a hard worker crash can't self-heal on ephemeral containerDisk (the restarted
+# disk re-runs kubeadm join with an expired bootstrap token). This MHC replaces a Machine whose node
+# stays NotReady past the timeout — CAPI provisions a fresh one with a fresh token.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineHealthCheck
+metadata:
+  name: {{ .Values.name }}-md-0
+  namespace: {{ $ns }}
+spec:
+  clusterName: {{ .Values.name }}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: {{ .Values.name }}-md-0
+  maxUnhealthy: 100%          # single-worker tenants must still remediate
+  nodeStartupTimeout: 15m
+  unhealthyConditions:
+    - { type: Ready, status: "False", timeout: {{ .Values.healthCheck.unreadyTimeout | default "5m" }} }
+    - { type: Ready, status: Unknown, timeout: {{ .Values.healthCheck.unreadyTimeout | default "5m" }} }
+---
+apiVersion: addons.cluster.x-k8s.io/v1alpha1
+kind: HelmChartProxy
+metadata:
+  name: cilium-{{ .Values.name }}
+  namespace: {{ $ns }}
+spec:
+  clusterSelector:
+    matchLabels:
+      cni: cilium
+  repoURL: https://helm.cilium.io/
+  chartName: cilium
+  version: {{ .Values.ciliumVersion | default "1.19.6" | quote }}
+  releaseName: cilium
+  namespace: kube-system
+  valuesTemplate: |
+    ipam:
+      mode: cluster-pool
+      operator:
+        clusterPoolIPv4PodCIDRList: [{{ .Values.podCidr | default "10.243.0.0/16" | quote }}]
+    kubeProxyReplacement: false     # Kamaji ships kube-proxy as an addon
