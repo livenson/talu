@@ -1,0 +1,39 @@
+# KaaS (hosted tenant control planes) scrape targets.
+# - kamaji operator: controller-runtime metrics (reconcile rates/errors, workqueue depth) on :8080.
+# - kamaji-etcd: native etcd metrics on :2381 (leader, WAL fsync, db size) — the shared datastore is
+#   the KaaS blast-radius component, so its health is first-class.
+# Tenant kube-apiservers (the TCP pods) serve /metrics with tenant-side authn — not scraped from the
+# management Prometheus; per-tenant observability rides the tenant cluster's own stack.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kamaji-operator
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  namespaceSelector:
+    matchNames: [kamaji-system]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kamaji
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kamaji-etcd
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  namespaceSelector:
+    matchNames: [kamaji-system]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kamaji-etcd
+  endpoints:
+    - port: metrics
+      interval: 30s
