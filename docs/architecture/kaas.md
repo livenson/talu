@@ -143,6 +143,9 @@ Highlights:
   ready/desired) and a **"How to connect"** panel with the `pomerium-cli` kubectl recipe — backed by a
   kube-state-metrics CustomResourceState over the CAPI/Kamaji CRs (`ksm-crs.yaml`; this closes gap G6).
   Remaining top follow-up: a blackbox tenant-API probe (G1) — see the test plan's gap list.
+- **Console:** the **Kamaji Console** web UI (the KaaS analog of kubevirt-manager's `vms.<domain>`) is
+  served at `clusters.<domain>`, admin-only behind Pomerium — an interactive list of every tenant
+  control plane (name/namespace/status/endpoint/version/datastore). Role: `phys_kamaji_console`.
 
 ## See also
 

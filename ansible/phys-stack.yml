@@ -25,6 +25,7 @@
     - { role: phys_pkg_repo,   tags: [pkg-repo, packages] }
     - { role: phys_tenancy,    tags: [tenancy, tenants] }
     - { role: phys_kamaji,     tags: [kamaji, kaas] }
+    - { role: phys_kamaji_console, tags: [kamaji-console, kaas, ui] }
     - { role: phys_capi,       tags: [capi, kaas] }
     # per-tenant KaaS cluster (CAPI cluster + kubevirt-csi + CCM + Pomerium kubectl route) —
     # opt-in: run with --tags kaas-tenant (and per-tenant vars) rather than in the default sweep.

@@ -48,6 +48,11 @@ data:
         to: http://kubevirt-manager.kubevirt-manager.svc:8080
         allowed_users: [{{ dex_user_email }}]
         allow_websockets: true
+      - from: https://clusters.{{ lab_domain }}
+        # Kamaji Console — tenant-cluster web UI (admin-only)
+        to: http://kamaji-console.kamaji-system.svc:80
+        allowed_users: [{{ dex_user_email }}]
+        allow_websockets: true
       - from: https://perses.{{ lab_domain }}
         # the Perses server Service is named after the Perses CR ("talu"), not "perses".
         to: http://talu.monitoring.svc:8080

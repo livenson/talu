@@ -37,6 +37,10 @@ data:
         to: http://kubevirt-manager.kubevirt-manager.svc:8080
         allowed_users: [{{ dex_user_email }}]
         allow_websockets: true
+      - from: https://clusters.__DOMAIN__
+        to: http://kamaji-console.kamaji-system.svc:80
+        allowed_users: [{{ dex_user_email }}]
+        allow_websockets: true
       - from: https://perses.__DOMAIN__
         to: http://talu.monitoring.svc:8080
         allowed_users: [{{ dex_user_email }}]

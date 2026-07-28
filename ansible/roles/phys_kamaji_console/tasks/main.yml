@@ -1,0 +1,88 @@
+---
+- name: Ensure work dir
+  ansible.builtin.file: { path: "{{ kc_dir }}", state: directory, mode: "0755" }
+
+- name: Pull the kamaji-console chart (WAN retries)
+  ansible.builtin.shell: |
+    helm repo add clastix https://clastix.github.io/charts >/dev/null 2>&1 || true
+    helm repo update clastix >/dev/null
+    for i in 1 2 3 4 5; do
+      helm pull clastix/kamaji-console --version {{ kamaji_console_chart_version }} -d {{ kc_dir }} && exit 0
+      sleep 5
+    done
+    exit 1
+  args: { creates: "{{ kc_dir }}/kamaji-console-{{ kamaji_console_chart_version }}.tgz" }
+
+# Console credentials: generate once (idempotent — reuse if the Secret already exists so a re-run
+# does not rotate the admin password). Pomerium is the outer gate; this is the inner NextAuth login.
+- name: Create the kamaji-console Secret (generate password + jwtSecret if absent)
+  ansible.builtin.shell: |
+    set -e
+    if {{ kc_k }} -n {{ kamaji_console_namespace }} get secret kamaji-console >/dev/null 2>&1; then
+      echo "exists"; exit 0
+    fi
+    JWT=$(openssl rand -hex 32)
+    PW=$(openssl rand -base64 18)
+    {{ kc_k }} -n {{ kamaji_console_namespace }} create secret generic kamaji-console \
+      --from-literal=nextAuthUrl="https://clusters.{{ lab_domain }}" \
+      --from-literal=jwtSecret="$JWT" \
+      --from-literal=email="{{ kamaji_console_admin_email }}" \
+      --from-literal=password="$PW"
+    echo "created (admin password stored in secret kamaji-console/password)"
+  register: kc_secret
+  changed_when: "'created' in kc_secret.stdout"
+
+- name: Install/upgrade kamaji-console (ClusterIP; ingress OFF — Pomerium fronts it)
+  ansible.builtin.command: >
+    helm upgrade --install kamaji-console {{ kc_dir }}/kamaji-console-{{ kamaji_console_chart_version }}.tgz
+    -n {{ kamaji_console_namespace }}
+    --set existingSecret=kamaji-console
+    --set service.type=ClusterIP
+    --set ingress.enabled=false
+    --wait --timeout 6m
+  environment: { KUBECONFIG: "{{ kc_kubeconfig }}" }
+  changed_when: true
+
+- name: Wait for the console rollout
+  ansible.builtin.command: >
+    {{ kc_k }} -n {{ kamaji_console_namespace }} rollout status deploy/kamaji-console --timeout=180s
+  changed_when: false
+
+# Build the FULL in-cluster upstream URL here (name.ns.svc:port) — a name:port fragment concatenated
+# later produces an invalid host that crashloops Pomerium (`invalid port ":80.kamaji-system.svc"`).
+- name: Discover the console upstream URL
+  ansible.builtin.shell: |
+    {{ kc_k }} -n {{ kamaji_console_namespace }} get svc -l app.kubernetes.io/name=kamaji-console \
+      -o jsonpath='http://{.items[0].metadata.name}.{{ kamaji_console_namespace }}.svc:{.items[0].spec.ports[0].port}'
+  register: kc_upstream
+  changed_when: false
+
+# Add the Pomerium route (admin-only, websockets for the SPA). Patch the LIVE config directly so the
+# dynamically-added k8s-<tenant> kubectl routes are not clobbered; also patch pomerium-base for record.
+- name: Copy the pomerium route patcher
+  ansible.builtin.copy:
+    src: add-pomerium-route.py
+    dest: "{{ kc_dir }}/add-pomerium-route.py"
+    mode: "0755"
+
+- name: Add the clusters.<domain> route + restart Pomerium
+  ansible.builtin.shell: |
+    set -e
+    KUBECONFIG={{ kc_kubeconfig }} python3 {{ kc_dir }}/add-pomerium-route.py \
+      clusters "{{ kc_upstream.stdout }}" "{{ kamaji_console_admin_email }}"
+    {{ kc_k }} -n pomerium rollout restart deploy/pomerium
+    {{ kc_k }} -n pomerium rollout status deploy/pomerium --timeout=180s
+  changed_when: true
+
+- name: "Acceptance: console reachable through Pomerium (expect 302 → authenticate)"
+  ansible.builtin.shell: |
+    curl -sk -o /dev/null -w "%{http_code}" --resolve clusters.{{ lab_domain }}:443:{{ talos_ingress_lb_ip | default('172.18.200.10') }} \
+      --max-time 15 https://clusters.{{ lab_domain }}/
+  register: kc_probe
+  changed_when: false
+
+- ansible.builtin.debug:
+    msg: >-
+      kamaji-console up; Pomerium route clusters.{{ lab_domain }} -> {{ kc_upstream.stdout }}
+      (probe HTTP {{ kc_probe.stdout }}; 302 = Pomerium auth gate working). Admin password:
+      `kubectl -n {{ kamaji_console_namespace }} get secret kamaji-console -o jsonpath='{.data.password}' | base64 -d`
