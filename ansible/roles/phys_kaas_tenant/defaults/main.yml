@@ -1,0 +1,33 @@
+---
+# One tenant Kubernetes cluster on the KaaS layer, end to end (all validated 2026-07-28):
+#   CAPI cluster (Kamaji hosted CP + KubeVirt workers) → kubevirt-csi (tenant storage on ceph-block)
+#   → cloud-provider-kubevirt (tenant LB Services on LB-IPAM) → Pomerium kubectl route
+#   (impersonation; kubectl via pomerium-cli exec-credential).
+# Parameterize per tenant; run once per tenant cluster (tag kaas-tenant).
+kt_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+kt_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+kt_dir: "{{ talos_gen_dir }}/kaas/{{ kaas_tenant_name }}"
+
+kaas_tenant_name: "tenant-a"
+kaas_namespace: "kaas-capi"
+kaas_project_uuid: "22222222-3333-4444-5555-666666666666"
+# Tenant k8s tracks the newest quay.io/capk/ubuntu-2404-container-disk tag, NOT the mgmt version
+# (v1.34.1 is the newest as of 2026-07; no v1.35 image yet — see the kubelet-config strip in the
+# cluster template for what the resulting skew against Kamaji edge costs).
+kaas_k8s_version: "v1.34.1"
+kaas_cp_replicas: 2
+kaas_worker_replicas: 2
+kaas_worker_cores: 4
+kaas_worker_memory: "8Gi"
+# Operator debug key baked into worker nodes (CAPK skips its own keypair when Kamaji manages the
+# cluster — without this there is NO way into a node guest). Generated on the gateway if absent.
+kaas_debug_key: "{{ talos_gen_dir }}/kaas/debug-key"
+kaas_pod_cidr: "10.243.0.0/16"
+kaas_svc_cidr: "10.95.0.0/16"
+
+# kubevirt-csi: tenant PVCs land on this infra StorageClass (RBD). The CDI StorageProfile for it
+# must default to Filesystem/RWO (Block-mode CDI import is broken on Talos) — enforced by a task.
+kaas_infra_storageclass: "ceph-block"
+
+# Pomerium kubectl access (impersonation model). The admin user gets cluster-admin inside the tenant.
+kaas_admin_user: "{{ dex_user_email }}"

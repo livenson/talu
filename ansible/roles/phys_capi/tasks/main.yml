@@ -1,0 +1,40 @@
+---
+- name: Install clusterctl (pinned; WAN retries)
+  ansible.builtin.shell: |
+    set -e
+    if clusterctl version -o short 2>/dev/null | grep -q "{{ clusterctl_version }}"; then exit 0; fi
+    for i in 1 2 3 4 5; do
+      curl -fsSL --max-time 180 -o /tmp/clusterctl \
+        "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ clusterctl_version }}/clusterctl-linux-amd64" && break
+      sleep 5
+    done
+    chmod +x /tmp/clusterctl && sudo mv /tmp/clusterctl /usr/local/bin/clusterctl
+    clusterctl version -o short | grep -q "{{ clusterctl_version }}"
+  changed_when: true
+
+# clusterctl init is NOT idempotent (errors on an initialized cluster) — guard on capi-system.
+- name: Initialize Cluster API providers (kubeadm + kamaji + kubevirt + helm addon)
+  ansible.builtin.shell: |
+    if {{ capi_k }} get ns capi-system >/dev/null 2>&1; then
+      echo "already initialized"; exit 0
+    fi
+    for i in 1 2 3; do
+      clusterctl init --bootstrap kubeadm --control-plane kamaji \
+        --infrastructure kubevirt --addon helm && exit 0
+      sleep 10
+    done
+    exit 1
+  environment: { KUBECONFIG: "{{ capi_kubeconfig }}" }
+  register: capi_init
+  changed_when: "'already initialized' not in capi_init.stdout"
+
+- name: Wait for all provider controllers
+  ansible.builtin.command: >
+    {{ capi_k }} -n {{ item.ns }} rollout status deploy/{{ item.deploy }} --timeout=300s
+  loop:
+    - { ns: capi-system,                   deploy: capi-controller-manager }
+    - { ns: capi-kubeadm-bootstrap-system, deploy: capi-kubeadm-bootstrap-controller-manager }
+    - { ns: capk-system,                   deploy: capk-controller-manager }
+    - { ns: caaph-system,                  deploy: caaph-controller-manager }
+    - { ns: kamaji-system,                 deploy: capi-kamaji-controller-manager }
+  changed_when: false

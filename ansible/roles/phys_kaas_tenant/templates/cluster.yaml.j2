@@ -1,0 +1,190 @@
+# Rendered by phys_kaas_tenant from the VALIDATED reference
+# (ansible/roles/phys_kamaji/files/capi-tenant-reference.yaml — keep that file the annotated
+# source of truth; this template only parameterizes it).
+# CAPI tenant cluster with Kamaji hosted control plane + KubeVirt workers — VALIDATED REFERENCE
+# (phys lab, 2026-07-28: Cluster Available=True, worker joined, node Ready, workload serving).
+#
+# This is the phase-2 KaaS shape, kept as a validated reference until it graduates into a
+# `talu-cluster` chart / dedicated role. Prereqs on the management cluster:
+#   clusterctl init --bootstrap kubeadm --control-plane kamaji --infrastructure kubevirt --addon helm
+# (CAPI v1.13.4 / kamaji provider v0.20.0 / CAPK v0.11.2 / CAAPH v0.6.4 validated.)
+#
+# Version pin: tenant k8s tracks the NEWEST quay.io/capk/ubuntu-*-container-disk tag (v1.34.1 as of
+# 2026-07), NOT the management version. See the kubelet-config fix below for why the skew matters.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ kaas_namespace }}
+  labels:
+    talu.io/project-uuid: "{{ kaas_project_uuid }}"
+    # worker VMs (virt-launcher) live here — PSA baseline would reject them (lab-notes #5)
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: {{ kaas_tenant_name }}
+  namespace: {{ kaas_namespace }}
+  labels:
+    cni: cilium          # HelmChartProxy selector — Cilium auto-installs into the tenant
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: ["{{ kaas_pod_cidr }}"]      # distinct from the management pod/service CIDRs
+    services:
+      cidrBlocks: ["{{ kaas_svc_cidr }}"]
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1alpha2
+    kind: KamajiControlPlane
+    name: {{ kaas_tenant_name }}
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtCluster
+    name: {{ kaas_tenant_name }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: {{ kaas_tenant_name }}
+  namespace: {{ kaas_namespace }}
+  annotations:
+    # REQUIRED: Kamaji owns the control-plane endpoint; without this CAPK creates a competing
+    # LB Service. Side effect: CAPK skips ssh-keypair generation (no <cluster>-ssh-keys secret) —
+    # debug access into node guests comes from the users: block in KubeadmConfigTemplate below.
+    cluster.x-k8s.io/managed-by: kamaji
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha2
+kind: KamajiControlPlane
+metadata:
+  name: {{ kaas_tenant_name }}
+  namespace: {{ kaas_namespace }}
+spec:
+  dataStoreName: default
+  replicas: {{ kaas_cp_replicas }}            # v1alpha2: top-level `replicas`, NOT `deployment.replicas`
+  addons:
+    coreDNS: {}
+    kubeProxy: {}
+    konnectivity: {}     # CP->kubelet tunnel; lets workers stay behind masquerade NAT
+  kubelet:
+    cgroupfs: systemd
+    preferredAddressTypes: [InternalIP]
+  network:
+    serviceType: LoadBalancer   # LB-IPAM assigns the endpoint from the talu-ingress pool
+  version: {{ kaas_k8s_version }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: {{ kaas_tenant_name }}-md-0
+  namespace: {{ kaas_namespace }}
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: ssh
+      virtualMachineTemplate:
+        metadata:
+          namespace: {{ kaas_namespace }}
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: {{ kaas_worker_cores }}
+                memory:
+                  guest: {{ kaas_worker_memory }}
+                devices:
+                  networkInterfaceMultiqueue: true
+                  disks:
+                    - name: containervolume
+                      disk:
+                        bus: virtio
+              evictionStrategy: External
+              volumes:
+                - name: containervolume
+                  containerDisk:
+                    # newest capk containerdisk; check quay.io/capk tags before bumping k8s version
+                    image: quay.io/capk/ubuntu-2404-container-disk:{{ kaas_k8s_version }}
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: KubeadmConfigTemplate
+metadata:
+  name: {{ kaas_tenant_name }}-md-0
+  namespace: {{ kaas_namespace }}
+spec:
+  template:
+    spec:
+      # NOTE: never render `joinConfiguration.nodeRegistration: {}` — an empty nodeRegistration
+      # fails CRD validation and the MachineSet loops silently (error only in capi-controller logs).
+      preKubeadmCommands:
+        # (Retired 2026-07-28: a `resolvectl dns enp1s0 172.18.0.1` workaround lived here while VM
+        # guests couldn't reach ClusterIPs — root cause was full-coverage Cilium socket LB, fixed
+        # product-wide with socketLB.hostNamespaceOnly in components/infrastructure/cilium/values.yaml.
+        # Node guests now use the default KubeVirt-DHCP DNS = cluster DNS, like any pod.)
+        # Kamaji edge renders k8s-1.35 kubelet-config fields (memoryReservationPolicy,
+        # crashLoopBackOff.maxContainerRestartPeriod, imagePullCredentialsVerificationPolicy) that
+        # kubelet v1.34 REJECTS under strict decoding: kubeadm only warns, then the kubelet
+        # crashloops and the join dies at "kubelet not healthy after 4m0s". Strip them before every
+        # kubelet start. ALSO strip them once from the tenant kube-system/kubelet-config ConfigMap.
+        # Drop this whole block when capk ships a containerdisk matching Kamaji's config version.
+        # Deliberately printf, NOT a heredoc: this snippet transits several shell layers
+        # (ansible/ssh/cloud-init) and an unquoted heredoc delimiter cost an hour — $f expanded to
+        # empty at write time, leaving `sed` with no input file (ExecStartPre exit 4, kubelet never
+        # started). Keep it variable-free.
+        - printf "#!/bin/sh\nsed -i -e \"/^crashLoopBackOff:/,+1d\" -e \"/^imagePullCredentialsVerificationPolicy:/d\" -e \"/^memoryReservationPolicy:/d\" /var/lib/kubelet/config.yaml 2>/dev/null\nexit 0\n" > /usr/local/bin/talu-kubelet-config-fix.sh
+        - chmod +x /usr/local/bin/talu-kubelet-config-fix.sh
+        - mkdir -p /etc/systemd/system/kubelet.service.d
+        - printf "[Service]\nExecStartPre=-/usr/local/bin/talu-kubelet-config-fix.sh\n" > /etc/systemd/system/kubelet.service.d/10-talu-config-fix.conf
+        - systemctl daemon-reload
+      users:
+        - name: capk
+          sudo: "ALL=(ALL) NOPASSWD:ALL"
+          sshAuthorizedKeys:
+            - "{{ kaas_debug_pubkey }}"
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: {{ kaas_tenant_name }}-md-0
+  namespace: {{ kaas_namespace }}
+spec:
+  clusterName: {{ kaas_tenant_name }}
+  replicas: {{ kaas_worker_replicas }}
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      clusterName: {{ kaas_tenant_name }}
+      version: {{ kaas_k8s_version }}
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: KubeadmConfigTemplate
+          name: {{ kaas_tenant_name }}-md-0
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KubevirtMachineTemplate
+        name: {{ kaas_tenant_name }}-md-0
+---
+apiVersion: addons.cluster.x-k8s.io/v1alpha1
+kind: HelmChartProxy
+metadata:
+  name: cilium-tenant
+  namespace: {{ kaas_namespace }}
+spec:
+  clusterSelector:
+    matchLabels:
+      cni: cilium
+  repoURL: https://helm.cilium.io/
+  chartName: cilium
+  version: "{{ cilium_version }}"      # keep in lockstep with the management Cilium pin
+  releaseName: cilium
+  namespace: kube-system
+  valuesTemplate: |
+    ipam:
+      mode: cluster-pool
+      operator:
+        clusterPoolIPv4PodCIDRList: ["{{ kaas_pod_cidr }}"]
+    kubeProxyReplacement: false     # Kamaji ships kube-proxy as an addon

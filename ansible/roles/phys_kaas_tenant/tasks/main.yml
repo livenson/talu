@@ -1,0 +1,165 @@
+---
+- name: Ensure tenant work dir + debug keypair on the gateway
+  ansible.builtin.shell: |
+    mkdir -p {{ kt_dir }}
+    [ -f {{ kaas_debug_key }} ] || ssh-keygen -t ed25519 -N "" -f {{ kaas_debug_key }} -q
+  changed_when: false
+
+- name: Read the debug public key
+  ansible.builtin.command: "cat {{ kaas_debug_key }}.pub"
+  register: kt_pubkey
+  changed_when: false
+
+# ── 1. The CAPI cluster ─────────────────────────────────────────────────────────────────────
+- name: Render + apply the tenant cluster (Kamaji CP + KubeVirt workers)
+  vars:
+    kaas_debug_pubkey: "{{ kt_pubkey.stdout }}"
+  ansible.builtin.template:
+    src: cluster.yaml.j2
+    dest: "{{ kt_dir }}/cluster.yaml"
+    mode: "0644"
+
+- name: Apply the cluster manifest
+  ansible.builtin.command: "{{ kt_k }} apply -f {{ kt_dir }}/cluster.yaml"
+  changed_when: true
+
+- name: Wait for the tenant control plane (TCP Ready)
+  ansible.builtin.command: >
+    {{ kt_k }} -n {{ kaas_namespace }} wait
+    --for=jsonpath={.status.kubernetesResources.version.status}=Ready
+    tcp/{{ kaas_tenant_name }} --timeout=600s
+  changed_when: false
+
+- name: Wait for the Cluster to be Available (workers joined; ~2.5 min/worker when healthy)
+  ansible.builtin.command: >
+    {{ kt_k }} -n {{ kaas_namespace }} wait --for=condition=Available
+    cluster/{{ kaas_tenant_name }} --timeout=1200s
+  changed_when: false
+
+- name: Write the tenant admin kubeconfig
+  ansible.builtin.shell: |
+    {{ kt_k }} -n {{ kaas_namespace }} get secret {{ kaas_tenant_name }}-admin-kubeconfig \
+      -o jsonpath='{.data.admin\.conf}' | base64 -d > {{ kt_dir }}/kubeconfig
+    chmod 600 {{ kt_dir }}/kubeconfig
+  changed_when: false
+
+# ── 2. kubevirt-csi (controller infra-side; tenant never holds infra creds) ────────────────
+- name: Enforce Filesystem/RWO default on the infra StorageProfile (Block-mode CDI is broken on Talos)
+  ansible.builtin.command: >
+    {{ kt_k }} patch storageprofile {{ kaas_infra_storageclass }} --type merge
+    -p '{"spec":{"claimPropertySets":[{"accessModes":["ReadWriteOnce"],"volumeMode":"Filesystem"}]}}'
+  changed_when: true
+
+- name: Copy csi manifests to the gateway
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ kt_dir }}/{{ item }}"
+    mode: "0644"
+  loop: [csi-infra-rbac.yaml, csi-controller-infra.yaml, csi-tenant.yaml]
+
+- name: Apply csi infra RBAC + config + tenant-kubeconfig secret + controller
+  ansible.builtin.shell: |
+    set -e
+    # upstream RBAC hardcodes ns kvcluster in the ClusterRoleBinding subject
+    sed "s/namespace: kvcluster/namespace: {{ kaas_namespace }}/" {{ kt_dir }}/csi-infra-rbac.yaml \
+      | {{ kt_k }} -n {{ kaas_namespace }} apply -f -
+    {{ kt_k }} -n {{ kaas_namespace }} create configmap driver-config \
+      --from-literal=infraClusterNamespace={{ kaas_namespace }} \
+      --from-literal=infraClusterLabels=csi-driver/cluster={{ kaas_tenant_name }} \
+      --from-literal=infraStorageClassEnforcement="allowAll: true" \
+      --dry-run=client -o yaml | {{ kt_k }} apply -f -
+    # GOTCHA: the controller mounts secret "kvcluster-kubeconfig" (the VOLUME is named
+    # tenantcluster but the secretName differs), key "value".
+    {{ kt_k }} -n {{ kaas_namespace }} create secret generic kvcluster-kubeconfig \
+      --from-file=value={{ kt_dir }}/kubeconfig --dry-run=client -o yaml | {{ kt_k }} apply -f -
+    sed "s/namespace: kubevirt-csi-driver/namespace: {{ kaas_namespace }}/" {{ kt_dir }}/csi-controller-infra.yaml \
+      | {{ kt_k }} apply -f -
+    {{ kt_k }} -n {{ kaas_namespace }} rollout status deploy/kubevirt-csi-controller --timeout=300s
+  changed_when: true
+
+- name: Apply csi tenant side (node plugin + CSIDriver) and the StorageClass
+  ansible.builtin.shell: |
+    set -e
+    TK="kubectl --kubeconfig {{ kt_dir }}/kubeconfig"
+    $TK create namespace kubevirt-csi-driver --dry-run=client -o yaml | $TK apply -f -
+    # upstream bundle also ships a StorageClass with infraStorageClassName=standard and a
+    # VolumeSnapshotClass whose CRD we do not install — filter both out, then apply ours.
+    $TK apply -f {{ kt_dir }}/csi-tenant.yaml 2>&1 | grep -v "VolumeSnapshotClass" || true
+    $TK delete sc kubevirt --ignore-not-found
+    printf "apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: kubevirt\n  annotations:\n    storageclass.kubernetes.io/is-default-class: \"true\"\nprovisioner: csi.kubevirt.io\nparameters:\n  infraStorageClassName: {{ kaas_infra_storageclass }}\n  bus: scsi\n" | $TK apply -f -
+    $TK -n kubevirt-csi-driver rollout status ds/kubevirt-csi-node --timeout=420s
+  changed_when: true
+
+# ── 3. cloud-provider-kubevirt (tenant LoadBalancer Services → infra LB-IPAM) ──────────────
+- name: Create the CCM tenant-kubeconfig secret
+  ansible.builtin.shell: |
+    {{ kt_k }} -n {{ kaas_namespace }} create secret generic {{ kaas_tenant_name }}-ccm-kubeconfig \
+      --from-file=kubeconfig={{ kt_dir }}/kubeconfig --dry-run=client -o yaml | {{ kt_k }} apply -f -
+  changed_when: true
+
+- name: Render + apply the CCM
+  ansible.builtin.template:
+    src: ccm.yaml.j2
+    dest: "{{ kt_dir }}/ccm.yaml"
+    mode: "0644"
+
+- name: Apply CCM + wait
+  ansible.builtin.shell: |
+    {{ kt_k }} apply -f {{ kt_dir }}/ccm.yaml
+    {{ kt_k }} -n {{ kaas_namespace }} rollout status deploy/{{ kaas_tenant_name }}-cloud-provider --timeout=240s
+  changed_when: true
+
+# ── 4. Pomerium kubectl route (impersonation) ──────────────────────────────────────────────
+- name: Apply the in-tenant Pomerium RBAC (SA + impersonation + admin binding)
+  vars: {}
+  ansible.builtin.template:
+    src: tenant-k8s-rbac.yaml.j2
+    dest: "{{ kt_dir }}/tenant-k8s-rbac.yaml"
+    mode: "0644"
+
+- name: Apply RBAC in the tenant + extract the SA token and CA
+  ansible.builtin.shell: |
+    set -e
+    TK="kubectl --kubeconfig {{ kt_dir }}/kubeconfig"
+    $TK apply -f {{ kt_dir }}/tenant-k8s-rbac.yaml
+    sleep 3
+    $TK -n kube-system get secret pomerium-token -o jsonpath='{.data.token}' | base64 -d > {{ kt_dir }}/pomerium-token
+    {{ kt_k }} -n {{ kaas_namespace }} get secret {{ kaas_tenant_name }}-ca -o jsonpath='{.data.ca\.crt}' > {{ kt_dir }}/ca.b64
+    chmod 600 {{ kt_dir }}/pomerium-token
+  changed_when: true
+
+- name: Copy the pomerium route patcher
+  ansible.builtin.copy:
+    src: patch-pomerium-route.py
+    dest: "{{ kt_dir }}/patch-pomerium-route.py"
+    mode: "0755"
+
+- name: Patch the kubectl route into pomerium-base + pomerium-config, restart Pomerium
+  ansible.builtin.shell: |
+    set -e
+    EP="https://$({{ kt_k }} -n {{ kaas_namespace }} get tcp {{ kaas_tenant_name }} -o jsonpath='{.status.controlPlaneEndpoint}')"
+    KUBECONFIG={{ kt_kubeconfig }} python3 {{ kt_dir }}/patch-pomerium-route.py \
+      "{{ kaas_tenant_name }}" "$EP" "{{ kt_dir }}/pomerium-token" "{{ kt_dir }}/ca.b64" "{{ kaas_admin_user }}"
+    {{ kt_k }} -n pomerium rollout restart deploy/pomerium
+    {{ kt_k }} -n pomerium rollout status deploy/pomerium --timeout=180s
+  changed_when: true
+
+# ── 5. Acceptance ──────────────────────────────────────────────────────────────────────────
+- name: "Acceptance: nodes Ready, CSI smoke, route gated, impersonation chain"
+  ansible.builtin.shell: |
+    set -e
+    TK="kubectl --kubeconfig {{ kt_dir }}/kubeconfig"
+    READY=$($TK get nodes --no-headers | grep -c " Ready")
+    EP=$({{ kt_k }} -n {{ kaas_namespace }} get tcp {{ kaas_tenant_name }} -o jsonpath='{.status.controlPlaneEndpoint}')
+    TOKEN=$(cat {{ kt_dir }}/pomerium-token)
+    IMP=$(curl -sk --max-time 10 "https://$EP/api/v1/namespaces" \
+      -H "Authorization: Bearer $TOKEN" -H "Impersonate-User: {{ kaas_admin_user }}" \
+      | grep -o '"kind": *"NamespaceList"' | head -1)
+    echo "nodes-ready=$READY endpoint=$EP impersonation=${IMP:-FAILED}"
+    [ "$READY" -ge 1 ] && [ -n "$IMP" ]
+  register: kt_accept
+  changed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ kt_accept.stdout_lines }}"
