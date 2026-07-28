@@ -1,0 +1,312 @@
+# KaaS dashboard — health of the hosted-control-plane layer: the shared kamaji-etcd datastore
+# (widest blast radius), the kamaji operator, per-tenant control-plane pods, worker VMs, and the
+# kubevirt-csi path. Built on kamaji/etcd ServiceMonitors (kaas-scrape.yaml), kube-state-metrics,
+# cAdvisor, and virt-launcher pod state. Admin-only via Pomerium.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: talu-kaas
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  instanceSelector:
+    matchLabels:
+      talu.io/perses: operator
+  config:
+    display:
+      name: Talu — KaaS (tenant Kubernetes)
+    duration: 1h
+    panels:
+      inventory:
+        kind: Panel
+        spec:
+          display:
+            name: "Deployed tenant clusters"
+            description: "One row per tenant Kubernetes cluster (from kube-state-metrics CustomResourceState)."
+          plugin:
+            kind: Table
+            spec:
+              cellSettings: []
+              columnSettings:
+                - { name: name, header: "Cluster" }
+                - { name: version, header: "k8s version" }
+                - { name: ready, header: "CP status" }
+                - { name: endpoint, header: "API endpoint (internal)" }
+                - { name: datastore, header: "etcd datastore" }
+                - { name: value, hide: true }
+                - { name: timestamp, hide: true }
+                - { name: __name__, hide: true }
+                - { name: job, hide: true }
+                - { name: instance, hide: true }
+                - { name: namespace, hide: true }
+                - { name: service, hide: true }
+                - { name: container, hide: true }
+                - { name: endpoint_, hide: true }
+                - { name: pod, hide: true }
+                - { name: customresource_group, hide: true }
+                - { name: customresource_kind, hide: true }
+                - { name: customresource_version, hide: true }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu_kaas_cluster_info" }
+      workercount:
+        kind: Panel
+        spec:
+          display: { name: "Worker nodes ready / desired (per cluster)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu_kaas_workers_ready" }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu_kaas_workers_desired" }
+      access:
+        kind: Panel
+        spec:
+          display: { name: "How to connect" }
+          plugin:
+            kind: Markdown
+            spec:
+              # NOTE: this panel is admin-only (Pomerium-gated, like the whole operator dashboard), so
+              # showing the console credential here doesn't widen access. The password is a PLACEHOLDER
+              # in git — phys_kamaji_console substitutes the real value into the LIVE dashboard from the
+              # kamaji-console Secret. Never commit the plaintext.
+              text: |
+                ### Kamaji Console (web UI)
+
+                `https://clusters.<domain>/ui` — admin-only behind Pomerium (SSO). The console then has
+                its own login (it ships static credentials, no OIDC):
+
+                - **User:** `alice@talu.local`
+                - **Password:** `__KAMAJI_CONSOLE_PASSWORD__`
+
+                ---
+
+                ### Access a tenant cluster
+
+                Tenant Kubernetes APIs are **private** (LB-IPAM endpoints reachable only in-cluster
+                and by their own workers). Humans connect through **Pomerium** with SSO — no static
+                kubeconfig ever leaves the platform.
+
+                **One-time kubeconfig** (per cluster in the table above; `<domain>` is the lab domain):
+
+                ```
+                kubectl config set-cluster <cluster> --server=https://k8s-<cluster>.<domain>
+                kubectl config set-credentials <cluster>-pom \
+                  --exec-command=pomerium-cli \
+                  --exec-arg=k8s,exec-credential,https://k8s-<cluster>.<domain>
+                kubectl config set-context <cluster> --cluster=<cluster> --user=<cluster>-pom
+                kubectl config use-context <cluster>
+                ```
+
+                First `kubectl get` opens a browser to the IdP; the token is cached and refreshed.
+                What you can do is decided by **RBAC inside the tenant cluster** against your
+                impersonated identity (the Pomerium route sets `Impersonate-User`).
+
+                *Automation* uses an in-cluster ServiceAccount kubeconfig, not the browser flow.
+      etcdleader:
+        kind: Panel
+        spec:
+          display: { name: "kamaji-etcd: has leader (per member)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "etcd_server_has_leader{namespace=\"kamaji-system\"}" }
+      etcdfsync:
+        kind: Panel
+        spec:
+          display: { name: "kamaji-etcd: WAL fsync p99 (s) — datastore-on-RBD health" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "histogram_quantile(0.99, rate(etcd_disk_wal_fsync_duration_seconds_bucket{namespace=\"kamaji-system\"}[5m]))" }
+      etcddb:
+        kind: Panel
+        spec:
+          display: { name: "kamaji-etcd: db size (bytes) — all tenants share it" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "etcd_mvcc_db_total_size_in_bytes{namespace=\"kamaji-system\"}" }
+      reconciles:
+        kind: Panel
+        spec:
+          display: { name: "kamaji operator: reconciles + errors /s" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(rate(controller_runtime_reconcile_total{namespace=\"kamaji-system\"}[5m]))" }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum(rate(controller_runtime_reconcile_errors_total{namespace=\"kamaji-system\"}[5m]))" }
+      cpready:
+        kind: Panel
+        spec:
+          display: { name: "Tenant CP pods ready (per kaas namespace)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (namespace) (kube_pod_status_ready{namespace=~\"kaas-.*\", condition=\"true\", pod!~\"virt-launcher-.*\"})" }
+      cprestarts:
+        kind: Panel
+        spec:
+          display: { name: "Tenant CP container restarts (30m delta)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total{namespace=~\"kaas-.*|kamaji-system\"}[30m])) > 0" }
+      cpcpu:
+        kind: Panel
+        spec:
+          display: { name: "Tenant CP CPU (cores, per namespace)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (namespace) (rate(container_cpu_usage_seconds_total{namespace=~\"kaas-.*\", pod!~\"virt-launcher-.*\", container!=\"\"}[5m]))" }
+      cpmem:
+        kind: Panel
+        spec:
+          display: { name: "Tenant CP memory working set (per namespace)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (namespace) (container_memory_working_set_bytes{namespace=~\"kaas-.*\", pod!~\"virt-launcher-.*\", container!=\"\"})" }
+      workers:
+        kind: Panel
+        spec:
+          display: { name: "Tenant worker VMs running (virt-launcher, per namespace)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "sum by (namespace) (kube_pod_status_phase{namespace=~\"kaas-.*\", pod=~\"virt-launcher-.*\", phase=\"Running\"})" }
+      csihealth:
+        kind: Panel
+        spec:
+          display: { name: "kubevirt-csi controller available replicas" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "kube_deployment_status_replicas_available{namespace=~\"kaas-.*\", deployment=~\"kubevirt-csi-controller.*\"}" }
+    layouts:
+      - kind: Grid
+        spec:
+          display: { title: "Deployed clusters + access" }
+          items:
+            - x: 0
+              y: 0
+              width: 14
+              height: 8
+              content: { "$ref": "#/spec/panels/inventory" }
+            - x: 14
+              y: 0
+              width: 10
+              height: 8
+              content: { "$ref": "#/spec/panels/access" }
+            - x: 0
+              y: 8
+              width: 24
+              height: 6
+              content: { "$ref": "#/spec/panels/workercount" }
+      - kind: Grid
+        spec:
+          display: { title: "Datastore (shared kamaji-etcd — widest blast radius)" }
+          items:
+            - x: 0
+              y: 0
+              width: 8
+              height: 7
+              content: { "$ref": "#/spec/panels/etcdleader" }
+            - x: 8
+              y: 0
+              width: 8
+              height: 7
+              content: { "$ref": "#/spec/panels/etcdfsync" }
+            - x: 16
+              y: 0
+              width: 8
+              height: 7
+              content: { "$ref": "#/spec/panels/etcddb" }
+      - kind: Grid
+        spec:
+          display: { title: "Control planes + operator" }
+          items:
+            - x: 0
+              y: 0
+              width: 8
+              height: 7
+              content: { "$ref": "#/spec/panels/cpready" }
+            - x: 8
+              y: 0
+              width: 8
+              height: 7
+              content: { "$ref": "#/spec/panels/cprestarts" }
+            - x: 16
+              y: 0
+              width: 8
+              height: 7
+              content: { "$ref": "#/spec/panels/reconciles" }
+            - x: 0
+              y: 7
+              width: 8
+              height: 7
+              content: { "$ref": "#/spec/panels/cpcpu" }
+            - x: 8
+              y: 7
+              width: 8
+              height: 7
+              content: { "$ref": "#/spec/panels/cpmem" }
+      - kind: Grid
+        spec:
+          display: { title: "Workers + storage path" }
+          items:
+            - x: 0
+              y: 0
+              width: 12
+              height: 7
+              content: { "$ref": "#/spec/panels/workers" }
+            - x: 12
+              y: 0
+              width: 12
+              height: 7
+              content: { "$ref": "#/spec/panels/csihealth" }

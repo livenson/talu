@@ -13,6 +13,16 @@ kubeProxyReplacement: true
 k8sServiceHost: localhost
 k8sServicePort: 7445
 
+# REQUIRED on a VM platform: with KPR, Cilium translates ClusterIPs at the socket layer
+# (connect()/sendmsg()) — which VM-guest traffic never traverses (it enters as raw packets via the
+# virt-launcher tap + NAT). Full-coverage socket LB therefore blackholes EVERY ClusterIP — including
+# cluster DNS — from EVERY KubeVirt guest (packets leave the node untranslated, dst still the
+# ClusterIP; verified via cilium-dbg monitor on the phys lab, 2026-07-28). hostNamespaceOnly
+# restricts socket LB to the host netns so pod-netns traffic (and thus VM traffic) gets per-packet
+# translation at the veth instead.
+socketLB:
+  hostNamespaceOnly: true
+
 # Talos provides the cgroup mounts; Cilium must not try to mount them itself.
 cgroup:
   autoMount:

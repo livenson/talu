@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "talu-cluster values — the managed tenant-Kubernetes API",
+  "type": "object",
+  "required": ["name", "projectUuid", "debugPublicKey"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "maxLength": 40,
+      "description": "CAPI cluster name (DNS-1123 label)."
+    },
+    "projectUuid": {
+      "type": "string",
+      "description": "The manager join key stamped on every object (talu.io/project-uuid)."
+    },
+    "namespace": {
+      "type": "string",
+      "default": "kaas-capi",
+      "description": "Infra namespace holding the CAPI objects + worker VMs."
+    },
+    "kubernetesVersion": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "default": "v1.34.1",
+      "description": "Tenant k8s version; must have a matching quay.io/capk containerdisk tag."
+    },
+    "dataStore": {
+      "type": "string",
+      "default": "",
+      "description": "Kamaji DataStore name. Empty => '<name>-local' (dedicated etcd on local-path). 'default' = shared."
+    },
+    "podCidr": { "type": "string", "default": "10.243.0.0/16" },
+    "serviceCidr": { "type": "string", "default": "10.95.0.0/16" },
+    "controlPlane": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1, "default": 2 }
+      }
+    },
+    "workers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1, "default": 2 },
+        "cores": { "type": "integer", "minimum": 1, "default": 4 },
+        "memory": { "type": "string", "default": "8Gi" }
+      }
+    },
+    "healthCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "unreadyTimeout": { "type": "string", "default": "5m" }
+      }
+    },
+    "ciliumVersion": { "type": "string", "default": "1.19.6" },
+    "debugPublicKey": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Operator break-glass SSH public key baked into worker nodes (CAPK skips its own under managed-by: kamaji)."
+    }
+  }
+}

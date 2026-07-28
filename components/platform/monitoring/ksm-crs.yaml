@@ -14,7 +14,12 @@
 #   status.progress.totalBytes / .bytesDone -> 524288
 #
 # This file is merged into the kube-prometheus-stack values (see kustomization.yaml); it is applied
-# to the kube-state-metrics subchart, which needs both the CRS config and RBAC on velero.io.
+# to the kube-state-metrics subchart, which needs both the CRS config and RBAC on the CRD groups.
+# It ALSO covers the KaaS layer (Cluster API / Kamaji CRs → a live inventory of tenant clusters, gap
+# G6) — one file because helm REPLACES list values, so both CRS resource sets must share one list.
+# KaaS field paths verified on the phys lab (2026-07-28): TenantControlPlane spec.kubernetes.version,
+# status.controlPlaneEndpoint, status.kubernetesResources.version.status; Cluster status.phase;
+# MachineDeployment spec.replicas / status.readyReplicas / spec.clusterName.
 kube-state-metrics:
   rbac:
     extraRules:
@@ -26,6 +31,12 @@ kube-state-metrics:
           - podvolumerestores
           - schedules
           - backupstoragelocations
+        verbs: ["list", "watch"]
+      - apiGroups: ["cluster.x-k8s.io"]
+        resources: ["clusters", "machinedeployments"]
+        verbs: ["list", "watch"]
+      - apiGroups: ["kamaji.clastix.io"]
+        resources: ["tenantcontrolplanes"]
         verbs: ["list", "watch"]
   customResourceState:
     enabled: true
@@ -127,3 +138,61 @@ kube-state-metrics:
                   type: Gauge
                   gauge:
                     path: [status, warnings]
+          # ===== KaaS layer — a live inventory of tenant Kubernetes clusters (gap G6) ===========
+          # --- the inventory row: one *_cluster_info per tenant control plane -------------------
+          - groupVersionKind:
+              group: kamaji.clastix.io
+              version: v1alpha1
+              kind: TenantControlPlane
+            metricNamePrefix: talu_kaas
+            labelsFromPath:
+              name: [metadata, name]
+              namespace: [metadata, namespace]
+            metrics:
+              - name: cluster_info
+                help: "Tenant Kubernetes cluster — version, API endpoint, readiness (value always 1)."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      version: [spec, kubernetes, version]
+                      endpoint: [status, controlPlaneEndpoint]
+                      ready: [status, kubernetesResources, version, status]
+                      datastore: [spec, dataStore]
+          # --- CAPI cluster phase --------------------------------------------------------------
+          - groupVersionKind:
+              group: cluster.x-k8s.io
+              version: v1beta1
+              kind: Cluster
+            metricNamePrefix: talu_kaas
+            labelsFromPath:
+              name: [metadata, name]
+              namespace: [metadata, namespace]
+            metrics:
+              - name: cluster_phase_info
+                help: "CAPI Cluster phase (value always 1)."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      phase: [status, phase]
+          # --- worker counts (desired vs ready) ------------------------------------------------
+          - groupVersionKind:
+              group: cluster.x-k8s.io
+              version: v1beta1
+              kind: MachineDeployment
+            metricNamePrefix: talu_kaas
+            labelsFromPath:
+              cluster: [spec, clusterName]
+              namespace: [metadata, namespace]
+            metrics:
+              - name: workers_desired
+                help: "Desired worker Machines."
+                each:
+                  type: Gauge
+                  gauge: { path: [spec, replicas] }
+              - name: workers_ready
+                help: "Ready worker Machines."
+                each:
+                  type: Gauge
+                  gauge: { path: [status, readyReplicas] }

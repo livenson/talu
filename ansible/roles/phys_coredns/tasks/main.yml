@@ -1,0 +1,36 @@
+---
+# Harden in-cluster resolution of the access domain (<floating-ip>.sslip.io). The lab's upstream DNS
+# is flaky; Pomerium's OIDC back-channel to Dex (id.<domain>) then 500s on the login callback with
+# "server misbehaving". Answering these names locally in CoreDNS removes the upstream dependency.
+# CoreDNS has the `reload` plugin, so an invalid Corefile is rejected and the old one kept (no outage).
+- name: Copy the CoreDNS sslip.io hardener
+  ansible.builtin.copy:
+    src: harden-sslip.py
+    dest: "{{ talos_gen_dir }}/harden-sslip.py"
+    mode: "0755"
+
+- name: Answer *.{{ lab_domain }} locally in CoreDNS (A -> floating IP, AAAA -> NODATA)
+  ansible.builtin.command: >
+    python3 {{ talos_gen_dir }}/harden-sslip.py {{ lab_domain }} {{ lab_floating_ip }}
+  environment: { KUBECONFIG: "{{ talos_gen_dir }}/kubeconfig" }
+  register: cdns_patch
+  changed_when: "'patched' in cdns_patch.stdout"
+
+- name: Wait for CoreDNS hot-reload
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig -n kube-system rollout status ds/coredns --timeout=60s
+  register: cdns_roll
+  changed_when: false
+  failed_when: false   # coredns is a Deployment on some builds; the reload plugin picks up the change regardless
+
+- name: "Acceptance: id.{{ lab_domain }} resolves to the floating IP in-cluster"
+  ansible.builtin.shell: |
+    for i in 1 2 3 4 5; do
+      ip=$(kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig -n kube-system \
+        run cdns-check-$RANDOM --rm -i --restart=Never --image=busybox --command -- \
+        nslookup id.{{ lab_domain }} 10.96.0.10 2>/dev/null | awk '/^Address: /{print $2}' | tail -1)
+      [ "$ip" = "{{ lab_floating_ip }}" ] && { echo "id.{{ lab_domain }} -> $ip (OK)"; exit 0; }
+      sleep 5
+    done
+    echo "resolution did not converge (last=$ip)"; exit 1
+  changed_when: false

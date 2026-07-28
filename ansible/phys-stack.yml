@@ -20,8 +20,16 @@
     - { role: phys_tetragon,   tags: [tetragon, security] }
     - { role: phys_kyverno,    tags: [kyverno, security, policy] }
     - { role: phys_ingress,    tags: [ingress, lb] }
+    # Harden in-cluster resolution of the access domain before the OIDC access plane needs it.
+    - { role: phys_coredns,    tags: [coredns, dns, access] }
     - { role: phys_identity,   tags: [identity, access] }
     - { role: phys_portal,     tags: [portal, ui] }
     - { role: phys_pkg_repo,   tags: [pkg-repo, packages] }
     - { role: phys_tenancy,    tags: [tenancy, tenants] }
+    - { role: phys_kamaji,     tags: [kamaji, kaas] }
+    - { role: phys_kamaji_console, tags: [kamaji-console, kaas, ui] }
+    - { role: phys_capi,       tags: [capi, kaas] }
+    # per-tenant KaaS cluster (CAPI cluster + kubevirt-csi + CCM + Pomerium kubectl route) —
+    # opt-in: run with --tags kaas-tenant (and per-tenant vars) rather than in the default sweep.
+    - { role: phys_kaas_tenant, tags: [kaas-tenant, never] }
     - { role: phys_backup,     tags: [backup, dr] }

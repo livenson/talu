@@ -74,6 +74,12 @@ talos_nodes:
 kube_prometheus_stack_version: "87.19.1"
 perses_operator_version: "0.4.0"
 
+# ── KaaS (hosted tenant control planes) ──────────────────────────────────────────────────────
+# Clastix ships OSS Kamaji as a floating "edge" channel only (stable charts are subscription) —
+# "0.0.0+latest" is the channel pin, not a version. Validated 2026-07-27 on k8s v1.35.7
+# (management >= 1.33 required; tenant CP v1.35.7 Ready in ~90s, kubectl smoke green).
+kamaji_chart_version: "0.0.0+latest"
+
 # ── Identity / access plane ──────────────────────────────────────────────────────────────────
 # The lab's public NAT IP — SITE-SPECIFIC. Placeholder uses the RFC 5737 documentation range; set the
 # real IP in your own (uncommitted) inventory/group_vars, or export LAB_FLOATING_IP, so it never lands

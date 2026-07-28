@@ -1,0 +1,13 @@
+---
+# Cluster API stack for the KaaS layer: core CAPI + kubeadm bootstrap + Kamaji control-plane
+# provider + KubeVirt infrastructure provider (CAPK) + helm addon provider (CAAPH).
+# Validated 2026-07-28 (CAPI v1.13.4 / kamaji v0.20.0 / CAPK v0.11.2 / CAAPH v0.6.4).
+capi_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+capi_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+
+# clusterctl release pin. clusterctl init then resolves provider versions from their release
+# channels; the ones above are what "latest" resolved to at validation time — recorded for repro,
+# not enforced (pin per-provider with clusterctl.yaml overrides if drift ever bites).
+clusterctl_version: "v1.13.4"
+
+# The PodSecurity "restricted:latest" WARNINGS during init are expected (Talos enforces baseline).

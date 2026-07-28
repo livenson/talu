@@ -1,0 +1,40 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ kamaji_demo_namespace }}
+  labels:
+    talu.io/project-uuid: "{{ kamaji_demo_project_uuid }}"
+---
+apiVersion: kamaji.clastix.io/v1alpha1
+kind: TenantControlPlane
+metadata:
+  name: {{ kamaji_demo_name }}
+  namespace: {{ kamaji_demo_namespace }}
+  labels:
+    talu.io/project-uuid: "{{ kamaji_demo_project_uuid }}"
+spec:
+  dataStore: default
+  controlPlane:
+    deployment:
+      replicas: 2
+    service:
+      # LB-IPAM hands out the endpoint from the talu-ingress pool; humans later come in via a
+      # Pomerium route instead — workers (in-cluster KubeVirt VMs) reach it via konnectivity/ClusterIP.
+      serviceType: LoadBalancer
+  kubernetes:
+    version: {{ kamaji_demo_k8s_version }}
+    kubelet:
+      cgroupfs: systemd
+  # networkProfile.port MUST be set explicitly: the edge build renders the Service with port 0
+  # without it (reconcile loops with "Invalid value: 0"), and it cannot be ADDED by a later patch —
+  # a CRD CEL rule ("LoadBalancerClass cannot be set or unset at runtime") rejects introducing the
+  # networkProfile key on a live TCP. Delete + recreate if you ever hit this.
+  networkProfile:
+    port: 6443
+  addons:
+    coreDNS: {}
+    kubeProxy: {}
+    konnectivity:
+      server:
+        port: 8132

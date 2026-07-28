@@ -1,0 +1,119 @@
+# kubevirt cloud-controller-manager for one tenant cluster — LB controller ONLY (workers are not
+# provisioned with --cloud-provider=external, so instance management stays off).
+# VALIDATED 2026-07-28: tenant LB Service -> infra Service -> LB-IPAM IP -> HTTP 200.
+# GOTCHAS baked in: the controller is named service-lb-controller (not "service") in this build, and
+# --cluster-name MUST match the CAPI cluster name — the default "kubernetes" renders an infra-Service
+# selector that matches nothing (silent empty endpoints). cluster-name only applies to NEWLY created
+# infra Services.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloud-controller-manager
+  namespace: {{ kaas_namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kccm
+  namespace: {{ kaas_namespace }}
+rules:
+  - apiGroups: [kubevirt.io]
+    resources: [virtualmachines]
+    verbs: [get, watch, list]
+  - apiGroups: [kubevirt.io]
+    resources: [virtualmachineinstances]
+    verbs: [get, watch, list, update]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kccm
+  namespace: {{ kaas_namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kccm
+subjects:
+  - kind: ServiceAccount
+    name: cloud-controller-manager
+    namespace: {{ kaas_namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ kaas_tenant_name }}-cloud-config
+  namespace: {{ kaas_namespace }}
+data:
+  cloud-config: |
+    loadBalancer:
+      enabled: true
+      creationPollInterval: 5
+    instancesV2:
+      enabled: false
+    namespace: {{ kaas_namespace }}
+    infraLabels:
+      cluster.x-k8s.io/cluster-name: {{ kaas_tenant_name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ kaas_tenant_name }}-cloud-provider
+  namespace: {{ kaas_namespace }}
+  labels:
+    k8s-app: kubevirt-cloud-controller-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: kubevirt-cloud-controller-manager
+      cluster: {{ kaas_tenant_name }}
+  template:
+    metadata:
+      labels:
+        k8s-app: kubevirt-cloud-controller-manager
+        cluster: {{ kaas_tenant_name }}
+    spec:
+      serviceAccountName: cloud-controller-manager
+      containers:
+        - name: kubevirt-cloud-controller-manager
+          command: [/bin/kubevirt-cloud-controller-manager]
+          args:
+            - --cloud-provider=kubevirt
+            - --cloud-config=/etc/cloud/cloud-config
+            - --kubeconfig=/etc/kubernetes/kubeconfig/value
+            - --controllers=service-lb-controller
+            - --authentication-skip-lookup=true
+            - --cluster-name={{ kaas_tenant_name }}
+          image: quay.io/kubevirt/kubevirt-cloud-controller-manager:main
+          resources:
+            requests:
+              cpu: 100m
+          volumeMounts:
+            - mountPath: /etc/kubernetes/kubeconfig
+              name: kubeconfig
+              readOnly: true
+            - mountPath: /etc/cloud
+              name: cloud-config
+              readOnly: true
+      volumes:
+        - configMap:
+            name: {{ kaas_tenant_name }}-cloud-config
+          name: cloud-config
+        - secret:
+            secretName: {{ kaas_tenant_name }}-ccm-kubeconfig
+            items:
+              - key: kubeconfig
+                path: value
+          name: kubeconfig

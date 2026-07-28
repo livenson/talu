@@ -1,0 +1,74 @@
+---
+- name: Ensure the kamaji work dir on the gateway
+  ansible.builtin.file:
+    path: "{{ kam_dir }}"
+    state: directory
+    mode: "0755"
+
+# Prereqs this role assumes (all earlier in phys-stack): cert-manager (webhook certs), ceph-block
+# default SC (etcd PVCs), Cilium LB-IPAM (tenant API endpoint). Images pull via the mirror
+# (docker.io/clastix/*). The chart itself comes over the flaky WAN → pull to a local tgz with
+# retries, then install from the file (same lesson as the Talos-era helm pulls).
+- name: Pull the Kamaji edge chart to a local tgz (WAN retries)
+  ansible.builtin.shell: |
+    helm repo add clastix https://clastix.github.io/charts >/dev/null 2>&1 || true
+    helm repo update clastix >/dev/null
+    for i in 1 2 3 4 5; do
+      helm pull clastix/kamaji --version "{{ kamaji_chart_version }}" -d {{ kam_dir }} && exit 0
+      sleep 5
+    done
+    exit 1
+  args: { creates: "{{ kam_dir }}/kamaji-{{ kamaji_chart_version }}.tgz" }
+
+- name: Install/upgrade Kamaji (default kamaji-etcd datastore on the default SC)
+  ansible.builtin.command: >
+    helm upgrade --install kamaji {{ kam_dir }}/kamaji-{{ kamaji_chart_version }}.tgz
+    --namespace kamaji-system --create-namespace --wait --timeout 8m
+  environment: { KUBECONFIG: "{{ kam_kubeconfig }}" }
+  changed_when: true
+
+- name: Wait for the default DataStore to be Ready
+  ansible.builtin.command: >
+    {{ kam_k }} wait --for=jsonpath={.status.ready}=true datastore/default --timeout=300s
+  changed_when: false
+
+- name: Render the demo TenantControlPlane
+  ansible.builtin.template:
+    src: tcp-demo.yaml.j2
+    dest: "{{ kam_dir }}/tcp-demo.yaml"
+    mode: "0644"
+  when: kamaji_demo_tcp
+
+- name: Apply the demo TenantControlPlane
+  ansible.builtin.command: "{{ kam_k }} apply -f {{ kam_dir }}/tcp-demo.yaml"
+  when: kamaji_demo_tcp
+  changed_when: true
+
+- name: Wait for the demo tenant control plane to be Ready
+  ansible.builtin.command: >
+    {{ kam_k }} -n {{ kamaji_demo_namespace }} wait
+    --for=jsonpath={.status.kubernetesResources.version.status}=Ready
+    tcp/{{ kamaji_demo_name }} --timeout=300s
+  when: kamaji_demo_tcp
+  changed_when: false
+
+# kubectl smoke against the HOSTED control plane: extract the admin kubeconfig and do a write+read.
+# This proves the whole path (LB-IPAM endpoint → apiserver pods → kamaji-etcd), not just pod health.
+- name: Smoke-test kubectl against the tenant control plane
+  ansible.builtin.shell: |
+    set -e
+    {{ kam_k }} -n {{ kamaji_demo_namespace }} get secret {{ kamaji_demo_name }}-admin-kubeconfig \
+      -o jsonpath='{.data.admin\.conf}' | base64 -d > {{ kam_dir }}/{{ kamaji_demo_name }}-kubeconfig
+    KC="kubectl --kubeconfig {{ kam_dir }}/{{ kamaji_demo_name }}-kubeconfig"
+    $KC version -o yaml | grep gitVersion | tail -1
+    $KC create configmap talu-kaas-smoke --from-literal=hello=world --dry-run=none -o name
+    $KC delete configmap talu-kaas-smoke
+    echo "endpoint: $({{ kam_k }} -n {{ kamaji_demo_namespace }} get tcp {{ kamaji_demo_name }} \
+      -o jsonpath='{.status.controlPlaneEndpoint}')"
+  when: kamaji_demo_tcp
+  register: kam_smoke
+  changed_when: true
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ kam_smoke.stdout_lines | default(['demo TCP disabled']) }}"

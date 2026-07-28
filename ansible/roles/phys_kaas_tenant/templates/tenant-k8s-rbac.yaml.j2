@@ -1,0 +1,56 @@
+# Applied INSIDE the tenant cluster: Pomerium's kubectl-access plumbing + the first admin binding.
+# Two-layer model (validated 2026-07-28): Pomerium route policy gates WHO can reach the API;
+# this RBAC decides WHAT the impersonated identity can do. The pomerium SA token alone is
+# near-powerless (403 on everything except impersonate) — the power comes only via
+# Impersonate-User headers that Pomerium sets from the authenticated session.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pomerium
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pomerium-impersonation
+rules:
+  - apiGroups: [""]
+    resources: [users]
+    verbs: [impersonate]
+  - apiGroups: [""]
+    resources: [groups]
+    verbs: [impersonate]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pomerium-impersonation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pomerium-impersonation
+subjects:
+  - kind: ServiceAccount
+    name: pomerium
+    namespace: kube-system
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pomerium-token
+  namespace: kube-system
+  annotations:
+    kubernetes.io/service-account.name: pomerium
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: talu-admin-{{ kaas_admin_user | regex_replace('[@.]', '-') }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: User
+    name: {{ kaas_admin_user }}

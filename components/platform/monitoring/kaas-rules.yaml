@@ -1,0 +1,60 @@
+# KaaS alert rules — the hosted-control-plane layer's failure modes, ordered by blast radius.
+# The shared kamaji-etcd is the widest: losing its quorum stalls EVERY tenant control plane at once
+# (the PoC datastore compromise — per-tenant etcd removes that coupling).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: talu-kaas-rules
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  groups:
+    - name: talu-kaas
+      rules:
+        - alert: KamajiEtcdNoLeader
+          expr: max(etcd_server_has_leader{namespace="kamaji-system"}) == 0
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "kamaji-etcd has no leader — ALL tenant control planes are stalled"
+        - alert: KamajiEtcdMemberDown
+          # count members actually reporting rather than relying on the job label (job = Service name)
+          expr: count(etcd_server_has_leader{namespace="kamaji-system"} == 1) < 3
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "kamaji-etcd is running degraded ({{ $value }}/3 members up)"
+        - alert: KamajiEtcdSlowFsync
+          expr: histogram_quantile(0.99, rate(etcd_disk_wal_fsync_duration_seconds_bucket{namespace="kamaji-system"}[5m])) > 0.1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "kamaji-etcd WAL fsync p99 > 100ms — datastore on RBD is struggling; move to local storage"
+        - alert: KamajiReconcileErrors
+          expr: sum(rate(controller_runtime_reconcile_errors_total{namespace="kamaji-system"}[5m])) > 0.1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "kamaji operator reconcile errors sustained — a TenantControlPlane is likely stuck (check kamaji logs)"
+        - alert: TenantControlPlaneUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{namespace=~"kaas-.*", deployment!~"kubevirt-csi-.*|.*cloud-provider.*"} == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "tenant control plane {{ $labels.namespace }}/{{ $labels.deployment }} has 0 available replicas"
+        - alert: KaasCsiControllerDown
+          expr: kube_deployment_status_replicas_available{namespace=~"kaas-.*", deployment=~"kubevirt-csi-controller.*"} == 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "kubevirt-csi controller down in {{ $labels.namespace }} — tenant volume provision/attach stalled"
+        - alert: KaasWorkerVMNotReady
+          expr: |
+            sum by (namespace) (kube_pod_status_ready{namespace=~"kaas-.*", condition="true", pod=~"virt-launcher-.*"})
+            < sum by (namespace) (kube_pod_info{namespace=~"kaas-.*", pod=~"virt-launcher-.*"})
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.namespace }} has tenant worker VM(s) not Ready for 10m"

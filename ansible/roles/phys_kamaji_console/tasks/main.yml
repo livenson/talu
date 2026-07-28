@@ -1,0 +1,109 @@
+---
+- name: Ensure work dir
+  ansible.builtin.file: { path: "{{ kc_dir }}", state: directory, mode: "0755" }
+
+- name: Pull the kamaji-console chart (WAN retries)
+  ansible.builtin.shell: |
+    helm repo add clastix https://clastix.github.io/charts >/dev/null 2>&1 || true
+    helm repo update clastix >/dev/null
+    for i in 1 2 3 4 5; do
+      helm pull clastix/kamaji-console --version {{ kamaji_console_chart_version }} -d {{ kc_dir }} && exit 0
+      sleep 5
+    done
+    exit 1
+  args: { creates: "{{ kc_dir }}/kamaji-console-{{ kamaji_console_chart_version }}.tgz" }
+
+# Console credentials: generate once (idempotent — reuse if the Secret already exists so a re-run
+# does not rotate the admin password). Pomerium is the outer gate; this is the inner NextAuth login.
+- name: Create the kamaji-console Secret (generate password + jwtSecret if absent)
+  ansible.builtin.shell: |
+    set -e
+    if {{ kc_k }} -n {{ kamaji_console_namespace }} get secret kamaji-console >/dev/null 2>&1; then
+      echo "exists"; exit 0
+    fi
+    JWT=$(openssl rand -hex 32)
+    PW=$(openssl rand -base64 18)
+    # The console (Auth.js v5) consumes the secret via envFrom, so the KEYS are the env var names.
+    # They MUST be the exact UPPERCASE names the app validates (NEXTAUTH_URL/JWT_SECRET/ADMIN_*), not
+    # the camelCase field names from the chart values doc. SVELTOS_* are optional and omitted.
+    # (Keep comments apostrophe-free: ansible split_args reads a stray "'" as an unbalanced quote.)
+    {{ kc_k }} -n {{ kamaji_console_namespace }} create secret generic kamaji-console \
+      --from-literal=NEXTAUTH_URL="https://clusters.{{ lab_domain }}/ui" \
+      --from-literal=JWT_SECRET="$JWT" \
+      --from-literal=ADMIN_EMAIL="{{ kamaji_console_admin_email }}" \
+      --from-literal=ADMIN_PASSWORD="$PW"
+    echo "created (admin password stored in secret kamaji-console/ADMIN_PASSWORD)"
+  register: kc_secret
+  changed_when: "'created' in kc_secret.stdout"
+
+- name: Install/upgrade kamaji-console (ClusterIP; ingress OFF — Pomerium fronts it)
+  ansible.builtin.command: >
+    helm upgrade --install kamaji-console {{ kc_dir }}/kamaji-console-{{ kamaji_console_chart_version }}.tgz
+    -n {{ kamaji_console_namespace }}
+    --set credentialsSecret.generate=false
+    --set credentialsSecret.name=kamaji-console
+    --set service.type=ClusterIP
+    --set ingress.enabled=false
+    --wait --timeout 6m
+  environment: { KUBECONFIG: "{{ kc_kubeconfig }}" }
+  changed_when: true
+
+- name: Wait for the console rollout
+  ansible.builtin.command: >
+    {{ kc_k }} -n {{ kamaji_console_namespace }} rollout status deploy/kamaji-console --timeout=180s
+  changed_when: false
+
+# Build the FULL in-cluster upstream URL here (name.ns.svc:port) — a name:port fragment concatenated
+# later produces an invalid host that crashloops Pomerium (`invalid port ":80.kamaji-system.svc"`).
+- name: Discover the console upstream URL
+  ansible.builtin.shell: |
+    {{ kc_k }} -n {{ kamaji_console_namespace }} get svc -l app.kubernetes.io/name=kamaji-console \
+      -o jsonpath='http://{.items[0].metadata.name}.{{ kamaji_console_namespace }}.svc:{.items[0].spec.ports[0].port}'
+  register: kc_upstream
+  changed_when: false
+
+# Add the Pomerium route (admin-only, websockets for the SPA). Patch the LIVE config directly so the
+# dynamically-added k8s-<tenant> kubectl routes are not clobbered; also patch pomerium-base for record.
+- name: Copy the pomerium route patcher
+  ansible.builtin.copy:
+    src: add-pomerium-route.py
+    dest: "{{ kc_dir }}/add-pomerium-route.py"
+    mode: "0755"
+
+- name: Add the clusters.<domain> route + restart Pomerium
+  ansible.builtin.shell: |
+    set -e
+    KUBECONFIG={{ kc_kubeconfig }} python3 {{ kc_dir }}/add-pomerium-route.py \
+      clusters "{{ kc_upstream.stdout }}" "{{ kamaji_console_admin_email }}"
+    {{ kc_k }} -n pomerium rollout restart deploy/pomerium
+    {{ kc_k }} -n pomerium rollout status deploy/pomerium --timeout=180s
+  changed_when: true
+
+- name: "Acceptance: console reachable through Pomerium (expect 302 → authenticate)"
+  ansible.builtin.shell: |
+    curl -sk -o /dev/null -w "%{http_code}" --resolve clusters.{{ lab_domain }}:443:{{ talos_ingress_lb_ip | default('172.18.200.10') }} \
+      --max-time 15 https://clusters.{{ lab_domain }}/
+  register: kc_probe
+  changed_when: false
+
+# Convenience: surface the console admin password on the (admin-only, Pomerium-gated) KaaS dashboard
+# so an operator need not use kubectl. The committed dashboard carries a __KAMAJI_CONSOLE_PASSWORD__
+# placeholder; substitute the real value into the LIVE PersesDashboard only (never into git). No-op if
+# the dashboard is not present yet (monitoring applies it).
+- name: Inject the console password into the live KaaS dashboard (if present)
+  ansible.builtin.shell: |
+    set -e
+    {{ kc_k }} -n monitoring get persesdashboard talu-kaas >/dev/null 2>&1 || { echo "no dashboard yet"; exit 0; }
+    export PW=$({{ kc_k }} -n {{ kamaji_console_namespace }} get secret kamaji-console -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d)
+    {{ kc_k }} -n monitoring get persesdashboard talu-kaas -o json \
+      | python3 -c "import json,sys,os; sys.stdout.write(json.dumps(json.load(sys.stdin)).replace('__KAMAJI_CONSOLE_PASSWORD__', os.environ['PW']))" \
+      | {{ kc_k }} apply -f - >/dev/null
+    echo "console password injected into talu-kaas dashboard"
+  register: kc_dash
+  changed_when: "'injected' in kc_dash.stdout"
+
+- ansible.builtin.debug:
+    msg: >-
+      kamaji-console at https://clusters.{{ lab_domain }}/ui (app uses a /ui basePath — bare / is a
+      404). Route -> {{ kc_upstream.stdout }} (probe HTTP {{ kc_probe.stdout }}; 302 = auth gate).
+      Admin password: `kubectl -n {{ kamaji_console_namespace }} get secret kamaji-console -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d`

@@ -1,0 +1,38 @@
+# talu-cluster — a managed tenant Kubernetes cluster as a values file.
+# Required: name, projectUuid, debugPublicKey. Everything else has a validated default.
+
+# Cluster identity (name is the CAPI cluster name; projectUuid is the manager join key).
+name: ""
+projectUuid: ""
+namespace: kaas-capi
+
+# Tenant Kubernetes version — tracks the newest quay.io/capk/ubuntu-2404-container-disk tag, NOT the
+# management version (no v1.35 capk image yet; the skew against Kamaji edge is handled in-template).
+kubernetesVersion: v1.34.1
+
+# Datastore. Empty => "<name>-local", a DEDICATED kamaji-etcd on local-path (~50x lower fsync than
+# the shared RBD default). That DataStore must exist before this cluster reconciles (kamaji-etcd helm
+# release) — see README. Set to "default" to use the shared datastore for throwaway clusters.
+dataStore: ""
+
+# Distinct from the management pod/service CIDRs and from other tenants'.
+podCidr: 10.243.0.0/16
+serviceCidr: 10.95.0.0/16
+
+controlPlane:
+  replicas: 2          # spread across nodes → survives a management-node loss
+
+workers:
+  replicas: 2
+  cores: 4
+  memory: 8Gi
+
+healthCheck:
+  unreadyTimeout: 5m   # node NotReady this long → MachineHealthCheck replaces the Machine
+
+# Keep in lockstep with the management Cilium pin.
+ciliumVersion: "1.19.6"
+
+# Operator break-glass SSH key baked into worker nodes. REQUIRED: CAPK skips its own keypair when
+# Kamaji manages the cluster, so this is the only way into a node guest.
+debugPublicKey: ""

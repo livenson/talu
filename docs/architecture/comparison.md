@@ -73,7 +73,11 @@ migration, containerDisks/DataVolumes. Cilium is usable across all of them.
   **DRBD + LINSTOR**, with DR via a **stretched LINSTOR cluster** (DRBD-replicated volumes across sites).
   Talu deliberately stops at the chart+HelmRelease core Cozystack is *built on*
   ([`../../components/tenancy/`](../../components/tenancy/)), adds an access plane and policy layer, and
-  leaves the portal to whatever external system drives it. Talu is lighter and orchestrator-agnostic;
+  leaves the portal to whatever external system drives it. **Managed tenant Kubernetes is the one place
+  Talu adopts Cozystack's machinery directly**: the same Cluster API + Kamaji hosted-control-plane +
+  KubeVirt-worker path, including per-tenant etcd on local storage — but exposed as a values-file chart
+  ([`kaas.md`](kaas.md), [`../../components/tenancy/cluster-chart/`](../../components/tenancy/cluster-chart/)),
+  not behind an aggregation apiserver. Talu is lighter and orchestrator-agnostic;
   Cozystack is a fuller product (now CNCF Sandbox) you adopt whole.
 - **Harvester** (commercially **SUSE Virtualization**) is a **turnkey HCI appliance** — it ships its own
   immutable OS (**SUSE Linux Micro / Elemental**, RKE2-orchestrated) + **Longhorn** storage + a built-in

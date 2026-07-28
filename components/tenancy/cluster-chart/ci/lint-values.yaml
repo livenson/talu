@@ -1,0 +1,4 @@
+# Minimal values that satisfy the schema, for `helm template`/lint in CI.
+name: tenant-a
+projectUuid: "22222222-3333-4444-5555-666666666666"
+debugPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILINTPLACEHOLDERKEYFORCITEMPLATERENDERONLY lint@talu"

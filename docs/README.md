@@ -2,7 +2,7 @@
 
 | Section | Purpose |
 |---|---|
-| [architecture/](architecture/) | what Talu is and why — [component diagram](architecture/), [runtime flows](architecture/flows.md), [networking](architecture/networking.md) |
+| [architecture/](architecture/) | what Talu is and why — [component diagram](architecture/), [runtime flows](architecture/flows.md), [networking](architecture/networking.md), [managed tenant Kubernetes (KaaS)](architecture/kaas.md) |
 | [install/](install/) | deploying Talu on your own (KVM) hardware |
 | [customize/](customize/) | the customization boundary + tracking upstream |
 | [integrations/](integrations/) | driving Talu from an external orchestrator (e.g. Waldur, a portal, or CI) |
