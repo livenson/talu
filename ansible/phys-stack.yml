@@ -20,6 +20,8 @@
     - { role: phys_tetragon,   tags: [tetragon, security] }
     - { role: phys_kyverno,    tags: [kyverno, security, policy] }
     - { role: phys_ingress,    tags: [ingress, lb] }
+    # Harden in-cluster resolution of the access domain before the OIDC access plane needs it.
+    - { role: phys_coredns,    tags: [coredns, dns, access] }
     - { role: phys_identity,   tags: [identity, access] }
     - { role: phys_portal,     tags: [portal, ui] }
     - { role: phys_pkg_repo,   tags: [pkg-repo, packages] }
