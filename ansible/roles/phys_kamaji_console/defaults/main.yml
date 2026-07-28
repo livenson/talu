@@ -10,6 +10,9 @@ kc_dir: "{{ talos_gen_dir }}/kamaji-console"
 kamaji_console_chart_version: "0.1.3"   # app v0.2.1 (clastix.github.io/charts)
 kamaji_console_namespace: kamaji-system
 # Inner (console) login. Pomerium already restricts WHO reaches the page to this same admin.
+# The console app uses a /ui basePath — the UI is at https://clusters.<domain>/ui (bare / is a 404),
+# and nextAuthUrl MUST include /ui or NextAuth callbacks 404. Run with LAB_FLOATING_IP set (like the
+# rest of the identity plane) — the placeholder default renders nextAuthUrl on the wrong domain.
 kamaji_console_admin_email: "{{ dex_user_email }}"
 # Password + JWT secret are generated on the gateway and stored in the kamaji-console Secret if absent
 # (idempotent — a re-run does not rotate them).

@@ -24,7 +24,7 @@
     JWT=$(openssl rand -hex 32)
     PW=$(openssl rand -base64 18)
     {{ kc_k }} -n {{ kamaji_console_namespace }} create secret generic kamaji-console \
-      --from-literal=nextAuthUrl="https://clusters.{{ lab_domain }}" \
+      --from-literal=nextAuthUrl="https://clusters.{{ lab_domain }}/ui" \
       --from-literal=jwtSecret="$JWT" \
       --from-literal=email="{{ kamaji_console_admin_email }}" \
       --from-literal=password="$PW"
@@ -83,6 +83,6 @@
 
 - ansible.builtin.debug:
     msg: >-
-      kamaji-console up; Pomerium route clusters.{{ lab_domain }} -> {{ kc_upstream.stdout }}
-      (probe HTTP {{ kc_probe.stdout }}; 302 = Pomerium auth gate working). Admin password:
-      `kubectl -n {{ kamaji_console_namespace }} get secret kamaji-console -o jsonpath='{.data.password}' | base64 -d`
+      kamaji-console at https://clusters.{{ lab_domain }}/ui (app uses a /ui basePath — bare / is a
+      404). Route -> {{ kc_upstream.stdout }} (probe HTTP {{ kc_probe.stdout }}; 302 = auth gate).
+      Admin password: `kubectl -n {{ kamaji_console_namespace }} get secret kamaji-console -o jsonpath='{.data.password}' | base64 -d`
