@@ -116,13 +116,11 @@ spec:
       # NOTE: never render `joinConfiguration.nodeRegistration: {}` — an empty nodeRegistration
       # fails CRD validation and the MachineSet loops silently (error only in capi-controller logs).
       preKubeadmCommands:
-        # (1) Guest DNS: VM guests cannot reach ClusterIPs on this cluster (Cilium misses service
-        # translation for VM-originated flows — guest->pod-IP and guest->LB-VIP work, ClusterIP
-        # blackholes), so the KubeVirt-DHCP-provided kube-dns address is dead from the guest and
-        # every image pull fails on DNS. Point the node at the lab dnsmasq until the platform-level
-        # Cilium fix lands.
-        - resolvectl dns enp1s0 172.18.0.1 && resolvectl domain enp1s0 "~."
-        # (2) Kamaji edge renders k8s-1.35 kubelet-config fields (memoryReservationPolicy,
+        # (Retired 2026-07-28: a `resolvectl dns enp1s0 172.18.0.1` workaround lived here while VM
+        # guests couldn't reach ClusterIPs — root cause was full-coverage Cilium socket LB, fixed
+        # product-wide with socketLB.hostNamespaceOnly in components/infrastructure/cilium/values.yaml.
+        # Node guests now use the default KubeVirt-DHCP DNS = cluster DNS, like any pod.)
+        # Kamaji edge renders k8s-1.35 kubelet-config fields (memoryReservationPolicy,
         # crashLoopBackOff.maxContainerRestartPeriod, imagePullCredentialsVerificationPolicy) that
         # kubelet v1.34 REJECTS under strict decoding: kubeadm only warns, then the kubelet
         # crashloops and the join dies at "kubelet not healthy after 4m0s". Strip them before every
