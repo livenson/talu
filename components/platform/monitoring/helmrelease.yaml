@@ -24,8 +24,10 @@ spec:
     - kind: ConfigMap
       name: kube-prometheus-stack-values
       valuesKey: values.yaml
-    # kube-state-metrics CustomResourceState over the Velero CRs — the only source of true
-    # per-tenant backup SIZE (Velero's own size metric covers the object tarball only).
+    # kube-state-metrics CustomResourceState: per-tenant backup SIZE from the Velero CRs (Velero's
+    # own size metric covers the object tarball only) AND the KaaS cluster inventory from the CAPI /
+    # Kamaji CRs (name/version/endpoint/workers). One valuesKey — helm replaces list values, so both
+    # CRS resource sets share a single list in ksm-crs.yaml.
     - kind: ConfigMap
       name: kube-prometheus-stack-values
-      valuesKey: ksm-velero-crs.yaml
+      valuesKey: ksm-crs.yaml

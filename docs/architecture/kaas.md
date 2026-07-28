@@ -138,8 +138,11 @@ Highlights:
   small operator (or Flux post-build hook) is the next step; the declarative half is already a chart.
 - **Observability:** the **Talu — KaaS** Perses dashboard + alert rules ship in
   [`../../components/platform/monitoring/`](../../components/platform/monitoring/) (`dashboard-kaas.yaml`,
-  `kaas-rules.yaml`, `kaas-scrape.yaml`). Top follow-ups: a blackbox tenant-API probe (G1) and CAPI
-  custom-resource state via kube-state-metrics (G6) — see the test plan's gap list.
+  `kaas-rules.yaml`, `kaas-scrape.yaml`). The dashboard opens with a **live inventory of deployed tenant
+  clusters** (name, k8s version, control-plane status, API endpoint, etcd datastore, workers
+  ready/desired) and a **"How to connect"** panel with the `pomerium-cli` kubectl recipe — backed by a
+  kube-state-metrics CustomResourceState over the CAPI/Kamaji CRs (`ksm-crs.yaml`; this closes gap G6).
+  Remaining top follow-up: a blackbox tenant-API probe (G1) — see the test plan's gap list.
 
 ## See also
 

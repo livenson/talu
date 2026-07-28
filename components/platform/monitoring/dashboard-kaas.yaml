@@ -18,6 +18,87 @@ spec:
       name: Talu — KaaS (tenant Kubernetes)
     duration: 1h
     panels:
+      inventory:
+        kind: Panel
+        spec:
+          display:
+            name: "Deployed tenant clusters"
+            description: "One row per tenant Kubernetes cluster (from kube-state-metrics CustomResourceState)."
+          plugin:
+            kind: Table
+            spec:
+              cellSettings: []
+              columnSettings:
+                - { name: name, header: "Cluster" }
+                - { name: version, header: "k8s version" }
+                - { name: ready, header: "CP status" }
+                - { name: endpoint, header: "API endpoint (internal)" }
+                - { name: datastore, header: "etcd datastore" }
+                - { name: value, hide: true }
+                - { name: timestamp, hide: true }
+                - { name: __name__, hide: true }
+                - { name: job, hide: true }
+                - { name: instance, hide: true }
+                - { name: namespace, hide: true }
+                - { name: service, hide: true }
+                - { name: container, hide: true }
+                - { name: endpoint_, hide: true }
+                - { name: pod, hide: true }
+                - { name: customresource_group, hide: true }
+                - { name: customresource_kind, hide: true }
+                - { name: customresource_version, hide: true }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu_kaas_cluster_info" }
+      workercount:
+        kind: Panel
+        spec:
+          display: { name: "Worker nodes ready / desired (per cluster)" }
+          plugin: { kind: TimeSeriesChart, spec: {} }
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu_kaas_workers_ready" }
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec: { query: "talu_kaas_workers_desired" }
+      access:
+        kind: Panel
+        spec:
+          display: { name: "How to connect (kubectl)" }
+          plugin:
+            kind: Markdown
+            spec:
+              text: |
+                ### Access a tenant cluster
+
+                Tenant Kubernetes APIs are **private** (LB-IPAM endpoints reachable only in-cluster
+                and by their own workers). Humans connect through **Pomerium** with SSO — no static
+                kubeconfig ever leaves the platform.
+
+                **One-time kubeconfig** (per cluster in the table above; `<domain>` is the lab domain):
+
+                ```
+                kubectl config set-cluster <cluster> --server=https://k8s-<cluster>.<domain>
+                kubectl config set-credentials <cluster>-pom \
+                  --exec-command=pomerium-cli \
+                  --exec-arg=k8s,exec-credential,https://k8s-<cluster>.<domain>
+                kubectl config set-context <cluster> --cluster=<cluster> --user=<cluster>-pom
+                kubectl config use-context <cluster>
+                ```
+
+                First `kubectl get` opens a browser to the IdP; the token is cached and refreshed.
+                What you can do is decided by **RBAC inside the tenant cluster** against your
+                impersonated identity (the Pomerium route sets `Impersonate-User`).
+
+                *Automation* uses an in-cluster ServiceAccount kubeconfig, not the browser flow.
       etcdleader:
         kind: Panel
         spec:
@@ -134,6 +215,25 @@ spec:
                   kind: PrometheusTimeSeriesQuery
                   spec: { query: "kube_deployment_status_replicas_available{namespace=~\"kaas-.*\", deployment=~\"kubevirt-csi-controller.*\"}" }
     layouts:
+      - kind: Grid
+        spec:
+          display: { title: "Deployed clusters + access" }
+          items:
+            - x: 0
+              y: 0
+              width: 14
+              height: 8
+              content: { "$ref": "#/spec/panels/inventory" }
+            - x: 14
+              y: 0
+              width: 10
+              height: 8
+              content: { "$ref": "#/spec/panels/access" }
+            - x: 0
+              y: 8
+              width: 24
+              height: 6
+              content: { "$ref": "#/spec/panels/workercount" }
       - kind: Grid
         spec:
           display: { title: "Datastore (shared kamaji-etcd — widest blast radius)" }

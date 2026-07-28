@@ -42,6 +42,6 @@ configMapGenerator:
   - name: kube-prometheus-stack-values
     files:
       - values.yaml
-      - ksm-velero-crs.yaml
+      - ksm-crs.yaml
 generatorOptions:
   disableNameSuffixHash: true
