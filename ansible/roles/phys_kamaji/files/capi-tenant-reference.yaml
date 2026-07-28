@@ -185,3 +185,27 @@ spec:
       operator:
         clusterPoolIPv4PodCIDRList: ["10.243.0.0/16"]
     kubeProxyReplacement: false     # Kamaji ships kube-proxy as an addon
+---
+# MachineHealthCheck — auto-remediation. A hard VMI crash does NOT self-heal on ephemeral
+# containerDisk workers (the restarted disk re-runs kubeadm join with the original, expired bootstrap
+# token — "no JWS signature for token ID"). CAPI's fix is to REPLACE the Machine (fresh token); this
+# MHC does that automatically when a node goes NotReady past the timeout.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineHealthCheck
+metadata:
+  name: tenant-a-md-0
+  namespace: kaas-capi
+spec:
+  clusterName: tenant-a
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: tenant-a-md-0
+  maxUnhealthy: 100%
+  nodeStartupTimeout: 15m
+  unhealthyConditions:
+    - type: Ready
+      status: "False"
+      timeout: 5m
+    - type: Ready
+      status: Unknown
+      timeout: 5m

@@ -188,3 +188,28 @@ spec:
       operator:
         clusterPoolIPv4PodCIDRList: ["{{ kaas_pod_cidr }}"]
     kubeProxyReplacement: false     # Kamaji ships kube-proxy as an addon
+---
+# MachineHealthCheck — auto-remediation for crashed workers. KT-15 proved that hard-killing a worker
+# VMI does NOT self-heal: KubeVirt restarts the ephemeral containerDisk, which re-runs kubeadm join
+# with the ORIGINAL (long-expired) bootstrap token and fails ("no JWS signature ... for token ID").
+# The recovery is machine-REPLACE (fresh token), which this MHC triggers automatically when a node
+# goes NotReady past the timeout — turning an operator page into a self-heal.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineHealthCheck
+metadata:
+  name: {{ kaas_tenant_name }}-md-0
+  namespace: {{ kaas_namespace }}
+spec:
+  clusterName: {{ kaas_tenant_name }}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: {{ kaas_tenant_name }}-md-0
+  maxUnhealthy: 100%          # single-worker tenants must still remediate; cap per-tenant, not fleet
+  nodeStartupTimeout: 15m     # first join budget (VM boot + kubeadm + Cilium)
+  unhealthyConditions:
+    - type: Ready
+      status: "False"
+      timeout: {{ kaas_mhc_unready_timeout | default('5m') }}
+    - type: Ready
+      status: Unknown
+      timeout: {{ kaas_mhc_unready_timeout | default('5m') }}

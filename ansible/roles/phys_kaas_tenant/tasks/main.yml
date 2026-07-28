@@ -76,6 +76,16 @@
   ansible.builtin.command: "{{ kt_k }} apply -f {{ kt_dir }}/cluster.yaml"
   changed_when: true
 
+# The Kamaji CP provider renders the TenantControlPlane from the KamajiControlPlane a few seconds
+# after apply; `kubectl wait` errors immediately on a not-yet-created object, so poll for existence.
+- name: Wait for the TenantControlPlane object to exist
+  ansible.builtin.command: "{{ kt_k }} -n {{ kaas_namespace }} get tcp/{{ kaas_tenant_name }}"
+  register: kt_tcp_exists
+  until: kt_tcp_exists.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+
 - name: Wait for the tenant control plane (TCP Ready)
   ansible.builtin.command: >
     {{ kt_k }} -n {{ kaas_namespace }} wait
