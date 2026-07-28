@@ -23,12 +23,16 @@
     fi
     JWT=$(openssl rand -hex 32)
     PW=$(openssl rand -base64 18)
+    # The console (Auth.js v5) consumes the secret via envFrom, so the KEYS are the env var names —
+    # they MUST be the exact UPPERCASE names the app validates (NEXTAUTH_URL/JWT_SECRET/ADMIN_*), not
+    # the camelCase field names from the chart's values doc. Empty SVELTOS_* satisfy the env schema.
     {{ kc_k }} -n {{ kamaji_console_namespace }} create secret generic kamaji-console \
-      --from-literal=nextAuthUrl="https://clusters.{{ lab_domain }}/ui" \
-      --from-literal=jwtSecret="$JWT" \
-      --from-literal=email="{{ kamaji_console_admin_email }}" \
-      --from-literal=password="$PW"
-    echo "created (admin password stored in secret kamaji-console/password)"
+      --from-literal=NEXTAUTH_URL="https://clusters.{{ lab_domain }}/ui" \
+      --from-literal=JWT_SECRET="$JWT" \
+      --from-literal=ADMIN_EMAIL="{{ kamaji_console_admin_email }}" \
+      --from-literal=ADMIN_PASSWORD="$PW" \
+      --from-literal=SVELTOS_URL="" --from-literal=SVELTOS_NAMESPACE="" --from-literal=SVELTOS_SECRET_NAME=""
+    echo "created (admin password stored in secret kamaji-console/ADMIN_PASSWORD)"
   register: kc_secret
   changed_when: "'created' in kc_secret.stdout"
 
@@ -36,7 +40,8 @@
   ansible.builtin.command: >
     helm upgrade --install kamaji-console {{ kc_dir }}/kamaji-console-{{ kamaji_console_chart_version }}.tgz
     -n {{ kamaji_console_namespace }}
-    --set existingSecret=kamaji-console
+    --set credentialsSecret.generate=false
+    --set credentialsSecret.name=kamaji-console
     --set service.type=ClusterIP
     --set ingress.enabled=false
     --wait --timeout 6m
@@ -85,4 +90,4 @@
     msg: >-
       kamaji-console at https://clusters.{{ lab_domain }}/ui (app uses a /ui basePath — bare / is a
       404). Route -> {{ kc_upstream.stdout }} (probe HTTP {{ kc_probe.stdout }}; 302 = auth gate).
-      Admin password: `kubectl -n {{ kamaji_console_namespace }} get secret kamaji-console -o jsonpath='{.data.password}' | base64 -d`
+      Admin password: `kubectl -n {{ kamaji_console_namespace }} get secret kamaji-console -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d`
