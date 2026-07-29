@@ -1,0 +1,125 @@
+# cluster-sync — keeps Headlamp's cluster list in step with the provisioned tenant clusters.
+# Kamaji creates a "<tenant>-admin-kubeconfig" Secret in kaas-capi per tenant control plane. This
+# reconciler (a CronJob, mirroring route-sync's pattern) merges them into ONE kubeconfig (a unique
+# cluster/user/context per tenant — the raw admin kubeconfigs all name their user "kubernetes-admin",
+# which would collide on a naive merge) and writes Headlamp's headlamp-kubeconfig Secret, restarting
+# Headlamp only when the set changed. So a newly provisioned tenant appears in the console within one
+# reconcile interval, and a deleted one drops off — no manual step.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: headlamp-cluster-sync
+  namespace: kamaji-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: headlamp-cluster-sync
+  namespace: kamaji-system
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create, update, patch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: headlamp-cluster-sync
+  namespace: kamaji-system
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: headlamp-cluster-sync }
+subjects:
+  - { kind: ServiceAccount, name: headlamp-cluster-sync, namespace: kamaji-system }
+---
+# read the per-tenant admin kubeconfig secrets in the KaaS namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: headlamp-cluster-sync
+  namespace: kaas-capi
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: headlamp-cluster-sync
+  namespace: kaas-capi
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: headlamp-cluster-sync }
+subjects:
+  - { kind: ServiceAccount, name: headlamp-cluster-sync, namespace: kamaji-system }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: headlamp-cluster-sync
+  namespace: kamaji-system
+data:
+  sync.sh: |
+    #!/bin/sh
+    set -eu
+    KAAS_NS=kaas-capi
+    HL_NS=kamaji-system
+    W=$(mktemp -d)
+    OUT="$W/merged"
+    # IMPORTANT: do NOT export KUBECONFIG — plain `kubectl` must use the pod's in-cluster SA config for
+    # the API get/apply calls. Only the config-BUILDING commands target $OUT via --kubeconfig.
+    : > "$OUT"
+    n=0
+    for name in $(kubectl -n "$KAAS_NS" get secrets -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -- '-admin-kubeconfig$' || true); do
+      t="${name%-admin-kubeconfig}"
+      src="$W/src"
+      # the kubeconfig key is admin.conf
+      kubectl -n "$KAAS_NS" get secret "$name" -o jsonpath='{.data.admin\.conf}' | base64 -d > "$src"
+      server=$(kubectl --kubeconfig="$src" config view --raw -o jsonpath='{.clusters[0].cluster.server}')
+      kubectl --kubeconfig="$src" config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "$W/ca"
+      kubectl --kubeconfig="$src" config view --raw -o jsonpath='{.users[0].user.client-certificate-data}' | base64 -d > "$W/crt"
+      kubectl --kubeconfig="$src" config view --raw -o jsonpath='{.users[0].user.client-key-data}' | base64 -d > "$W/key"
+      # rebuild with a unique cluster/user/context named after the tenant
+      kubectl --kubeconfig="$OUT" config set-cluster "$t" --server="$server" --certificate-authority="$W/ca" --embed-certs=true >/dev/null
+      kubectl --kubeconfig="$OUT" config set-credentials "$t" --client-certificate="$W/crt" --client-key="$W/key" --embed-certs=true >/dev/null
+      kubectl --kubeconfig="$OUT" config set-context "$t" --cluster="$t" --user="$t" >/dev/null
+      n=$((n+1))
+    done
+    # first context becomes current (Headlamp lists them all regardless)
+    first=$(kubectl --kubeconfig="$OUT" config get-contexts -o name 2>/dev/null | head -1 || true)
+    [ -n "$first" ] && kubectl --kubeconfig="$OUT" config use-context "$first" >/dev/null 2>&1 || true
+    NEW=$(cat "$OUT" 2>/dev/null || true)
+    CUR=$(kubectl -n "$HL_NS" get secret headlamp-kubeconfig -o jsonpath='{.data.config}' 2>/dev/null | base64 -d || true)
+    if [ "$NEW" = "$CUR" ]; then
+      echo "cluster-sync: no change ($n tenants)"; exit 0
+    fi
+    kubectl -n "$HL_NS" create secret generic headlamp-kubeconfig --from-file=config="$OUT" --dry-run=client -o yaml | kubectl apply -f -
+    kubectl -n "$HL_NS" rollout restart deploy/headlamp
+    echo "cluster-sync: updated ($n tenants)"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: headlamp-cluster-sync
+  namespace: kamaji-system
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: headlamp-cluster-sync
+          restartPolicy: Never
+          containers:
+            - name: sync
+              image: docker.io/bitnami/kubectl:latest
+              command: ["/bin/sh", "/scripts/sync.sh"]
+              volumeMounts:
+                - { name: script, mountPath: /scripts }
+          volumes:
+            - name: script
+              configMap: { name: headlamp-cluster-sync, defaultMode: 0755 }

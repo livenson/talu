@@ -13,25 +13,55 @@
     exit 1
   args: { creates: "{{ hl_dir }}/headlamp-{{ headlamp_chart_version }}.tgz" }
 
-- name: Read-only ClusterRole + binding for the Headlamp SA
-  ansible.builtin.copy: { src: rbac.yaml, dest: "{{ hl_dir }}/rbac.yaml", mode: "0644" }
+# ── cluster-sync: keeps Headlamp's kubeconfig in step with the provisioned tenants ─────────────
+- name: Deploy the cluster-sync reconciler (RBAC + script + CronJob)
+  ansible.builtin.copy: { src: cluster-sync.yaml, dest: "{{ hl_dir }}/cluster-sync.yaml", mode: "0644" }
 
-- name: Apply the read-only RBAC
-  ansible.builtin.command: "{{ hl_k }} apply -f {{ hl_dir }}/rbac.yaml"
+- name: Apply cluster-sync
+  ansible.builtin.command: "{{ hl_k }} apply -f {{ hl_dir }}/cluster-sync.yaml"
   changed_when: true
 
-# Install Headlamp: root baseURL, ClusterIP, SA created by the chart, but the chart's binding is OFF
-# (we manage a READ-ONLY binding ourselves — its default is cluster-admin, which we must not grant to
-# an injected token).
+# Seed an empty kubeconfig so Headlamp can mount it on first start (the reconciler populates it next).
+- name: Seed the headlamp-kubeconfig Secret if absent
+  ansible.builtin.shell: |
+    if {{ hl_k }} -n {{ headlamp_namespace }} get secret headlamp-kubeconfig >/dev/null 2>&1; then
+      echo exists
+    else
+      printf 'apiVersion: v1\nkind: Config\nclusters: []\nusers: []\ncontexts: []\ncurrent-context: ""\n' > {{ hl_dir }}/empty.kubeconfig
+      {{ hl_k }} -n {{ headlamp_namespace }} create secret generic headlamp-kubeconfig --from-file=config={{ hl_dir }}/empty.kubeconfig
+      echo seeded
+    fi
+  register: hl_seed
+  changed_when: "'seeded' in hl_seed.stdout"
+
+# ── Headlamp: MULTI-CLUSTER over the tenant clusters (not the management substrate) ────────────
+# inCluster=false so the console does NOT show the Talu management cluster; -kubeconfig loads the
+# tenant clusters (client-cert creds, so no login) from the reconciler-maintained Secret.
+- name: Render Headlamp values
+  ansible.builtin.copy:
+    dest: "{{ hl_dir }}/values.yaml"
+    mode: "0644"
+    content: |
+      config:
+        inCluster: false
+        baseURL: ""
+        extraArgs:
+          - "-kubeconfig=/kube/config"
+      serviceAccount: { create: true }
+      clusterRoleBinding: { create: false }
+      service: { type: ClusterIP }
+      volumes:
+        - name: tenant-kubeconfig
+          secret: { secretName: headlamp-kubeconfig }
+      volumeMounts:
+        - name: tenant-kubeconfig
+          mountPath: /kube
+          readOnly: true
+
 - name: Install/upgrade Headlamp
   ansible.builtin.command: >
     helm upgrade --install headlamp {{ hl_dir }}/headlamp-{{ headlamp_chart_version }}.tgz
-    -n {{ headlamp_namespace }}
-    --set config.baseURL=""
-    --set serviceAccount.create=true
-    --set clusterRoleBinding.create=false
-    --set service.type=ClusterIP
-    --wait --timeout 6m
+    -n {{ headlamp_namespace }} -f {{ hl_dir }}/values.yaml --wait --timeout 6m
   environment: { KUBECONFIG: "{{ hl_kubeconfig }}" }
   changed_when: true
 
@@ -39,47 +69,30 @@
   ansible.builtin.command: "{{ hl_k }} -n {{ headlamp_namespace }} rollout status deploy/headlamp --timeout=180s"
   changed_when: false
 
-# Stable (non-expiring) token for the read-only SA — Pomerium injects it so the SSO lands the admin in.
-- name: Create the stable read-only SA token secret
+# Run the reconciler once now so the tenant clusters show immediately (the CronJob keeps it in sync).
+- name: Reconcile the tenant cluster list once
   ansible.builtin.shell: |
-    cat <<EOF | {{ hl_k }} apply -f -
-    apiVersion: v1
-    kind: Secret
-    metadata:
-      name: headlamp-inject-token
-      namespace: {{ headlamp_namespace }}
-      annotations:
-        kubernetes.io/service-account.name: headlamp
-    type: kubernetes.io/service-account-token
-    EOF
+    {{ hl_k }} -n {{ headlamp_namespace }} delete job headlamp-cluster-sync-init --ignore-not-found >/dev/null 2>&1
+    {{ hl_k }} -n {{ headlamp_namespace }} create job headlamp-cluster-sync-init --from=cronjob/headlamp-cluster-sync
+    {{ hl_k }} -n {{ headlamp_namespace }} wait --for=condition=complete job/headlamp-cluster-sync-init --timeout=150s
+    {{ hl_k }} -n {{ headlamp_namespace }} logs job/headlamp-cluster-sync-init | tail -1
+  register: hl_sync
   changed_when: true
 
+# ── Pomerium route (admin-only; no token injection — tenant kubeconfigs carry their own creds) ──
 - name: Copy the Pomerium route patcher
   ansible.builtin.copy: { src: add-headlamp-route.py, dest: "{{ hl_dir }}/add-headlamp-route.py", mode: "0755" }
 
-- name: Add the clusters.<domain> route (admin-only, read-only token injected) + restart Pomerium
+- name: Add the clusters.<domain> route + restart Pomerium
   ansible.builtin.shell: |
     set -e
-    for i in 1 2 3 4 5; do
-      TOK=$({{ hl_k }} -n {{ headlamp_namespace }} get secret headlamp-inject-token -o jsonpath='{.data.token}' | base64 -d)
-      [ -n "$TOK" ] && break; sleep 3
-    done
     KUBECONFIG={{ hl_kubeconfig }} python3 {{ hl_dir }}/add-headlamp-route.py \
-      "http://headlamp.{{ headlamp_namespace }}.svc:80" "{{ headlamp_admin_user }}" "$TOK"
+      "http://headlamp.{{ headlamp_namespace }}.svc:80" "{{ headlamp_admin_user }}"
     {{ hl_k }} -n pomerium rollout restart deploy/pomerium
     {{ hl_k }} -n pomerium rollout status deploy/pomerium --timeout=180s
   changed_when: true
 
-- name: "Acceptance: read works, write denied, route gated"
-  ansible.builtin.shell: |
-    TOK=$({{ hl_k }} -n {{ headlamp_namespace }} get secret headlamp-inject-token -o jsonpath='{.data.token}' | base64 -d)
-    R=$({{ hl_k }} -n kaas-capi exec capk-debug -- curl -s -o /dev/null -w '%{http_code}' --max-time 8 -H "Authorization: Bearer $TOK" http://headlamp.{{ headlamp_namespace }}.svc/clusters/main/version 2>/dev/null || echo skip)
-    W=$({{ hl_k }} -n kaas-capi exec capk-debug -- curl -s -o /dev/null -w '%{http_code}' -X DELETE --max-time 8 -H "Authorization: Bearer $TOK" http://headlamp.{{ headlamp_namespace }}.svc/clusters/main/api/v1/namespaces/default 2>/dev/null || echo skip)
-    echo "read=$R write=$W (want read=200 write=403)"
-  register: hl_accept
-  changed_when: false
-
 - ansible.builtin.debug:
     msg: >-
-      Headlamp at https://clusters.{{ lab_domain }} — single Pomerium/Dex SSO, read-only console.
-      Acceptance: {{ hl_accept.stdout }}
+      Headlamp at https://clusters.{{ lab_domain }} — single Pomerium/Dex SSO, shows the provisioned
+      tenant clusters (cluster-sync reconciles new/removed tenants every 2 min). {{ hl_sync.stdout }}

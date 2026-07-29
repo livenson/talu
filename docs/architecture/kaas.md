@@ -145,11 +145,16 @@ Highlights:
   Remaining top follow-up: a blackbox tenant-API probe (G1) — see the test plan's gap list.
 - **Console:** **Headlamp** at `clusters.<domain>` (the KaaS analog of kubevirt-manager's
   `vms.<domain>`), admin-only behind Pomerium. It replaced the Kamaji Console, which only had static
-  credentials (a second login on top of SSO). Headlamp is OIDC-capable; on this lab it is fronted by
-  the platform Pomerium/Dex SSO and the route **injects a read-only ServiceAccount token**, so a
-  single sign-on lands the admin straight in (no second password, and no need to make the management
-  apiserver trust Dex — a fragile hairpin on this lab). The token is capped at get/list/watch, so the
-  console can browse every cluster and its CAPI/Kamaji CRs but never mutate. Role: `phys_headlamp`.
+  credentials (a second login on top of SSO). It runs **multi-cluster over the tenant clusters** — not
+  the Talu management substrate (`inCluster: false`): it loads each tenant's admin kubeconfig, so you
+  see the **provisioned tenant clusters** and drill into any one to browse its workloads. A single
+  Pomerium/Dex SSO gates access; the tenant kubeconfigs carry client-cert creds, so there is no second
+  login and no need to make the management apiserver trust Dex (a fragile hairpin on this lab).
+  Newly-provisioned clusters appear automatically: a **cluster-sync reconciler** (a CronJob, the same
+  pattern as `route-sync`) merges the per-tenant `<tenant>-admin-kubeconfig` Secrets Kamaji creates
+  into Headlamp's kubeconfig every ~2 min (renaming per tenant to avoid the shared `kubernetes-admin`
+  user colliding), so provisioning a tenant makes it show up and deleting one drops it off — no manual
+  step. Role: `phys_headlamp`.
 
 ## See also
 
