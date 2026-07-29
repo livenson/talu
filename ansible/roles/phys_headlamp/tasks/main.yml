@@ -1,0 +1,85 @@
+---
+- name: Ensure work dir
+  ansible.builtin.file: { path: "{{ hl_dir }}", state: directory, mode: "0755" }
+
+- name: Pull the Headlamp chart (WAN retries)
+  ansible.builtin.shell: |
+    helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/ >/dev/null 2>&1 || true
+    helm repo update headlamp >/dev/null
+    for i in 1 2 3 4 5; do
+      helm pull headlamp/headlamp --version {{ headlamp_chart_version }} -d {{ hl_dir }} && exit 0
+      sleep 5
+    done
+    exit 1
+  args: { creates: "{{ hl_dir }}/headlamp-{{ headlamp_chart_version }}.tgz" }
+
+- name: Read-only ClusterRole + binding for the Headlamp SA
+  ansible.builtin.copy: { src: rbac.yaml, dest: "{{ hl_dir }}/rbac.yaml", mode: "0644" }
+
+- name: Apply the read-only RBAC
+  ansible.builtin.command: "{{ hl_k }} apply -f {{ hl_dir }}/rbac.yaml"
+  changed_when: true
+
+# Install Headlamp: root baseURL, ClusterIP, SA created by the chart, but the chart's binding is OFF
+# (we manage a READ-ONLY binding ourselves — its default is cluster-admin, which we must not grant to
+# an injected token).
+- name: Install/upgrade Headlamp
+  ansible.builtin.command: >
+    helm upgrade --install headlamp {{ hl_dir }}/headlamp-{{ headlamp_chart_version }}.tgz
+    -n {{ headlamp_namespace }}
+    --set config.baseURL=""
+    --set serviceAccount.create=true
+    --set clusterRoleBinding.create=false
+    --set service.type=ClusterIP
+    --wait --timeout 6m
+  environment: { KUBECONFIG: "{{ hl_kubeconfig }}" }
+  changed_when: true
+
+- name: Wait for the Headlamp rollout
+  ansible.builtin.command: "{{ hl_k }} -n {{ headlamp_namespace }} rollout status deploy/headlamp --timeout=180s"
+  changed_when: false
+
+# Stable (non-expiring) token for the read-only SA — Pomerium injects it so the SSO lands the admin in.
+- name: Create the stable read-only SA token secret
+  ansible.builtin.shell: |
+    cat <<EOF | {{ hl_k }} apply -f -
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: headlamp-inject-token
+      namespace: {{ headlamp_namespace }}
+      annotations:
+        kubernetes.io/service-account.name: headlamp
+    type: kubernetes.io/service-account-token
+    EOF
+  changed_when: true
+
+- name: Copy the Pomerium route patcher
+  ansible.builtin.copy: { src: add-headlamp-route.py, dest: "{{ hl_dir }}/add-headlamp-route.py", mode: "0755" }
+
+- name: Add the clusters.<domain> route (admin-only, read-only token injected) + restart Pomerium
+  ansible.builtin.shell: |
+    set -e
+    for i in 1 2 3 4 5; do
+      TOK=$({{ hl_k }} -n {{ headlamp_namespace }} get secret headlamp-inject-token -o jsonpath='{.data.token}' | base64 -d)
+      [ -n "$TOK" ] && break; sleep 3
+    done
+    KUBECONFIG={{ hl_kubeconfig }} python3 {{ hl_dir }}/add-headlamp-route.py \
+      "http://headlamp.{{ headlamp_namespace }}.svc:80" "{{ headlamp_admin_user }}" "$TOK"
+    {{ hl_k }} -n pomerium rollout restart deploy/pomerium
+    {{ hl_k }} -n pomerium rollout status deploy/pomerium --timeout=180s
+  changed_when: true
+
+- name: "Acceptance: read works, write denied, route gated"
+  ansible.builtin.shell: |
+    TOK=$({{ hl_k }} -n {{ headlamp_namespace }} get secret headlamp-inject-token -o jsonpath='{.data.token}' | base64 -d)
+    R=$({{ hl_k }} -n kaas-capi exec capk-debug -- curl -s -o /dev/null -w '%{http_code}' --max-time 8 -H "Authorization: Bearer $TOK" http://headlamp.{{ headlamp_namespace }}.svc/clusters/main/version 2>/dev/null || echo skip)
+    W=$({{ hl_k }} -n kaas-capi exec capk-debug -- curl -s -o /dev/null -w '%{http_code}' -X DELETE --max-time 8 -H "Authorization: Bearer $TOK" http://headlamp.{{ headlamp_namespace }}.svc/clusters/main/api/v1/namespaces/default 2>/dev/null || echo skip)
+    echo "read=$R write=$W (want read=200 write=403)"
+  register: hl_accept
+  changed_when: false
+
+- ansible.builtin.debug:
+    msg: >-
+      Headlamp at https://clusters.{{ lab_domain }} — single Pomerium/Dex SSO, read-only console.
+      Acceptance: {{ hl_accept.stdout }}

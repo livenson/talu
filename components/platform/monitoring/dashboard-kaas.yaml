@@ -76,18 +76,12 @@ spec:
           plugin:
             kind: Markdown
             spec:
-              # NOTE: this panel is admin-only (Pomerium-gated, like the whole operator dashboard), so
-              # showing the console credential here doesn't widen access. The password is a PLACEHOLDER
-              # in git — phys_kamaji_console substitutes the real value into the LIVE dashboard from the
-              # kamaji-console Secret. Never commit the plaintext.
               text: |
-                ### Kamaji Console (web UI)
+                ### Cluster console (web UI)
 
-                `https://clusters.<domain>/ui` — admin-only behind Pomerium (SSO). The console then has
-                its own login (it ships static credentials, no OIDC):
-
-                - **User:** `alice@talu.local`
-                - **Password:** `__KAMAJI_CONSOLE_PASSWORD__`
+                `https://clusters.<domain>` — **Headlamp**, admin-only behind Pomerium. A single
+                Pomerium/Dex **SSO** lands you straight in (a read-only SA token is injected by the
+                route — no second login). Browse every tenant cluster and its CAPI/Kamaji resources.
 
                 ---
 

@@ -1,0 +1,15 @@
+---
+# Headlamp — the tenant-cluster / CAPI web console (replaces the static-credential Kamaji Console).
+# Headlamp is OIDC-capable, but on this lab we front it with Pomerium (the platform OIDC gate) and
+# INJECT a read-only ServiceAccount token, so a single Pomerium/Dex SSO lands the admin straight in —
+# no second password, no token paste, and no need to make the management apiserver trust Dex (which
+# on this lab would be a fragile control-plane change: host-network apiserver resolving id.<domain>
+# via flaky node DNS and hairpinning to Dex). The injected token is scoped READ-ONLY (get/list/watch)
+# so a browse console can never mutate the cluster.
+hl_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+hl_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+hl_dir: "{{ talos_gen_dir }}/headlamp"
+
+headlamp_chart_version: "0.44.0"
+headlamp_namespace: kamaji-system
+headlamp_admin_user: "{{ dex_user_email }}"

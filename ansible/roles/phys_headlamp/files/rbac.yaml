@@ -1,0 +1,26 @@
+# Read-only cluster access for the Headlamp ServiceAccount. Headlamp forwards the request bearer
+# token to the k8s API; Pomerium injects THIS SA's token, so the whole console is capped at
+# get/list/watch — it can browse every resource (incl. CAPI/Kamaji CRs) but never mutate.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: talu-headlamp-readonly
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["*"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: talu-headlamp-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: talu-headlamp-readonly
+subjects:
+  - kind: ServiceAccount
+    name: headlamp
+    namespace: kamaji-system
