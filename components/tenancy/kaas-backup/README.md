@@ -66,7 +66,13 @@ Two tiers (full runbook + the KT-33/34 integrity + destroy-and-restore drills in
 
 The manifest is the product; site tuning (schedule, `KEEP` retention) belongs in
 `environments/<site>/`. Not yet wired into an env overlay — on the physical lab it's applied by
-`ansible-playbook phys-stack.yml --tags kaas-backup`. **Lab-validation of the snapshot round-trip
-(KT-33/34) is the open gap** — treat the wiring as built-but-not-yet-exercised until those pass.
+`ansible-playbook phys-stack.yml --tags kaas-backup`.
+
+**Lab-validated 2026-07-30 (KT-33):** discover → snapshot → upload ran green against the shared
+`kamaji-etcd` — a 10 MB snapshot + its `status.json` landed in `s3://kaas-etcd/…`. Two fixes came out
+of it: the snapshot image is **`bitnamilegacy/etcd:3.5.21`** (Bitnami's 2025 Docker Hub migration
+pulled `bitnami/etcd:latest`, and the cluster's own `quay.io/coreos/etcd` is distroless — no shell for
+the loop), and the pod is now **restricted-PSA compliant** (kamaji-system warns `restricted`). The
+destroy-and-restore round-trip (KT-34) remains the open gap.
 
 This is a reusable base — part of `components/` (the product). Adopters do **not** edit it.

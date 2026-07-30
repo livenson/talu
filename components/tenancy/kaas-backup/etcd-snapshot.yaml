@@ -189,9 +189,15 @@ spec:
         spec:
           serviceAccountName: kaas-etcd-snapshot
           restartPolicy: Never
-          # fsGroup so the non-root kubectl/etcd containers and the root aws-cli container share /work.
+          # Pod-level: run non-root as 1001 (all three images tolerate it) with a shared fsGroup so
+          # /work is writable across stages, and RuntimeDefault seccomp — restricted-PSA compliant
+          # (kamaji-system enforces/warns `restricted`).
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
             fsGroup: 1001
+            seccompProfile: { type: RuntimeDefault }
           volumes:
             - name: work
               emptyDir: {}
@@ -199,19 +205,24 @@ spec:
               configMap: { name: kaas-etcd-snapshot, defaultMode: 0555 }
             - name: creds
               secret: { secretName: garage-etcd-credentials }
-          # Image tags follow the repo convention (cluster-sync uses :latest); pinning by digest is a
-          # hardening follow-up once the round-trip is lab-validated. bitnami/kubectl carries kubectl,
-          # bitnami/etcd carries etcdctl, amazon/aws-cli carries the S3 client (bash on amazonlinux).
+          # Image choices validated on the phys lab (2026-07-30): bitnami/kubectl:latest still pulls;
+          # bitnami/etcd:latest does NOT (Bitnami's 2025 Docker Hub migration moved deprecated images
+          # to the `bitnamilegacy` org — bitnamilegacy/etcd:3.5.21 pulls and carries a shell + etcdctl,
+          # unlike the distroless quay.io/coreos/etcd the cluster runs). aws-cli carries the S3 client.
           initContainers:
             - name: discover
               image: docker.io/bitnami/kubectl:latest
               command: ["/bin/sh", "/scripts/discover.sh"]
+              securityContext: &hardened
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
               volumeMounts:
                 - { name: work, mountPath: /work }
                 - { name: scripts, mountPath: /scripts }
             - name: snapshot
-              image: docker.io/bitnami/etcd:latest
+              image: docker.io/bitnamilegacy/etcd:3.5.21
               command: ["/bin/sh", "/scripts/snapshot.sh"]
+              securityContext: *hardened
               volumeMounts:
                 - { name: work, mountPath: /work }
                 - { name: scripts, mountPath: /scripts }
@@ -219,6 +230,7 @@ spec:
             - name: upload
               image: docker.io/amazon/aws-cli:latest
               command: ["/bin/bash", "/scripts/upload.sh"]
+              securityContext: *hardened
               env:
                 - { name: AWS_SHARED_CREDENTIALS_FILE, value: /creds/cloud }
                 - { name: AWS_REGION, value: garage }
