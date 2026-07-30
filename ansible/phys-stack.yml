@@ -33,3 +33,5 @@
     # opt-in: run with --tags kaas-tenant (and per-tenant vars) rather than in the default sweep.
     - { role: phys_kaas_tenant, tags: [kaas-tenant, never] }
     - { role: phys_backup,     tags: [backup, dr] }
+    # KaaS tenant-cluster DR: snapshots every per-tenant kamaji-etcd → Garage (needs phys_backup up).
+    - { role: phys_kaas_backup, tags: [kaas-backup, kaas, dr] }

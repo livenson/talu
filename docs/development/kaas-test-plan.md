@@ -402,6 +402,22 @@ the `Talu — KaaS` dashboard + Alertmanager must localize the fault within two 
 
 ---
 
+## 4.4 Disaster recovery (tenant-cluster etcd — `components/tenancy/kaas-backup/`)
+
+Validates that a tenant control plane is actually restorable from a `kaas-etcd-snapshot` artifact —
+a Completed snapshot that cannot be restored is a lie (same discipline as the Velero restore-test).
+
+- **KT-33 — etcd snapshot integrity + freshness:** after `phys_kaas_backup`, assert an object exists
+  at `s3://kaas-etcd/<datastore>/<ts>.db`, that `etcdctl snapshot status` on the downloaded file
+  reports a non-zero hash + revision, and that `KaasEtcdSnapshotStale` is **not** firing. Kill one
+  etcd member and confirm the next run still succeeds (the endpoint-failover loop). **SAFE-NOW.**
+- **KT-34 — Destroy-and-restore round-trip (Path A):** write a sentinel object into a tenant cluster
+  (a ConfigMap), take a snapshot, **destroy the tenant's `kamaji-etcd` data**, restore from the
+  snapshot (`etcdctl snapshot restore` → re-point members), and confirm the tenant API returns and the
+  sentinel is present byte-for-byte. Measure RTO. **WINDOW** (destroys a tenant control plane).
+
+---
+
 ## 5. Run order, budget, and recording
 
 | Block | Tests | Est. time | Class |
@@ -414,6 +430,8 @@ the `Talu — KaaS` dashboard + Alertmanager must localize the fault within two 
 | **Maintenance window** | **KT-24, KT-25** | **~2 h** | **WINDOW** |
 | Performance | KT-26…KT-29 | ~1 day | ANNOUNCE |
 | Observability | KT-30…KT-32 | folded in + 1 h | SAFE-NOW |
+| Disaster recovery | KT-33 | ~30 min | SAFE-NOW |
+| **Maintenance window** | **KT-34** | **~1 h** | **WINDOW** |
 
 **Per-run record:** repo git ref · `clastix/kamaji` image digest · CAPI/CAPK/provider versions ·
 tenant k8s version · test id · start/end UTC · measured recovery vs budget · alerts (name, fire,

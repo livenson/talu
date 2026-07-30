@@ -79,3 +79,20 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: "tenant {{ $labels.cluster }} ({{ $labels.namespace }}) has workers not reaching Ready for 20m"
+        # --- tenant-cluster DR: the kaas-etcd-snapshot CronJob (components/tenancy/kaas-backup/).
+        # Observed via kube-state-metrics on the CronJob/Job itself — no Pushgateway. RPO target 15m,
+        # so a last-success older than 1h means backups have silently stopped (losing a tenant's etcd
+        # then loses the cluster with no recovery point).
+        - alert: KaasEtcdSnapshotStale
+          expr: |
+            time() - max(kube_cronjob_status_last_successful_time{namespace="kamaji-system", cronjob="kaas-etcd-snapshot"}) > 3600
+          for: 15m
+          labels: { severity: critical }
+          annotations:
+            summary: "kaas-etcd-snapshot has not succeeded in over 1h — tenant etcd backups are stale"
+        - alert: KaasEtcdSnapshotFailing
+          expr: kube_job_status_failed{namespace="kamaji-system", job_name=~"kaas-etcd-snapshot.*"} > 0
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "kaas-etcd-snapshot Job {{ $labels.job_name }} is failing — a tenant etcd snapshot did not complete"
