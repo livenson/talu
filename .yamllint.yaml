@@ -9,6 +9,7 @@ yaml-files:
 ignore: |
   components/tenancy/tenant-chart/templates/
   components/tenancy/cluster-chart/templates/
+  components/tenancy/cluster-chart/files/
   ci/gitlab/
   *.template.yaml
 

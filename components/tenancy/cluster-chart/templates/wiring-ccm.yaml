@@ -1,0 +1,92 @@
+{{- if and .Values.wiring.enabled .Values.wiring.ccm.enabled }}
+{{- $ns := include "talu-cluster.namespace" . }}
+{{- $kc := include "talu-cluster.adminKubeconfigSecret" . }}
+# ── cloud-provider-kubevirt (CCM) — LB controller only ───────────────────────────────────────────
+# Tenant `type: LoadBalancer` Services -> infra Service -> Cilium LB-IPAM IP. GOTCHAS baked in: the
+# controller is service-lb-controller (not "service"), and --cluster-name MUST equal the CAPI cluster
+# name (default "kubernetes" selects nothing → silent empty endpoints). Kubeconfig is the DIRECT mount
+# of Kamaji's admin Secret (admin.conf -> value), same graduation pattern as the CSI controller.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloud-controller-manager
+  namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kccm
+  namespace: {{ $ns }}
+rules:
+  - { apiGroups: [kubevirt.io], resources: [virtualmachines], verbs: [get, watch, list] }
+  - { apiGroups: [kubevirt.io], resources: [virtualmachineinstances], verbs: [get, watch, list, update] }
+  - { apiGroups: [""], resources: [pods], verbs: [get, list, watch] }
+  - { apiGroups: [""], resources: [services], verbs: ["*"] }
+  - { apiGroups: [""], resources: [nodes], verbs: [get] }
+  - { apiGroups: [discovery.k8s.io], resources: [endpointslices], verbs: ["*"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kccm
+  namespace: {{ $ns }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: kccm }
+subjects:
+  - { kind: ServiceAccount, name: cloud-controller-manager, namespace: {{ $ns }} }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.name }}-cloud-config
+  namespace: {{ $ns }}
+data:
+  cloud-config: |
+    loadBalancer:
+      enabled: true
+      creationPollInterval: 5
+    instancesV2:
+      enabled: false
+    namespace: {{ $ns }}
+    infraLabels:
+      cluster.x-k8s.io/cluster-name: {{ .Values.name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.name }}-cloud-provider
+  namespace: {{ $ns }}
+  labels:
+    k8s-app: kubevirt-cloud-controller-manager
+    {{- include "talu-cluster.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { k8s-app: kubevirt-cloud-controller-manager, cluster: {{ .Values.name }} }
+  template:
+    metadata:
+      labels: { k8s-app: kubevirt-cloud-controller-manager, cluster: {{ .Values.name }} }
+    spec:
+      serviceAccountName: cloud-controller-manager
+      containers:
+        - name: kubevirt-cloud-controller-manager
+          image: {{ .Values.wiring.ccm.image | default "quay.io/kubevirt/kubevirt-cloud-controller-manager:main" }}
+          command: [/bin/kubevirt-cloud-controller-manager]
+          args:
+            - --cloud-provider=kubevirt
+            - --cloud-config=/etc/cloud/cloud-config
+            - --kubeconfig=/etc/kubernetes/kubeconfig/value
+            - --controllers=service-lb-controller
+            - --authentication-skip-lookup=true
+            - --cluster-name={{ .Values.name }}
+          resources: { requests: { cpu: 100m } }
+          volumeMounts:
+            - { mountPath: /etc/kubernetes/kubeconfig, name: kubeconfig, readOnly: true }
+            - { mountPath: /etc/cloud, name: cloud-config, readOnly: true }
+      volumes:
+        - name: cloud-config
+          configMap: { name: {{ .Values.name }}-cloud-config }
+        - name: kubeconfig
+          secret:
+            secretName: {{ $kc }}
+            items: [{ key: admin.conf, path: value }]
+{{- end }}

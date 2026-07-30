@@ -1,0 +1,141 @@
+{{- if .Values.wiring.enabled }}
+{{- $ns := include "talu-cluster.namespace" . }}
+{{- $kc := include "talu-cluster.adminKubeconfigSecret" . }}
+# ── kubevirt-csi (INFRA side) — graduated from ansible/roles/phys_kaas_tenant ────────────────────
+# THE graduation pattern: instead of imperatively copying the tenant kubeconfig into a
+# "kvcluster-kubeconfig" Secret post-provision, mount Kamaji's "<name>-admin-kubeconfig" Secret
+# DIRECTLY, remapping its key admin.conf -> value (the path every csi sidecar expects). The pods stay
+# Pending until Kamaji publishes the Secret, then start — pure eventual consistency, no imperative step.
+# Cluster-scoped objects are per-tenant-named so multiple tenants don't collide.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubevirt-csi
+  namespace: {{ $ns }}
+  labels: {{- include "talu-cluster.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kubevirt-csi
+  namespace: {{ $ns }}
+rules:
+  - { apiGroups: ["cdi.kubevirt.io"], resources: ["datavolumes"], verbs: ["get", "create", "delete"] }
+  - { apiGroups: ["kubevirt.io"], resources: ["virtualmachineinstances", "virtualmachines"], verbs: ["list", "get"] }
+  - { apiGroups: ["subresources.kubevirt.io"], resources: ["virtualmachines/addvolume", "virtualmachines/removevolume"], verbs: ["update"] }
+  - { apiGroups: ["snapshot.storage.k8s.io"], resources: ["volumesnapshots"], verbs: ["get", "create", "delete"] }
+  - { apiGroups: [""], resources: ["persistentvolumeclaims"], verbs: ["get", "patch"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kubevirt-csi
+  namespace: {{ $ns }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: kubevirt-csi }
+subjects:
+  - { kind: ServiceAccount, name: kubevirt-csi, namespace: {{ $ns }} }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubevirt-csi-cluster-{{ .Values.name }}
+rules:
+  - { apiGroups: [""], resources: ["persistentvolumes"], verbs: ["get"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubevirt-csi-cluster-{{ .Values.name }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: kubevirt-csi-cluster-{{ .Values.name }} }
+subjects:
+  - { kind: ServiceAccount, name: kubevirt-csi, namespace: {{ $ns }} }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: driver-config
+  namespace: {{ $ns }}
+data:
+  infraClusterNamespace: {{ $ns | quote }}
+  infraClusterLabels: csi-driver/cluster={{ .Values.name }}
+  infraStorageClassEnforcement: "allowAll: true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubevirt-csi-controller
+  namespace: {{ $ns }}
+  labels:
+    app: kubevirt-csi-driver
+    {{- include "talu-cluster.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: kubevirt-csi-driver }
+  template:
+    metadata:
+      labels: { app: kubevirt-csi-driver }
+    spec:
+      enableServiceLinks: false
+      serviceAccount: kubevirt-csi
+      priorityClassName: system-cluster-critical
+      containers:
+        - name: csi-driver
+          image: {{ .Values.wiring.csi.image | default "quay.io/kubevirt/kubevirt-csi-driver:latest" }}
+          imagePullPolicy: Always
+          args:
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--infra-cluster-namespace=$(INFRACLUSTER_NAMESPACE)"
+            - "--infra-cluster-labels=$(INFRACLUSTER_LABELS)"
+            - "--tenant-cluster-kubeconfig=/var/run/secrets/tenantcluster/value"
+            - "--run-node-service=false"
+            - "--run-controller-service=true"
+            - "--v=5"
+          ports: [{ name: healthz, containerPort: 10301, protocol: TCP }]
+          env:
+            - { name: CSI_ENDPOINT, value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock }
+            - { name: KUBE_NODE_NAME, valueFrom: { fieldRef: { fieldPath: spec.nodeName } } }
+            - { name: INFRACLUSTER_NAMESPACE, valueFrom: { configMapKeyRef: { name: driver-config, key: infraClusterNamespace } } }
+            - { name: INFRACLUSTER_LABELS, valueFrom: { configMapKeyRef: { name: driver-config, key: infraClusterLabels } } }
+            - { name: INFRA_STORAGE_CLASS_ENFORCEMENT, valueFrom: { configMapKeyRef: { name: driver-config, key: infraStorageClassEnforcement, optional: true } } }
+          volumeMounts:
+            - { name: socket-dir, mountPath: /var/lib/csi/sockets/pluginproxy/ }
+            - { name: tenantcluster, mountPath: /var/run/secrets/tenantcluster }
+          resources: { requests: { memory: 50Mi, cpu: 10m } }
+        - name: csi-provisioner
+          image: quay.io/openshift/origin-csi-external-provisioner:latest
+          args: ["--csi-address=$(ADDRESS)", "--default-fstype=ext4", "--kubeconfig=/var/run/secrets/tenantcluster/value", "--v=5", "--timeout=3m", "--retry-interval-max=1m"]
+          env: [{ name: ADDRESS, value: /var/lib/csi/sockets/pluginproxy/csi.sock }]
+          volumeMounts:
+            - { name: socket-dir, mountPath: /var/lib/csi/sockets/pluginproxy/ }
+            - { name: tenantcluster, mountPath: /var/run/secrets/tenantcluster }
+        - name: csi-attacher
+          image: quay.io/openshift/origin-csi-external-attacher:latest
+          args: ["--csi-address=$(ADDRESS)", "--kubeconfig=/var/run/secrets/tenantcluster/value", "--v=5", "--timeout=3m", "--retry-interval-max=1m"]
+          env: [{ name: ADDRESS, value: /var/lib/csi/sockets/pluginproxy/csi.sock }]
+          volumeMounts:
+            - { name: socket-dir, mountPath: /var/lib/csi/sockets/pluginproxy/ }
+            - { name: tenantcluster, mountPath: /var/run/secrets/tenantcluster }
+          resources: { requests: { memory: 50Mi, cpu: 10m } }
+        - name: csi-liveness-probe
+          image: quay.io/openshift/origin-csi-livenessprobe:latest
+          args: ["--csi-address=/csi/csi.sock", "--probe-timeout=3s", "--health-port=10301"]
+          volumeMounts:
+            - { name: socket-dir, mountPath: /csi }
+          resources: { requests: { memory: 50Mi, cpu: 10m } }
+        - name: csi-resizer
+          image: registry.k8s.io/sig-storage/csi-resizer:v1.13.1
+          args: ["-csi-address=/csi/csi.sock", "-kubeconfig=/var/run/secrets/tenantcluster/value", "-v=5", "-timeout=3m", "-handle-volume-inuse-error=false"]
+          volumeMounts:
+            - { name: socket-dir, mountPath: /csi }
+            - { name: tenantcluster, mountPath: /var/run/secrets/tenantcluster }
+          resources: { requests: { cpu: 10m, memory: 20Mi } }
+          securityContext: { capabilities: { drop: ["ALL"] } }
+      volumes:
+        - { name: socket-dir, emptyDir: {} }
+        # DIRECT MOUNT of Kamaji's admin kubeconfig — the graduation insight (no imperative copy).
+        - name: tenantcluster
+          secret:
+            secretName: {{ $kc }}
+            items: [{ key: admin.conf, path: value }]
+{{- end }}

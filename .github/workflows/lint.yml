@@ -61,10 +61,16 @@ jobs:
             kustomize build "$e" | kubeconform -strict -summary -ignore-missing-schemas \
               -kubernetes-version 1.30.0
           done
-      - name: helm lint + template (tenant chart, against values.schema.json)
+      - name: helm lint + template (charts, against values.schema.json)
         run: |
-          helm lint components/tenancy/tenant-chart -f components/tenancy/tenant-chart/ci/lint-values.yaml
-          helm template t components/tenancy/tenant-chart -f components/tenancy/tenant-chart/ci/lint-values.yaml \
+          for chart in tenant-chart cluster-chart; do
+            helm lint "components/tenancy/$chart" -f "components/tenancy/$chart/ci/lint-values.yaml"
+            helm template t "components/tenancy/$chart" -f "components/tenancy/$chart/ci/lint-values.yaml" \
+              | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
+          done
+          # cluster-chart with wiring enabled (the graduated CSI/CCM/CRS path) must also render clean.
+          helm template t components/tenancy/cluster-chart -f components/tenancy/cluster-chart/ci/lint-values.yaml \
+            --set wiring.enabled=true --set wiring.inTenant.adminUser=alice@talu.local \
             | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
 
   # ---- Containerfiles (golden images) ----------------------------------------------------------

@@ -28,22 +28,34 @@ debugPublicKey: "ssh-ed25519 …"   # operator break-glass into node guests
 # everything else defaults (v1.34.1, 2 CP replicas, 2 workers, dedicated etcd on local-path)
 ```
 
-## The other half (post-provision wiring)
+## The cross-cluster wiring (`wiring.enabled`)
 
-A tenant cluster needs cross-cluster wiring that **cannot** be rendered up front, because it depends
-on the tenant's kubeconfig/CA, which only exist after the control plane is up:
+A tenant cluster needs wiring that depends on the tenant's kubeconfig — which only exists after the
+control plane is up. The **graduation insight** (F1 in
+[`docs/development/production-readiness-plan.md`](../../../docs/development/production-readiness-plan.md)):
+that wiring doesn't need the kubeconfig *at render time*, only *mounted* — so the chart can render it
+all, and the pods sit Pending until Kamaji publishes the `<name>-admin-kubeconfig` Secret, then start.
+No imperative post-provision step. Set `wiring.enabled: true`:
 
-1. **Dedicated etcd + DataStore** — a `kamaji-etcd` helm release on `local-path` named `<name>-local`
-   (the chart's default `dataStore`). Deploy this **before** the cluster reconciles.
-2. **kubevirt-csi** — infra-side controller (with the tenant kubeconfig) + tenant node plugin +
-   StorageClass → `ceph-block`.
-3. **cloud-provider-kubevirt** — LB controller for tenant `type: LoadBalancer` Services.
-4. **Pomerium kubectl route** — impersonation SA in the tenant + a route with the tenant CA + SA token.
+| Rendered (when `wiring.enabled`) | Where | How it gets the kubeconfig |
+|---|---|---|
+| `kubevirt-csi` controller + infra RBAC + `driver-config` | infra (tenant ns) | **direct mount** of `<name>-admin-kubeconfig` (key `admin.conf` → `value`) |
+| `cloud-provider-kubevirt` (CCM) + RBAC + cloud-config | infra (tenant ns) | same direct mount |
+| in-tenant CSI node plugin / `CSIDriver` / StorageClass + Pomerium impersonation RBAC + admin binding | tenant | `ClusterResourceSet` (CAPI applies with its held kubeconfig) |
 
-Today that wiring is the **`phys_kaas_tenant` ansible role**
-([`ansible/roles/phys_kaas_tenant/`](../../../ansible/roles/phys_kaas_tenant/)), validated end-to-end
-on the physical lab. Graduating it into a small operator (or Flux post-build hook) is the next step;
-this chart is the declarative half it builds on.
+Cluster-scoped objects are per-tenant-named, and the tenant lands in a dedicated `kaas-<name>`
+namespace (set `namespace` to override) so multiple tenants don't collide. `ClusterResourceSet`
+requires `EXP_CLUSTER_RESOURCE_SET=true` on the management cluster.
+
+Still prerequisites (not yet chart-rendered): the **dedicated etcd + DataStore** (`kamaji-etcd` helm
+release named `<name>-local`) and the **shared Pomerium route** (env-specific config blob; the
+`kaas-route-sync` CronJob is the planned mechanism). Tenant-cluster DR (in-tenant Velero) and worker
+autoscaling attach here next.
+
+> **Validation status:** `wiring.enabled` renders clean (`helm template`/`kubeconform`, wiring on and
+> off, in CI) but the *graduated chart path* is **not yet lab-exercised** — the validated path remains
+> the [`phys_kaas_tenant`](../../../ansible/roles/phys_kaas_tenant/) ansible role. Treat the chart
+> wiring as built-but-not-yet-run until a lab round-trip confirms it, then retire the role.
 
 ## Prerequisites (management cluster)
 
@@ -53,9 +65,10 @@ per-tenant etcd), Rook-Ceph RBD, and Cilium with `socketLB.hostNamespaceOnly`.
 
 ## Status
 
-The rendered manifests are **validated end-to-end** on the physical lab (two tenant clusters, full
-resilience suite — see [`docs/development/kaas-test-results.md`](../../../docs/development/kaas-test-results.md)).
-The chart form is validated by `helm template`/`helm lint`; deploying it **via Flux** (rather than the
-ansible role) is not yet wired. This is a reusable base — adopters set values in
-`environments/<site>/`, not here. The annotated source of truth is
-`ansible/roles/phys_kamaji/files/capi-tenant-reference.yaml`.
+The rendered **declarative** manifests are validated end-to-end on the physical lab (two tenant
+clusters, full resilience suite — see
+[`docs/development/kaas-test-results.md`](../../../docs/development/kaas-test-results.md)). The
+**wiring** (`wiring.enabled`) is a faithful chart-rendering of the validated `phys_kaas_tenant` role,
+CI-linted on and off, but not yet lab-exercised as a chart (see the validation-status note above). This
+is a reusable base — adopters set values in `environments/<site>/`, not here. The annotated source of
+truth is `ansible/roles/phys_kamaji/files/capi-tenant-reference.yaml`.
