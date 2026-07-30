@@ -155,8 +155,10 @@ into the tenant.
 
 ### KT-07 — Tenant → tenant isolation
 With `tenant-b` live: cross-kubeconfig auth must fail (distinct CAs); neither tenant can list the
-other's objects; tenant-b cannot reach tenant-a's API endpoint or pod CIDR (or the gap is recorded
-with the CNP fix specified); kamaji-etcd key prefixes are tenant-scoped.
+other's objects; tenant-b cannot reach tenant-a's API endpoint or pod CIDR; kamaji-etcd key prefixes
+are tenant-scoped. With the tenant chart's **Layer B baseline** (`networkBaseline.enabled`) on, the
+cross-tenant reach must be a **network DROP** (default-deny egress leaves only own-namespace + DNS
+allowed) — re-run expecting a Hubble drop record, not just an auth failure.
 
 ### KT-08 — Cluster delete & garbage collection
 `$M delete cluster tenant-b -n kaas-capi`.

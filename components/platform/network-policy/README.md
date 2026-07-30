@@ -14,9 +14,9 @@ address the substrate control plane.
 
 | Layer | Where | What |
 |---|---|---|
-| **A — cluster-wide deny** | this component (`CiliumClusterwideNetworkPolicy`) | selects any `talu.io/project-uuid` endpoint; **egressDeny** to `kube-apiserver`. Deny beats allow, so a tenant cannot re-open it. |
-| **B — per-tenant baseline** | tenant/cluster charts (`netpol-baseline.yaml`, planned) | default-deny egress + allow-list (own ns, cluster DNS, own LB/logging) and the mandatory `fromEntities: [host, remote-node, health]` ingress. Cross-tenant isolation (KT-07) falls out. |
-| **C — security groups** | tenant chart (`securitygroups.yaml`, exists) | cloud-style **additive** allow rules on the tenant's VMs. |
+| **A — cluster-wide deny** | this component (`CiliumClusterwideNetworkPolicy`) | selects any `talu.io/project-uuid` endpoint; **egressDeny** to `kube-apiserver`. Deny beats allow, so a tenant cannot re-open it. Covers **both** VM tenants and KaaS worker VMs (the cluster-chart stamps `talu.io/project-uuid` on workers). |
+| **B — per-tenant baseline** | tenant chart (`netpol-baseline.yaml`, opt-in `networkBaseline.enabled`) | default-deny egress + ingress with an allow-list (own ns, cluster DNS via the CoreDNS endpoints) and the mandatory `fromEntities: [host, remote-node, health]` ingress. Cross-tenant isolation (KT-07) falls out. |
+| **C — security groups** | tenant chart (`securitygroups.yaml`, exists) | cloud-style **additive** allow rules on the tenant's VMs (grant internet/peers when Layer B is on). |
 
 ## The two things that make Layer A safe
 

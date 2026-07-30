@@ -1,0 +1,40 @@
+{{- if .Values.networkBaseline.enabled }}
+{{- $root := . }}
+# Layer B — per-tenant network baseline (opt-in via networkBaseline.enabled). Having any egress/ingress
+# rule here flips every VM in the tenant to DEFAULT-DENY in that direction, so ONLY what is listed
+# (plus the additive securityGroups allows) is permitted. This is the strict-mode complement to
+# Layer A (the cluster-wide egress deny to kube-apiserver): here the tenant opts into denying
+# everything else too. Cross-tenant isolation (KT-07) falls out — a VM can reach only its own namespace.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: tenant-network-baseline
+  namespace: {{ .Values.slug }}
+  labels:
+    {{- include "talu-tenant.labels" $root | nindent 4 }}
+spec:
+  endpointSelector:
+    matchExpressions:
+      - { key: kubevirt.io/vm, operator: Exists }
+  egress:
+    # Cluster DNS (CoreDNS pods) — WITHOUT this every name lookup fails. kube-dns is NOT a Cilium
+    # reserved entity, so select the CoreDNS endpoints by label.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    # Own namespace (VM-to-VM within the tenant).
+    - toEndpoints:
+        - matchLabels: { k8s:io.kubernetes.pod.namespace: {{ .Values.slug }} }
+  ingress:
+    # Host/kubelet health & readiness probes originate from the NODE — omit and VM endpoints flap
+    # NotReady (the loki-ingress-policy lesson).
+    - fromEntities: [host, remote-node, health]
+    # Own namespace.
+    - fromEndpoints:
+        - matchLabels: { k8s:io.kubernetes.pod.namespace: {{ .Values.slug }} }
+{{- end }}
