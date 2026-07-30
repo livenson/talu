@@ -93,6 +93,24 @@
           }
         }
       }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "In-tenant Velero DR (PVC data). The etcd half is the mgmt-side kaas-backup CronJob.",
+      "properties": {
+        "inTenant": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "s3Url": { "type": "string", "default": "" },
+            "bucket": { "type": "string", "default": "" },
+            "existingSecret": { "type": "string", "default": "velero-garage" },
+            "veleroChartVersion": { "type": "string", "default": "8.1.0" }
+          }
+        }
+      }
     }
   }
 }

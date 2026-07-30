@@ -63,3 +63,16 @@ wiring:
     enabled: true
     # Gets cluster-admin in the tenant via the Pomerium impersonation route (the kubectl access model).
     adminUser: ""
+
+# ── In-tenant DR (the PVC-data half; the etcd half is the mgmt-side kaas-backup CronJob) ─────────
+# Velero + node-agent installed INSIDE the tenant (on its worker VMs, where the kubevirt-csi volumes
+# are mounted) via a HelmChartProxy, writing to Garage. Default off. Requires: Garage's S3 endpoint
+# reachable from the tenant (the garage-lb LoadBalancer — see components/platform/backup/garage-lb.yaml),
+# a per-tenant bucket, and the creds Secret provisioned in the tenant (SOPS/CRS — NOT rendered here).
+backup:
+  inTenant:
+    enabled: false
+    s3Url: ""                       # e.g. http://<garage-lb-ip>:3900 (required when enabled)
+    bucket: ""                      # per-tenant bucket, e.g. kaas-velero-<name> (required when enabled)
+    existingSecret: velero-garage   # Secret in the tenant's velero ns, key `cloud` (AWS creds file)
+    veleroChartVersion: "8.1.0"     # vmware-tanzu/velero chart
