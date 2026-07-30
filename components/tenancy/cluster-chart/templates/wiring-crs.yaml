@@ -1,0 +1,35 @@
+{{- if and .Values.wiring.enabled .Values.wiring.inTenant.enabled }}
+{{- $ns := include "talu-cluster.namespace" . }}
+# ── in-tenant manifests via ClusterResourceSet ───────────────────────────────────────────────────
+# CAPI applies these into the tenant cluster using the kubeconfig it already holds — so there is no
+# imperative `kubectl --kubeconfig` step. The manifests live as chart files (files/in-tenant/*.yaml),
+# tpl-rendered here so Values (infra StorageClass, admin user) resolve, and bundled into one ConfigMap
+# the ClusterResourceSet references. Requires EXP_CLUSTER_RESOURCE_SET=true on the management cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.name }}-in-tenant
+  namespace: {{ $ns }}
+  labels: {{- include "talu-cluster.labels" . | nindent 4 }}
+data:
+  csi.yaml: |
+{{ tpl (.Files.Get "files/in-tenant/csi.yaml") . | indent 4 }}
+  pomerium-rbac.yaml: |
+{{ tpl (.Files.Get "files/in-tenant/pomerium-rbac.yaml") . | indent 4 }}
+---
+apiVersion: addons.cluster.x-k8s.io/v1beta1
+kind: ClusterResourceSet
+metadata:
+  name: {{ .Values.name }}-in-tenant
+  namespace: {{ $ns }}
+  labels: {{- include "talu-cluster.labels" . | nindent 4 }}
+spec:
+  # Reconcile so edits to the bundle re-apply (ApplyOnce would freeze them at first sync).
+  strategy: Reconcile
+  clusterSelector:
+    matchLabels:
+      talu.io/project-uuid: {{ .Values.projectUuid | quote }}
+  resources:
+    - name: {{ .Values.name }}-in-tenant
+      kind: ConfigMap
+{{- end }}

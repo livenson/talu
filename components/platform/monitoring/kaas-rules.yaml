@@ -58,3 +58,50 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: "{{ $labels.namespace }} has tenant worker VM(s) not Ready for 10m"
+        # --- gap G6: alert on the CAPI/Kamaji inventory series ksm-crs.yaml already produces
+        # (closes the test plan's KT-20 — a stuck tenant cluster now pages instead of only showing
+        # amber on the dashboard). These fire only when a tenant exists, so they carry no cost on an
+        # empty fleet; the series are the same ones the KaaS dashboard's inventory table reads.
+        - alert: KaasClusterNotReady
+          # CAPI Cluster settles in phase "Provisioned"; anything else sustained is a stuck cluster.
+          expr: talu_kaas_cluster_phase_info{phase!="Provisioned"} == 1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "tenant cluster {{ $labels.namespace }}/{{ $labels.name }} stuck in phase {{ $labels.phase }} for 15m"
+        - alert: KaasMachineDeploymentStalled
+          # desired workers never became ready — bad containerdisk, expired bootstrap token (pre-MHC),
+          # or exhausted infra capacity. MHC remediates node crashes; this catches a join that never lands.
+          expr: |
+            (talu_kaas_workers_ready < talu_kaas_workers_desired) or
+            (talu_kaas_workers_desired > 0 unless talu_kaas_workers_ready)
+          for: 20m
+          labels: { severity: warning }
+          annotations:
+            summary: "tenant {{ $labels.cluster }} ({{ $labels.namespace }}) has workers not reaching Ready for 20m"
+        # --- tenant-cluster DR: the kaas-etcd-snapshot CronJob (components/tenancy/kaas-backup/).
+        # Observed via kube-state-metrics on the CronJob/Job itself — no Pushgateway. RPO target 15m,
+        # so a last-success older than 1h means backups have silently stopped (losing a tenant's etcd
+        # then loses the cluster with no recovery point).
+        - alert: KaasEtcdSnapshotStale
+          expr: |
+            time() - max(kube_cronjob_status_last_successful_time{namespace="kamaji-system", cronjob="kaas-etcd-snapshot"}) > 3600
+          for: 15m
+          labels: { severity: critical }
+          annotations:
+            summary: "kaas-etcd-snapshot has not succeeded in over 1h — tenant etcd backups are stale"
+        - alert: KaasEtcdSnapshotFailing
+          expr: kube_job_status_failed{namespace="kamaji-system", job_name=~"kaas-etcd-snapshot.*"} > 0
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "kaas-etcd-snapshot Job {{ $labels.job_name }} is failing — a tenant etcd snapshot did not complete"
+        # --- gap G1: the blackbox probe (blackbox-exporter.yaml + kaas-probe.yaml) catches "CP pods
+        # Ready but tenant API dead" — the KT-19 (LB failover) / KT-24 (quorum loss) outages the
+        # replica-count alerts miss. probe_success comes from the reconciler-maintained Probe.
+        - alert: KaasTenantApiserverDown
+          expr: probe_success{probe_type="tenant-apiserver"} == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "tenant apiserver {{ $labels.instance }} is unreachable (blackbox probe failing for 2m)"

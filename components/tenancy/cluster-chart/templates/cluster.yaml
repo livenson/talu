@@ -1,11 +1,11 @@
 {{- include "talu-cluster.validate" . -}}
-{{- $ns := .Values.namespace | default "kaas-capi" -}}
+{{- $ns := include "talu-cluster.namespace" . -}}
 # Managed tenant Kubernetes cluster — the DECLARATIVE half (CAPI + Kamaji + KubeVirt workers).
 # A faithful chart-rendering of the validated reference
 # (ansible/roles/phys_kamaji/files/capi-tenant-reference.yaml — keep that the annotated source of
-# truth). The cross-cluster wiring (dedicated etcd + DataStore, kubevirt-csi creds, cloud-provider,
-# Pomerium route) needs the tenant's generated kubeconfig/CA and is a post-provision step — see the
-# chart README and ansible/roles/phys_kaas_tenant.
+# truth). The cross-cluster wiring (kubevirt-csi, cloud-provider, in-tenant RBAC) is rendered by
+# templates/wiring-*.yaml when wiring.enabled; the dedicated etcd + DataStore and the shared Pomerium
+# route remain prerequisites (see the chart README).
 apiVersion: v1
 kind: Namespace
 metadata:

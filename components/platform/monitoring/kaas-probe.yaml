@@ -1,0 +1,118 @@
+# G1 — tenant-apiserver blackbox availability probe + its target reconciler.
+#
+# A Prometheus Probe can't template its targets from PromQL, so a reconciler must MATERIALIZE the
+# target list. probe-sync (the route-sync idiom: a */2 CronJob, bitnami/kubectl, Forbid) reads every
+# TenantControlPlane's .status.controlPlaneEndpoint and patches this Probe's staticConfig — so a new
+# tenant is probed within one interval and a deleted one drops off. No consumer restart: the
+# Prometheus operator reconciles the Probe into scrape config on its own.
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: kaas-tenant-apiservers
+  namespace: monitoring
+  labels: { app.kubernetes.io/part-of: talu }
+spec:
+  jobName: kaas-tenant-apiserver
+  interval: 30s
+  module: tcp_connect
+  prober:
+    url: blackbox-exporter.monitoring.svc:9115
+  targets:
+    staticConfig:
+      # Filled by probe-sync; empty until the first reconcile / first tenant.
+      static: []
+      labels:
+        probe_type: tenant-apiserver
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: probe-sync
+  namespace: monitoring
+---
+# TenantControlPlanes are namespaced (kaas-*); list across all namespaces needs a ClusterRole.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: probe-sync
+  labels: { app.kubernetes.io/part-of: talu }
+rules:
+  - apiGroups: ["kamaji.clastix.io"]
+    resources: ["tenantcontrolplanes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: probe-sync
+  labels: { app.kubernetes.io/part-of: talu }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: probe-sync }
+subjects:
+  - { kind: ServiceAccount, name: probe-sync, namespace: monitoring }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: probe-sync
+  namespace: monitoring
+rules:
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["probes"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: probe-sync
+  namespace: monitoring
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: probe-sync }
+subjects:
+  - { kind: ServiceAccount, name: probe-sync, namespace: monitoring }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: probe-sync
+  namespace: monitoring
+  labels: { app.kubernetes.io/part-of: talu }
+data:
+  sync.sh: |
+    #!/bin/sh
+    set -eu
+    # host:port endpoints of every live tenant control plane
+    eps=$(kubectl get tenantcontrolplanes -A \
+      -o jsonpath='{range .items[*]}{.status.controlPlaneEndpoint}{"\n"}{end}' 2>/dev/null \
+      | grep -v '^$' | sort -u || true)
+    arr=""
+    for e in $eps; do arr="$arr${arr:+,}\"$e\""; done
+    kubectl -n monitoring patch probe kaas-tenant-apiservers --type merge \
+      -p "{\"spec\":{\"targets\":{\"staticConfig\":{\"static\":[$arr]}}}}"
+    echo "probe-sync: $(printf '%s' "$eps" | grep -c . || true) tenant apiserver target(s)"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: probe-sync
+  namespace: monitoring
+  labels: { app.kubernetes.io/part-of: talu }
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: probe-sync
+          restartPolicy: Never
+          containers:
+            - name: sync
+              image: docker.io/bitnami/kubectl:latest
+              command: ["/bin/sh", "/scripts/sync.sh"]
+              volumeMounts:
+                - { name: script, mountPath: /scripts }
+          volumes:
+            - name: script
+              configMap: { name: probe-sync, defaultMode: 0555 }

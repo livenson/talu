@@ -26,6 +26,8 @@
     - { role: phys_portal,     tags: [portal, ui] }
     - { role: phys_pkg_repo,   tags: [pkg-repo, packages] }
     - { role: phys_tenancy,    tags: [tenancy, tenants] }
+    # Layer A network isolation — cluster-wide tenant egress deny (KT-06 fix); after tenancy labels exist.
+    - { role: phys_netpol,     tags: [netpol, security, isolation] }
     - { role: phys_kamaji,     tags: [kamaji, kaas] }
     - { role: phys_headlamp,   tags: [headlamp, kaas, ui] }
     - { role: phys_capi,       tags: [capi, kaas] }
@@ -33,3 +35,5 @@
     # opt-in: run with --tags kaas-tenant (and per-tenant vars) rather than in the default sweep.
     - { role: phys_kaas_tenant, tags: [kaas-tenant, never] }
     - { role: phys_backup,     tags: [backup, dr] }
+    # KaaS tenant-cluster DR: snapshots every per-tenant kamaji-etcd → Garage (needs phys_backup up).
+    - { role: phys_kaas_backup, tags: [kaas-backup, kaas, dr] }

@@ -34,10 +34,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install "yamllint==1.35.1"
+      - run: pip install "yamllint==1.35.1" "PyYAML==6.0.2"
       # No --strict: real errors (duplicate keys, tabs, bad flow braces) fail the job; style warnings
       # (e.g. long lines) print but don't block. Tighten to --strict once the tree is clean.
       - run: yamllint .
+      # Version compat-matrix: fail if any Cilium/k8s pin drifts from compat-matrix.yaml.
+      - run: python3 ci/check-compat-matrix.py
 
   # ---- Kubernetes manifests: build integrity (kbuild) + schema validation (kubeconform) ---------
   manifests:
@@ -61,10 +63,16 @@ jobs:
             kustomize build "$e" | kubeconform -strict -summary -ignore-missing-schemas \
               -kubernetes-version 1.30.0
           done
-      - name: helm lint + template (tenant chart, against values.schema.json)
+      - name: helm lint + template (charts, against values.schema.json)
         run: |
-          helm lint components/tenancy/tenant-chart -f components/tenancy/tenant-chart/ci/lint-values.yaml
-          helm template t components/tenancy/tenant-chart -f components/tenancy/tenant-chart/ci/lint-values.yaml \
+          for chart in tenant-chart cluster-chart; do
+            helm lint "components/tenancy/$chart" -f "components/tenancy/$chart/ci/lint-values.yaml"
+            helm template t "components/tenancy/$chart" -f "components/tenancy/$chart/ci/lint-values.yaml" \
+              | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
+          done
+          # cluster-chart with wiring enabled (the graduated CSI/CCM/CRS path) must also render clean.
+          helm template t components/tenancy/cluster-chart -f components/tenancy/cluster-chart/ci/lint-values.yaml \
+            --set wiring.enabled=true --set wiring.inTenant.adminUser=alice@talu.local \
             | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
 
   # ---- Containerfiles (golden images) ----------------------------------------------------------
@@ -102,3 +110,17 @@ jobs:
         run: |
           bash <(curl -sSLf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.7
           ./actionlint -color
+
+  # ---- Secrets gate: no plaintext secrets in Git (SOPS+age is the mechanism) -------------------
+  # Config + the demo-placeholder allowlist are in .gitleaks.toml (docs/operations/secrets.md).
+  # Scans the CURRENT TREE (--no-git), not full history: the gate's job is to keep new secrets out;
+  # a full-history scan can be enabled later once history has been audited for legacy findings.
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install gitleaks (pinned)
+        run: |
+          curl -sSLf https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | sudo tar xz -C /usr/local/bin gitleaks
+      - run: gitleaks detect --source . --no-git --config .gitleaks.toml --redact --verbose

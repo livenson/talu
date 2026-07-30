@@ -1,0 +1,234 @@
+# kaas-etcd-snapshot — per-tenant etcd disaster recovery.
+#
+# WHY: each KaaS tenant runs a DEDICATED kamaji-etcd (docs/architecture/kaas.md — ~50x better fsync
+# than the shared RBD default). That etcd IS the tenant cluster: lose its data and the cluster is gone,
+# and Velero (which backs up the mgmt cluster + VM tenants) does not reach it. A consistent etcd
+# snapshot is the one artifact that reconstitutes a tenant control plane.
+#
+# HOW (the reconciler-CronJob idiom, same shape as route-sync/cluster-sync): every 15 min a single
+# Job pod walks all Kamaji DataStores of driver=etcd, snapshots each to Garage S3, and prunes. It is
+# DISCOVERY-DRIVEN — no per-tenant config — so a newly provisioned tenant is backed up automatically
+# and a deleted one simply stops producing new snapshots. The DataStore CR is the source of truth for
+# BOTH the endpoints and the client-cert secret refs, so nothing here hardcodes a tenant name.
+#
+# The pod runs three stages in order (initContainers run to completion before the next):
+#   1. discover (kubectl): read each etcd DataStore's endpoints + TLS secret refs into a shared dir
+#   2. snapshot (etcdctl):  `etcdctl snapshot save` + `snapshot status` (integrity hash) per datastore
+#   3. upload   (aws-cli):  push <ts>.db + <ts>.status.json to s3://kaas-etcd/<datastore>/, prune to KEEP
+#
+# Freshness/failure are observed via kube-state-metrics on THIS CronJob/Job (no Pushgateway needed) —
+# see the KaasEtcdSnapshot* alerts in components/platform/monitoring/kaas-rules.yaml.
+#
+# BOOTSTRAP (one-time, imperative — see README.md): a Garage bucket `kaas-etcd`, a scoped key, and the
+# `garage-etcd-credentials` Secret (AWS shared-credentials `cloud` file) in kamaji-system.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kaas-etcd-snapshot
+  namespace: kamaji-system
+  labels:
+    app.kubernetes.io/part-of: talu
+    app.kubernetes.io/component: kaas-backup
+---
+# DataStore is cluster-scoped → ClusterRole. Read-only: list to enumerate, get to read refs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kaas-etcd-snapshot
+  labels: { app.kubernetes.io/part-of: talu }
+rules:
+  - apiGroups: ["kamaji.clastix.io"]
+    resources: ["datastores"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kaas-etcd-snapshot
+  labels: { app.kubernetes.io/part-of: talu }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: kaas-etcd-snapshot }
+subjects:
+  - { kind: ServiceAccount, name: kaas-etcd-snapshot, namespace: kamaji-system }
+---
+# The etcd client certs live in kamaji-system (the kamaji-etcd release namespace). Namespaced get only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kaas-etcd-snapshot
+  namespace: kamaji-system
+  labels: { app.kubernetes.io/part-of: talu }
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kaas-etcd-snapshot
+  namespace: kamaji-system
+  labels: { app.kubernetes.io/part-of: talu }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: kaas-etcd-snapshot }
+subjects:
+  - { kind: ServiceAccount, name: kaas-etcd-snapshot, namespace: kamaji-system }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kaas-etcd-snapshot
+  namespace: kamaji-system
+  labels: { app.kubernetes.io/part-of: talu }
+data:
+  # ── stage 1: discover ─────────────────────────────────────────────────────────────────────────
+  # For every etcd DataStore, materialize endpoints + ca/client cert/key into /work/<ds>/. The cert
+  # material is read FROM the secret refs the DataStore declares, so this tracks whatever kamaji-etcd
+  # generated. A data key like "ca.crt" contains a dot, which must be escaped inside a jsonpath map key.
+  discover.sh: |
+    #!/bin/sh
+    set -eu
+    W=/work
+    : > "$W/datastores.txt"
+    dss=$(kubectl get datastore -o jsonpath='{range .items[?(@.spec.driver=="etcd")]}{.metadata.name}{"\n"}{end}')
+    [ -n "$dss" ] || { echo "discover: no etcd DataStores found"; exit 0; }
+    for ds in $dss; do
+      d="$W/$ds"; mkdir -p "$d"
+      kubectl get datastore "$ds" -o jsonpath='{range .spec.endpoints[*]}{@}{"\n"}{end}' > "$d/endpoints"
+      read_ref() {  # $1=base jsonpath to a secretReference → prints the decoded secret value
+        base="$1"
+        n=$(kubectl get datastore "$ds" -o jsonpath="{$base.name}")
+        ns=$(kubectl get datastore "$ds" -o jsonpath="{$base.namespace}")
+        k=$(kubectl get datastore "$ds" -o jsonpath="{$base.keyPath}")
+        ke=$(echo "$k" | sed 's/\./\\./g')
+        kubectl get secret "$n" -n "$ns" -o "jsonpath={.data.$ke}" | base64 -d
+      }
+      read_ref .spec.tlsConfig.certificateAuthority.certificate.secretReference   > "$d/ca.crt"
+      read_ref .spec.tlsConfig.clientCertificate.certificate.secretReference      > "$d/tls.crt"
+      read_ref .spec.tlsConfig.clientCertificate.privateKey.secretReference       > "$d/tls.key"
+      chmod 600 "$d/tls.key"
+      echo "$ds" >> "$W/datastores.txt"
+      echo "discover: prepared $ds ($(wc -l < "$d/endpoints") endpoints)"
+    done
+  # ── stage 2: snapshot ─────────────────────────────────────────────────────────────────────────
+  # Try each member until one answers (a down member must not fail the whole tenant). `snapshot status`
+  # reads the hash back — a save that produced a corrupt file is caught here, not at restore time.
+  snapshot.sh: |
+    #!/bin/sh
+    set -u
+    export ETCDCTL_API=3
+    fail=0
+    [ -s /work/datastores.txt ] || { echo "snapshot: nothing to do"; exit 0; }
+    while read ds; do
+      d="/work/$ds"; ok=0
+      while read ep; do
+        url="https://${ep#*://}"
+        if etcdctl --endpoints="$url" --cacert="$d/ca.crt" --cert="$d/tls.crt" --key="$d/tls.key" \
+             snapshot save "$d/snapshot.db" >/dev/null 2>&1; then ok=1; break; fi
+      done < "$d/endpoints"
+      if [ "$ok" = 1 ] && etcdctl snapshot status -w json "$d/snapshot.db" > "$d/status.json" 2>/dev/null; then
+        echo "snapshot: OK $ds ($(wc -c < "$d/snapshot.db") bytes)"
+      else
+        echo "snapshot: FAILED $ds"; rm -f "$d/snapshot.db"; fail=1
+      fi
+    done < /work/datastores.txt
+    exit $fail
+  # ── stage 3: upload + prune ───────────────────────────────────────────────────────────────────
+  # Timestamped keys under s3://$BUCKET/<datastore>/. Keep the newest $KEEP .db objects (+ their
+  # status sidecars). Any per-tenant failure fails the Job so the KaasEtcdSnapshotFailing alert fires.
+  upload.sh: |
+    #!/bin/bash
+    set -u
+    : "${BUCKET:=kaas-etcd}" "${ENDPOINT:=http://garage.garage.svc:3900}" "${KEEP:=96}"
+    export AWS_REGION="${AWS_REGION:-garage}"
+    S3="aws --endpoint-url $ENDPOINT s3"
+    TS=$(date -u +%Y%m%dT%H%M%SZ)
+    fail=0
+    [ -s /work/datastores.txt ] || { echo "upload: nothing to do"; exit 0; }
+    while read ds; do
+      d="/work/$ds"
+      [ -f "$d/snapshot.db" ] || { echo "upload: no snapshot for $ds"; fail=1; continue; }
+      if $S3 cp "$d/snapshot.db" "s3://$BUCKET/$ds/$TS.db" && \
+         $S3 cp "$d/status.json" "s3://$BUCKET/$ds/$TS.status.json"; then
+        echo "upload: OK $ds/$TS.db"
+      else
+        echo "upload: FAILED $ds"; fail=1; continue
+      fi
+      keys=$($S3 ls "s3://$BUCKET/$ds/" | awk '{print $4}' | grep '\.db$' | sort)
+      total=$(printf '%s\n' "$keys" | grep -c . || true)
+      if [ "$total" -gt "$KEEP" ]; then
+        printf '%s\n' "$keys" | head -n "$((total-KEEP))" | while read k; do
+          $S3 rm "s3://$BUCKET/$ds/$k" || true
+          $S3 rm "s3://$BUCKET/$ds/${k%.db}.status.json" 2>/dev/null || true
+        done
+        echo "upload: pruned $((total-KEEP)) old snapshot(s) for $ds (keep $KEEP)"
+      fi
+    done < /work/datastores.txt
+    exit $fail
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kaas-etcd-snapshot
+  namespace: kamaji-system
+  labels:
+    app.kubernetes.io/part-of: talu
+    app.kubernetes.io/component: kaas-backup
+spec:
+  # RPO target 15 min. Site overlays may tune the schedule / KEEP env in environments/<site>/.
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels: { app.kubernetes.io/part-of: talu }
+        spec:
+          serviceAccountName: kaas-etcd-snapshot
+          restartPolicy: Never
+          # fsGroup so the non-root kubectl/etcd containers and the root aws-cli container share /work.
+          securityContext:
+            fsGroup: 1001
+          volumes:
+            - name: work
+              emptyDir: {}
+            - name: scripts
+              configMap: { name: kaas-etcd-snapshot, defaultMode: 0555 }
+            - name: creds
+              secret: { secretName: garage-etcd-credentials }
+          # Image tags follow the repo convention (cluster-sync uses :latest); pinning by digest is a
+          # hardening follow-up once the round-trip is lab-validated. bitnami/kubectl carries kubectl,
+          # bitnami/etcd carries etcdctl, amazon/aws-cli carries the S3 client (bash on amazonlinux).
+          initContainers:
+            - name: discover
+              image: docker.io/bitnami/kubectl:latest
+              command: ["/bin/sh", "/scripts/discover.sh"]
+              volumeMounts:
+                - { name: work, mountPath: /work }
+                - { name: scripts, mountPath: /scripts }
+            - name: snapshot
+              image: docker.io/bitnami/etcd:latest
+              command: ["/bin/sh", "/scripts/snapshot.sh"]
+              volumeMounts:
+                - { name: work, mountPath: /work }
+                - { name: scripts, mountPath: /scripts }
+          containers:
+            - name: upload
+              image: docker.io/amazon/aws-cli:latest
+              command: ["/bin/bash", "/scripts/upload.sh"]
+              env:
+                - { name: AWS_SHARED_CREDENTIALS_FILE, value: /creds/cloud }
+                - { name: AWS_REGION, value: garage }
+                - { name: BUCKET, value: kaas-etcd }
+                - { name: ENDPOINT, value: "http://garage.garage.svc:3900" }
+                - { name: KEEP, value: "96" }
+              volumeMounts:
+                - { name: work, mountPath: /work }
+                - { name: scripts, mountPath: /scripts }
+                - { name: creds, mountPath: /creds, readOnly: true }
+              resources:
+                requests: { cpu: 50m, memory: 128Mi }
+                limits: { memory: 512Mi }

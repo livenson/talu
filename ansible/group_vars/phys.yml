@@ -87,6 +87,8 @@ kamaji_chart_version: "0.0.0+latest"
 lab_floating_ip: "{{ lookup('env', 'LAB_FLOATING_IP') | default('203.0.113.10', true) }}"
 lab_domain: "{{ lab_floating_ip | replace('.', '-') }}.sslip.io"   # e.g. 203-0-113-10.sslip.io
 # Dex OIDC (reuses the product component config; bcrypt of the demo password).
+# SECURITY: dex_user_bcrypt + pomerium_idp_client_secret are DEMO PLACEHOLDERS — for a real deployment
+# move them to an encrypted secrets.sops.yaml and regenerate (docs/operations/secrets.md § Migration).
 dex_user_email: "alice@talu.local"
 dex_user_name: "alice"
 dex_user_bcrypt: "$2a$10$Yq.nLkSyi65yz/8AdmXpW.FEgnh6qXPfmuJDKLDDz67UoJJJKlpea"

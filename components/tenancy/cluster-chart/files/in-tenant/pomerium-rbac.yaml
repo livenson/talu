@@ -1,0 +1,45 @@
+# Applied INSIDE the tenant cluster via ClusterResourceSet. Pomerium's kubectl-access plumbing (the
+# impersonation model) + the first admin binding. Graduated from
+# ansible/roles/phys_kaas_tenant/templates/tenant-k8s-rbac.yaml.j2. Two layers: the Pomerium route
+# policy gates WHO reaches the API; this RBAC decides WHAT the impersonated identity can do. The
+# pomerium SA token alone is near-powerless (403 except impersonate). Templated via `tpl`.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pomerium
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pomerium-impersonation
+rules:
+  - { apiGroups: [""], resources: [users], verbs: [impersonate] }
+  - { apiGroups: [""], resources: [groups], verbs: [impersonate] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pomerium-impersonation
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: pomerium-impersonation }
+subjects:
+  - { kind: ServiceAccount, name: pomerium, namespace: kube-system }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pomerium-token
+  namespace: kube-system
+  annotations:
+    kubernetes.io/service-account.name: pomerium
+type: kubernetes.io/service-account-token
+{{- if .Values.wiring.inTenant.adminUser }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: talu-admin-{{ .Values.wiring.inTenant.adminUser | replace "@" "-" | replace "." "-" }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: cluster-admin }
+subjects:
+  - { kind: User, name: {{ .Values.wiring.inTenant.adminUser | quote }} }
+{{- end }}

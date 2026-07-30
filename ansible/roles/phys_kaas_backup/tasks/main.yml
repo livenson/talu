@@ -1,0 +1,95 @@
+---
+# Deploy the KaaS etcd-snapshot DR CronJob and bootstrap its Garage bucket/key. Idempotent; safe to
+# re-run. Requires the backup role (Garage) already up. Discovery-driven — no per-tenant config.
+- name: Ensure work dir on the gateway
+  ansible.builtin.file: { path: "{{ kb_dir }}", state: directory, mode: "0755" }
+
+# ── Garage bootstrap: dedicated bucket + scoped key for etcd snapshots ─────────────────────────
+# Garage stores nothing until a layout is applied (done by the backup role). Here we add a bucket and
+# an owner key scoped to it, then stash the credentials as the AWS shared-credentials `cloud` file the
+# CronJob's aws-cli reads. Parsing `key create` output is the only imperative part.
+- name: Resolve the Garage pod
+  ansible.builtin.command: >
+    {{ kb_k }} -n {{ kb_garage_namespace }} get pod -l app=garage -o jsonpath={.items[0].metadata.name}
+  register: kb_garage_pod
+  changed_when: false
+
+- name: Create the etcd-snapshot bucket (idempotent)
+  ansible.builtin.command: >
+    {{ kb_k }} -n {{ kb_garage_namespace }} exec {{ kb_garage_pod.stdout }} --
+    /garage bucket create {{ kb_garage_bucket }}
+  register: kb_bucket
+  changed_when: "'created' in kb_bucket.stdout or 'created' in kb_bucket.stderr"
+  failed_when: kb_bucket.rc != 0 and 'already exists' not in (kb_bucket.stderr + kb_bucket.stdout)
+
+# Reuse an existing key if present so re-runs don't orphan credentials; else create and capture it.
+- name: Look for an existing scoped key
+  ansible.builtin.command: >
+    {{ kb_k }} -n {{ kb_garage_namespace }} exec {{ kb_garage_pod.stdout }} --
+    /garage key info {{ kb_garage_key_name }} --show-secret
+  register: kb_key_info
+  changed_when: false
+  failed_when: false
+
+- name: Create the scoped key
+  ansible.builtin.command: >
+    {{ kb_k }} -n {{ kb_garage_namespace }} exec {{ kb_garage_pod.stdout }} --
+    /garage key create {{ kb_garage_key_name }}
+  register: kb_key_create
+  when: kb_key_info.rc != 0
+  changed_when: true
+
+- name: Grant the key read/write/owner on the bucket
+  ansible.builtin.command: >
+    {{ kb_k }} -n {{ kb_garage_namespace }} exec {{ kb_garage_pod.stdout }} --
+    /garage bucket allow --read --write --owner {{ kb_garage_bucket }} --key {{ kb_garage_key_name }}
+  changed_when: true
+
+# Key ID + secret appear as "Key ID: GK..." / "Secret key: ..." in create output, or in `key info
+# --show-secret` on a re-run. Grab from whichever ran.
+- name: Extract the access + secret keys
+  vars:
+    kb_key_out: "{{ kb_key_create.stdout if kb_key_info.rc != 0 else kb_key_info.stdout }}"
+  ansible.builtin.set_fact:
+    # regex_search with a backref group returns the captured group as a STRING (no `| first`).
+    kb_access_key: "{{ kb_key_out | regex_search('Key ID:\\s*(\\S+)', '\\1') }}"
+    kb_secret_key: "{{ kb_key_out | regex_search('Secret key:\\s*(\\S+)', '\\1') }}"
+
+- name: Assert we captured credentials
+  ansible.builtin.assert:
+    that: [kb_access_key | length > 0, kb_secret_key | length > 0]
+    fail_msg: "Could not parse Garage key credentials — inspect `garage key info {{ kb_garage_key_name }} --show-secret`"
+
+# The Secret the CronJob mounts (AWS shared-credentials `cloud` file, same format as garage-credentials).
+- name: Create/refresh garage-etcd-credentials in kamaji-system
+  ansible.builtin.shell: |
+    printf '[default]\naws_access_key_id=%s\naws_secret_access_key=%s\n' \
+      '{{ kb_access_key }}' '{{ kb_secret_key }}' \
+      | {{ kb_k }} -n kamaji-system create secret generic garage-etcd-credentials \
+          --from-file=cloud=/dev/stdin --dry-run=client -o yaml | {{ kb_k }} apply -f -
+  changed_when: true
+  no_log: true
+
+# ── The DR component itself ────────────────────────────────────────────────────────────────────
+- name: Copy the etcd-snapshot manifest to the gateway
+  ansible.builtin.copy: { src: "{{ kb_manifest_src }}", dest: "{{ kb_dir }}/etcd-snapshot.yaml", mode: "0644" }
+
+- name: Apply the etcd-snapshot DR CronJob + RBAC
+  ansible.builtin.command: "{{ kb_k }} apply -f {{ kb_dir }}/etcd-snapshot.yaml"
+  changed_when: true
+
+# Run once now so there's an immediate recovery point (and it surfaces any cert/RBAC problem at deploy
+# time rather than at the next :00/:15/:30/:45 tick).
+- name: Kick an initial snapshot and wait
+  ansible.builtin.shell: |
+    {{ kb_k }} -n kamaji-system delete job kaas-etcd-snapshot-init --ignore-not-found >/dev/null 2>&1
+    {{ kb_k }} -n kamaji-system create job kaas-etcd-snapshot-init --from=cronjob/kaas-etcd-snapshot
+    {{ kb_k }} -n kamaji-system wait --for=condition=complete job/kaas-etcd-snapshot-init --timeout=180s
+    {{ kb_k }} -n kamaji-system logs job/kaas-etcd-snapshot-init --all-containers | tail -20
+  register: kb_init
+  changed_when: true
+
+- ansible.builtin.debug:
+    msg: >-
+      kaas-etcd-snapshot deployed (every 15 min → s3://{{ kb_garage_bucket }}/<datastore>/).
+      Initial run: {{ kb_init.stdout_lines | default([]) }}

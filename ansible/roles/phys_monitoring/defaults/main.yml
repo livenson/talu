@@ -25,6 +25,12 @@ mon_rules:
   - recording-rules.yaml
   - node-rules.yaml
   - resource-rules.yaml
+  # KaaS layer: scrape targets + alert rules + the G1 blackbox tenant-API probe (+ its reconciler).
+  # Harmless before a tenant exists (the rules are conditional; the Probe target list is empty).
+  - kaas-scrape.yaml
+  - kaas-rules.yaml
+  - blackbox-exporter.yaml
+  - kaas-probe.yaml
 # Perses instance + dashboards (backup/pomerium/certs render empty until those layers land — harmless).
 mon_dashboards:
   - perses-instance.yaml
@@ -33,3 +39,4 @@ mon_dashboards:
   - dashboard-vmdetail.yaml
   - dashboard-alerts.yaml
   - dashboard-alertops.yaml
+  - dashboard-kaas.yaml

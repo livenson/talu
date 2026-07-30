@@ -4,7 +4,11 @@
 # Cluster identity (name is the CAPI cluster name; projectUuid is the manager join key).
 name: ""
 projectUuid: ""
-namespace: kaas-capi
+# Empty => "kaas-<name>", a DEDICATED namespace per tenant. This matters once wiring.enabled renders
+# CSI/CCM (their SAs/Roles/ConfigMaps would collide if two tenants shared one namespace) and makes
+# per-tenant metering/isolation key on namespace. Set explicitly (e.g. kaas-capi) only for the legacy
+# single-tenant-per-namespace layout.
+namespace: ""
 
 # Tenant Kubernetes version — tracks the newest quay.io/capk/ubuntu-2404-container-disk tag, NOT the
 # management version (no v1.35 capk image yet; the skew against Kamaji edge is handled in-template).
@@ -36,3 +40,26 @@ ciliumVersion: "1.19.6"
 # Operator break-glass SSH key baked into worker nodes. REQUIRED: CAPK skips its own keypair when
 # Kamaji manages the cluster, so this is the only way into a node guest.
 debugPublicKey: ""
+
+# ── Cross-cluster WIRING (the graduation of phys_kaas_tenant into the chart) ─────────────────────
+# When enabled, the chart renders the infra-side wiring that previously needed a post-provision
+# imperative step — by mounting the Kamaji-created "<name>-admin-kubeconfig" Secret DIRECTLY (the
+# pods sit Pending until Kamaji publishes it, then start; pure eventual consistency, no imperative
+# copy). Default off so the declarative-only behaviour is unchanged until you opt in.
+# NOT YET LAB-EXERCISED as a chart — the validated path remains ansible/roles/phys_kaas_tenant.
+wiring:
+  enabled: false
+  csi:
+    # Infra StorageClass tenant PVCs land on (kubevirt-csi maps tenant PVC -> infra PVC). The infra
+    # CDI StorageProfile for this class must default Filesystem/RWO (Block-mode CDI broken on Talos).
+    infraStorageClass: ceph-block
+    image: quay.io/kubevirt/kubevirt-csi-driver:latest
+  ccm:
+    enabled: true
+    image: quay.io/kubevirt/kubevirt-cloud-controller-manager:main
+  # In-tenant manifests applied via ClusterResourceSet (CAPI writes them with its held kubeconfig):
+  # the CSI node plugin/driver/StorageClass and the Pomerium impersonation RBAC + first admin binding.
+  inTenant:
+    enabled: true
+    # Gets cluster-admin in the tenant via the Pomerium impersonation route (the kubectl access model).
+    adminUser: ""

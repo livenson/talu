@@ -23,7 +23,7 @@ KUSTOMIZE := $(shell command -v kustomize >/dev/null 2>&1 && echo 'kustomize bui
 .DEFAULT_GOAL := help
 CHECK ?= --check   # upgrades default to dry-run; pass CHECK= (empty) to actually run
 .PHONY: help try up down trust lab-push lab-tunnel lab-down lab-sync lab-oci lab-status lab-logs lab-shell kbuild \
-        node-status node-drain node-uncordon talos-upgrade talos-upgrade-k8s
+        compat-check node-status node-drain node-uncordon talos-upgrade talos-upgrade-k8s
 
 help: ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort \
@@ -107,3 +107,6 @@ trust: ## import the cluster's dev CA into the local trust store (TLS without wa
 
 kbuild: ## verify the overlays build (structure-integrity / customization-boundary check)
 	@for e in environments/*/; do echo "== $(KUSTOMIZE) $$e =="; $(KUSTOMIZE) "$$e" >/dev/null && echo OK; done
+
+compat-check: ## enforce the version compat-matrix against the repo's pins (catches Cilium/k8s drift)
+	@python3 ci/check-compat-matrix.py

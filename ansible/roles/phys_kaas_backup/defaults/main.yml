@@ -1,0 +1,17 @@
+---
+# KaaS tenant-cluster DR — the mgmt-side etcd-snapshot CronJob (components/tenancy/kaas-backup/).
+# Snapshots every per-tenant kamaji-etcd DataStore to Garage. The in-tenant Velero half (PVC data)
+# ships via the talu-cluster chart's velero HelmChartProxy, not this role.
+kb_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+kb_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+kb_dir: "{{ talos_gen_dir }}/kaas-backup"
+
+# The component manifest (RBAC + script ConfigMap + CronJob), rendered from the repo.
+kb_manifest_src: "{{ playbook_dir }}/../components/tenancy/kaas-backup/etcd-snapshot.yaml"
+
+# Garage S3 target for etcd snapshots. A DEDICATED bucket + scoped key (separate from Velero's) so a
+# leaked etcd-backup key cannot touch VM backups and vice versa.
+kb_garage_bucket: "kaas-etcd"
+kb_garage_key_name: "kaas-etcd-key"
+kb_garage_endpoint: "http://garage.garage.svc:3900"
+kb_garage_namespace: "garage"

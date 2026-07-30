@@ -1,0 +1,75 @@
+# blackbox-exporter — external-probe engine for gap G1 (tenant-apiserver availability).
+# WHY IT MATTERS: the replica-count alerts (TenantControlPlaneUnavailable etc.) go blind to the
+# outages that matter — KT-19 (LB endpoint failover) and KT-24 (datastore quorum loss) both leave the
+# CP pods Ready while the tenant API is actually dead. A blackbox probe of the real endpoint is the
+# only thing that catches "pods up, API down". Prometheus selects all Probe CRs (see values.yaml),
+# and probe-sync (kaas-probe.yaml) keeps the target list in step with the live tenants.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels: { app.kubernetes.io/part-of: talu }
+data:
+  blackbox.yml: |
+    modules:
+      # TCP connect to host:port — proves the tenant API LB + apiserver port are reachable.
+      tcp_connect:
+        prober: tcp
+        timeout: 5s
+      # HTTPS GET /readyz (apiserver health is anonymous); TLS to a per-tenant CA we don't hold, so
+      # skip verify — we're testing liveness, not trust. Used by probe-sync as the readyz target.
+      https_readyz:
+        prober: http
+        timeout: 5s
+        http:
+          valid_status_codes: [200]
+          fail_if_not_ssl: true
+          tls_config: { insecure_skip_verify: true }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+    app.kubernetes.io/part-of: talu
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: blackbox-exporter }
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: blackbox-exporter
+        app.kubernetes.io/part-of: talu
+    spec:
+      containers:
+        - name: blackbox-exporter
+          image: quay.io/prometheus/blackbox-exporter:v0.25.0
+          args: ["--config.file=/etc/blackbox/blackbox.yml"]
+          ports: [{ name: http, containerPort: 9115 }]
+          volumeMounts:
+            - { name: config, mountPath: /etc/blackbox, readOnly: true }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          readinessProbe:
+            httpGet: { path: /-/healthy, port: http }
+            initialDelaySeconds: 5
+      volumes:
+        - name: config
+          configMap: { name: blackbox-exporter }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+    app.kubernetes.io/part-of: talu
+spec:
+  selector: { app.kubernetes.io/name: blackbox-exporter }
+  ports: [{ name: http, port: 9115, targetPort: http }]

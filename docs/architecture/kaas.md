@@ -131,18 +131,24 @@ Highlights:
 - **Product form:** the [`talu-cluster` chart](../../components/tenancy/cluster-chart/) renders the
   declarative CAPI objects (Cluster / KamajiControlPlane / MachineDeployment / MHC / Cilium proxy) from
   a values file — its `values.schema.json` *is* the tenant-cluster API, mirroring `talu-tenant`.
-- **Cross-cluster wiring** (per-tenant etcd, kubevirt-csi credentials, cloud-provider-kubevirt, the
-  Pomerium route) needs the tenant's generated kubeconfig/CA, which only exist after the CP is up — so
-  it's a **post-provision reconcile step**, encoded today as the `phys_kaas_tenant` ansible role
-  (`ansible/roles/phys_kaas_tenant/`) and validated on the physical lab. Graduating that wiring into a
-  small operator (or Flux post-build hook) is the next step; the declarative half is already a chart.
+- **Cross-cluster wiring** (kubevirt-csi, cloud-provider-kubevirt, in-tenant RBAC) is now **rendered
+  by the chart** under `wiring.enabled`: instead of an imperative post-provision step, it **mounts the
+  Kamaji-published `<name>-admin-kubeconfig` Secret directly** (pods stay Pending until it exists, then
+  start) and applies the in-tenant manifests via a `ClusterResourceSet`. So a tenant cluster is a
+  values file, no custom operator. This chart path is **not yet lab-exercised** — the validated path
+  remains the `phys_kaas_tenant` ansible role until a round-trip confirms it, then the role retires.
+  Still prerequisites: the per-tenant etcd + DataStore and the shared Pomerium route (a `kaas-route-sync`
+  CronJob is planned). See [`../development/production-readiness-plan.md`](../development/production-readiness-plan.md) § F.
 - **Observability:** the **Talu — KaaS** Perses dashboard + alert rules ship in
   [`../../components/platform/monitoring/`](../../components/platform/monitoring/) (`dashboard-kaas.yaml`,
   `kaas-rules.yaml`, `kaas-scrape.yaml`). The dashboard opens with a **live inventory of deployed tenant
   clusters** (name, k8s version, control-plane status, API endpoint, etcd datastore, workers
   ready/desired) and a **"How to connect"** panel with the `pomerium-cli` kubectl recipe — backed by a
   kube-state-metrics CustomResourceState over the CAPI/Kamaji CRs (`ksm-crs.yaml`; this closes gap G6).
-  Remaining top follow-up: a blackbox tenant-API probe (G1) — see the test plan's gap list.
+  Gap **G1** is closed too: a **blackbox tenant-API probe** (`blackbox-exporter.yaml` + `kaas-probe.yaml`)
+  with a `probe-sync` reconciler that keeps the probe targets in step with the live tenants, so the
+  `KaasTenantApiserverDown` alert catches "CP pods Ready but tenant API dead" (the KT-19/KT-24 outages
+  the replica-count alerts miss).
 - **Console:** **Headlamp** at `clusters.<domain>` (the KaaS analog of kubevirt-manager's
   `vms.<domain>`), admin-only behind Pomerium. It replaced the Kamaji Console, which only had static
   credentials (a second login on top of SSO). It runs **multi-cluster over the tenant clusters** — not

@@ -146,9 +146,12 @@ across nodes); PVC delete releases the infra ceph-block PV.
 ### KT-06 — Tenant → management isolation
 From a tenant pod: probe the mgmt API VIP (`172.18.0.10:6443`) and mgmt ingress; attempt auth with
 the tenant SA token.
-**Pass:** tenant workloads hold **no** credential for the management API; any raw reachability is
-recorded as a residual risk with a CiliumNetworkPolicy remediation ticket. The kubevirt-csi/CCM
-credentials live only in `kaas-capi` — confirm no infra kubeconfig Secret is projected into the tenant.
+**Pass:** tenant workloads hold **no** credential for the management API. With **Layer A**
+(`components/platform/network-policy/`, the cluster-wide `egressDeny` to `kube-apiserver`) applied, the
+probe must now be a **network DROP** (a Hubble drop record) — not merely a 401 — and a tenant that
+writes `egress: 0.0.0.0/0` in its own security group still cannot reach it (deny beats allow). The
+kubevirt-csi/CCM credentials live only in `kaas-capi` — confirm no infra kubeconfig Secret is projected
+into the tenant.
 
 ### KT-07 — Tenant → tenant isolation
 With `tenant-b` live: cross-kubeconfig auth must fail (distinct CAs); neither tenant can list the
@@ -372,9 +375,10 @@ the `Talu — KaaS` dashboard + Alertmanager must localize the fault within two 
 
 ### 4.2 Gaps to close
 
-- **G1 — Tenant-API blackbox probe** (highest-value single addition): blackbox-exporter `Probe` per
-  tenant endpoint → `KaasTenantApiserverDown` (critical, 2 m) + availability panel. Replica-count
-  alerting is blind to datastore and LB outages (KT-19/24).
+- **G1 — Tenant-API blackbox probe** ✅ **CLOSED** (`components/platform/monitoring/blackbox-exporter.yaml`
+  + `kaas-probe.yaml`): a `probe-sync` reconciler (the route-sync idiom) materializes one multi-target
+  `Probe` from every TCP's `.status.controlPlaneEndpoint` → `KaasTenantApiserverDown` (critical, 2 m).
+  Catches the datastore/LB outages (KT-19/24) the replica-count alerts miss. Availability panel: TODO.
 - **G2 — Konnectivity health**: restarts alert minimum; ideally scrape
   `konnectivity_network_proxy_server_ready_backend_connections` < worker count.
 - **G3 — LB-IPAM/L2**: lease-holder panel; alert on `kaas-*` Service with empty LB ingress.
@@ -402,6 +406,22 @@ the `Talu — KaaS` dashboard + Alertmanager must localize the fault within two 
 
 ---
 
+## 4.4 Disaster recovery (tenant-cluster etcd — `components/tenancy/kaas-backup/`)
+
+Validates that a tenant control plane is actually restorable from a `kaas-etcd-snapshot` artifact —
+a Completed snapshot that cannot be restored is a lie (same discipline as the Velero restore-test).
+
+- **KT-33 — etcd snapshot integrity + freshness:** after `phys_kaas_backup`, assert an object exists
+  at `s3://kaas-etcd/<datastore>/<ts>.db`, that `etcdctl snapshot status` on the downloaded file
+  reports a non-zero hash + revision, and that `KaasEtcdSnapshotStale` is **not** firing. Kill one
+  etcd member and confirm the next run still succeeds (the endpoint-failover loop). **SAFE-NOW.**
+- **KT-34 — Destroy-and-restore round-trip (Path A):** write a sentinel object into a tenant cluster
+  (a ConfigMap), take a snapshot, **destroy the tenant's `kamaji-etcd` data**, restore from the
+  snapshot (`etcdctl snapshot restore` → re-point members), and confirm the tenant API returns and the
+  sentinel is present byte-for-byte. Measure RTO. **WINDOW** (destroys a tenant control plane).
+
+---
+
 ## 5. Run order, budget, and recording
 
 | Block | Tests | Est. time | Class |
@@ -414,6 +434,8 @@ the `Talu — KaaS` dashboard + Alertmanager must localize the fault within two 
 | **Maintenance window** | **KT-24, KT-25** | **~2 h** | **WINDOW** |
 | Performance | KT-26…KT-29 | ~1 day | ANNOUNCE |
 | Observability | KT-30…KT-32 | folded in + 1 h | SAFE-NOW |
+| Disaster recovery | KT-33 | ~30 min | SAFE-NOW |
+| **Maintenance window** | **KT-34** | **~1 h** | **WINDOW** |
 
 **Per-run record:** repo git ref · `clastix/kamaji` image digest · CAPI/CAPK/provider versions ·
 tenant k8s version · test id · start/end UTC · measured recovery vs budget · alerts (name, fire,

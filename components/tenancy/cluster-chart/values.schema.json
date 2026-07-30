@@ -17,8 +17,8 @@
     },
     "namespace": {
       "type": "string",
-      "default": "kaas-capi",
-      "description": "Infra namespace holding the CAPI objects + worker VMs."
+      "default": "",
+      "description": "Infra namespace for the CAPI objects + worker VMs. Empty => dedicated 'kaas-<name>'."
     },
     "kubernetesVersion": {
       "type": "string",
@@ -61,6 +61,38 @@
       "type": "string",
       "minLength": 1,
       "description": "Operator break-glass SSH public key baked into worker nodes (CAPK skips its own under managed-by: kamaji)."
+    },
+    "wiring": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cross-cluster wiring (CSI/CCM/in-tenant RBAC) rendered when enabled, mounting Kamaji's admin kubeconfig directly.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "csi": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "infraStorageClass": { "type": "string", "default": "ceph-block" },
+            "image": { "type": "string", "default": "quay.io/kubevirt/kubevirt-csi-driver:latest" }
+          }
+        },
+        "ccm": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "image": { "type": "string", "default": "quay.io/kubevirt/kubevirt-cloud-controller-manager:main" }
+          }
+        },
+        "inTenant": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "adminUser": { "type": "string", "default": "", "description": "Gets cluster-admin in the tenant via the Pomerium impersonation route." }
+          }
+        }
+      }
     }
   }
 }
