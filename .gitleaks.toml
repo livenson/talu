@@ -12,9 +12,12 @@ regexes = [
   '''pomerium-secret-(lab|phys)''',
   '''\$2a\$10\$Yq\.nLkSyi65yz/8AdmXpW\.FEgnh6qXPfmuJDKLDDz67UoJJJKlpea''',
 ]
-# Example/stub files never carry real secrets by construction.
+# Example/stub files never carry real secrets by construction; docs are illustrative markdown (real
+# secrets live only in git-ignored secrets.yaml / *.secret.yaml). The entropy-based generic-api-key
+# rule otherwise false-positives on kubectl `--for=jsonpath=...` command snippets in the docs.
 paths = [
   '''.*\.example\.ya?ml$''',
   '''.*secrets\.example\.ya?ml$''',
   '''components/platform/secrets/.*\.example\.ya?ml$''',
+  '''docs/.*\.md$''',
 ]
