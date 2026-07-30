@@ -171,6 +171,8 @@ KaaS wiring off the `phys_kaas_tenant` role into the chart — are designed and 
 
 ## See also
 
+- **Deploy & access runbook** (operator-facing): [`../operations/kaas-deploy.md`](../operations/kaas-deploy.md)
+  — how to provision a tenant cluster and give a tenant `kubectl` + console access.
 - Test plan & results: [`../development/kaas-test-plan.md`](../development/kaas-test-plan.md),
   [`../development/kaas-test-results.md`](../development/kaas-test-results.md).
 - How Talu compares (Cozystack, the closest relative): [`comparison.md`](comparison.md).

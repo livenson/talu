@@ -13,13 +13,16 @@
   changed_when: true
 
 # clusterctl init is NOT idempotent (errors on an initialized cluster) — guard on capi-system.
+# EXP_CLUSTER_RESOURCE_SET=true turns on the ClusterResourceSet feature gate — REQUIRED by the
+# talu-cluster chart's wiring (it applies the in-tenant CSI node plugin + Pomerium RBAC via a CRS).
+# Lab-confirmed 2026-07-30: without it the CP comes up but the tenant gets no CSI/access.
 - name: Initialize Cluster API providers (kubeadm + kamaji + kubevirt + helm addon)
   ansible.builtin.shell: |
     if {{ capi_k }} get ns capi-system >/dev/null 2>&1; then
       echo "already initialized"; exit 0
     fi
     for i in 1 2 3; do
-      clusterctl init --bootstrap kubeadm --control-plane kamaji \
+      EXP_CLUSTER_RESOURCE_SET=true clusterctl init --bootstrap kubeadm --control-plane kamaji \
         --infrastructure kubevirt --addon helm && exit 0
       sleep 10
     done
@@ -27,6 +30,22 @@
   environment: { KUBECONFIG: "{{ capi_kubeconfig }}" }
   register: capi_init
   changed_when: "'already initialized' not in capi_init.stdout"
+
+# Idempotent backfill for clusters initialized before the gate was added (like the lab): ensure the
+# feature gate is on even when capi-system already exists.
+- name: Ensure the ClusterResourceSet feature gate is enabled
+  ansible.builtin.shell: |
+    ARGS=$({{ capi_k }} -n capi-system get deploy capi-controller-manager \
+      -o jsonpath='{range .spec.template.spec.containers[0].args[*]}{@}{"\n"}{end}')
+    IDX=$(echo "$ARGS" | grep -n -- '--feature-gates=' | cut -d: -f1)
+    [ -z "$IDX" ] && { echo "no feature-gates arg"; exit 0; }
+    CUR=$(echo "$ARGS" | sed -n "${IDX}p")
+    echo "$CUR" | grep -q 'ClusterResourceSet=true' && { echo "already on"; exit 0; }
+    {{ capi_k }} -n capi-system patch deploy capi-controller-manager --type=json \
+      -p "[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/args/$((IDX-1))\",\"value\":\"${CUR},ClusterResourceSet=true\"}]"
+  environment: { KUBECONFIG: "{{ capi_kubeconfig }}" }
+  register: capi_crs_gate
+  changed_when: "'already on' not in capi_crs_gate.stdout and 'no feature-gates' not in capi_crs_gate.stdout"
 
 - name: Wait for all provider controllers
   ansible.builtin.command: >
