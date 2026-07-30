@@ -162,6 +162,13 @@ Highlights:
   user colliding), so provisioning a tenant makes it show up and deleting one drops it off — no manual
   step. Role: `phys_headlamp`.
 
+## Production-readiness roadmap
+
+The gaps between "validated on the lab" and "production" — tenant-cluster DR, secrets (SOPS+age),
+multi-tenant network isolation, upgrade orchestration, the observability finish, and graduating the
+KaaS wiring off the `phys_kaas_tenant` role into the chart — are designed and prioritized in
+[`../development/production-readiness-plan.md`](../development/production-readiness-plan.md).
+
 ## See also
 
 - Test plan & results: [`../development/kaas-test-plan.md`](../development/kaas-test-plan.md),
