@@ -145,7 +145,10 @@ Highlights:
   clusters** (name, k8s version, control-plane status, API endpoint, etcd datastore, workers
   ready/desired) and a **"How to connect"** panel with the `pomerium-cli` kubectl recipe — backed by a
   kube-state-metrics CustomResourceState over the CAPI/Kamaji CRs (`ksm-crs.yaml`; this closes gap G6).
-  Remaining top follow-up: a blackbox tenant-API probe (G1) — see the test plan's gap list.
+  Gap **G1** is closed too: a **blackbox tenant-API probe** (`blackbox-exporter.yaml` + `kaas-probe.yaml`)
+  with a `probe-sync` reconciler that keeps the probe targets in step with the live tenants, so the
+  `KaasTenantApiserverDown` alert catches "CP pods Ready but tenant API dead" (the KT-19/KT-24 outages
+  the replica-count alerts miss).
 - **Console:** **Headlamp** at `clusters.<domain>` (the KaaS analog of kubevirt-manager's
   `vms.<domain>`), admin-only behind Pomerium. It replaced the Kamaji Console, which only had static
   credentials (a second login on top of SSO). It runs **multi-cluster over the tenant clusters** — not

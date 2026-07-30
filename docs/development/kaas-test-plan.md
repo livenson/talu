@@ -375,9 +375,10 @@ the `Talu — KaaS` dashboard + Alertmanager must localize the fault within two 
 
 ### 4.2 Gaps to close
 
-- **G1 — Tenant-API blackbox probe** (highest-value single addition): blackbox-exporter `Probe` per
-  tenant endpoint → `KaasTenantApiserverDown` (critical, 2 m) + availability panel. Replica-count
-  alerting is blind to datastore and LB outages (KT-19/24).
+- **G1 — Tenant-API blackbox probe** ✅ **CLOSED** (`components/platform/monitoring/blackbox-exporter.yaml`
+  + `kaas-probe.yaml`): a `probe-sync` reconciler (the route-sync idiom) materializes one multi-target
+  `Probe` from every TCP's `.status.controlPlaneEndpoint` → `KaasTenantApiserverDown` (critical, 2 m).
+  Catches the datastore/LB outages (KT-19/24) the replica-count alerts miss. Availability panel: TODO.
 - **G2 — Konnectivity health**: restarts alert minimum; ideally scrape
   `konnectivity_network_proxy_server_ready_backend_connections` < worker count.
 - **G3 — LB-IPAM/L2**: lease-holder panel; alert on `kaas-*` Service with empty LB ingress.

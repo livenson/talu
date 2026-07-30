@@ -96,3 +96,12 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: "kaas-etcd-snapshot Job {{ $labels.job_name }} is failing — a tenant etcd snapshot did not complete"
+        # --- gap G1: the blackbox probe (blackbox-exporter.yaml + kaas-probe.yaml) catches "CP pods
+        # Ready but tenant API dead" — the KT-19 (LB failover) / KT-24 (quorum loss) outages the
+        # replica-count alerts miss. probe_success comes from the reconciler-maintained Probe.
+        - alert: KaasTenantApiserverDown
+          expr: probe_success{probe_type="tenant-apiserver"} == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "tenant apiserver {{ $labels.instance }} is unreachable (blackbox probe failing for 2m)"

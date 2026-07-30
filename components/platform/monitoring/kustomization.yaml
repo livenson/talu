@@ -13,6 +13,9 @@ resources:
   - servicemonitors.yaml
   - controlplane-scrape.yaml
   - kaas-scrape.yaml
+  # G1: tenant-apiserver blackbox availability probe + its target reconciler
+  - blackbox-exporter.yaml
+  - kaas-probe.yaml
   - recording-rules.yaml
   - backup-rules.yaml
   - node-rules.yaml
