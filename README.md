@@ -1,15 +1,15 @@
 # Talu
 
-**Talu** (Estonian: *farmstead* — "own your ground") is an open-source, multitenant VM
-platform: fast tenant provisioning, HA, zero-downtime updates, with a deliberately small
-operational footprint. It runs on a Kubernetes + KubeVirt substrate (Talos Linux, Cilium,
-CephFS, KubeVirt/CDI, Pomerium, a generic OIDC IdP, Prometheus + Perses) and is **API-first and
-orchestrator-agnostic** — the whole management surface is the Kubernetes declarative API plus
+**Talu** (Estonian: *farmstead* — "own your ground") is an open-source, multitenant platform for
+**VMs and managed Kubernetes clusters**: fast tenant provisioning, HA, zero-downtime updates, with a
+deliberately small operational footprint. It runs on a Kubernetes + KubeVirt substrate (Talos Linux,
+Cilium, Rook-Ceph, KubeVirt/CDI, Pomerium, a generic OIDC IdP, Prometheus + Perses) and is **API-first
+and orchestrator-agnostic** — the whole management surface is the Kubernetes declarative API plus
 the Prometheus HTTP API. See [`docs/architecture/`](docs/architecture/) for the component
 diagram and [runtime flows](docs/architecture/flows.md).
 
 <p align="center">
-  <img src="docs/assets/architecture-overview.svg" alt="Talu architecture overview: the layered stack — access plane (Pomerium as the only ingress), tenancy (Flux + the talu-tenant chart rendering per-tenant namespaces), virtualization (KubeVirt/CDI), substrate (Talos, Cilium, CephFS) — with an observability &amp; ops rail cross-cutting every layer: metrics &amp; alerting (Prometheus + Perses + Alertmanager), logs &amp; audit (Loki + Alloy — Access Audit and VM Logs, operator + per-tenant), and backup/DR (Velero to Garage S3, with a weekly restore drill)." width="920">
+  <img src="docs/assets/architecture-overview.svg" alt="Talu architecture overview: the layered stack — access plane (Pomerium as the only ingress), tenancy (Flux renders a values file into a per-tenant namespace, two flavours: the talu-tenant chart for VM tenants and the talu-cluster chart for managed Kubernetes / KaaS — Cluster API + Kamaji hosted control planes + KubeVirt workers), virtualization (KubeVirt/CDI), substrate (Talos, Cilium, Rook-Ceph RBD + CephFS) — with an observability &amp; ops rail cross-cutting every layer: metrics &amp; alerting (Prometheus + Perses + Alertmanager, incl. KaaS cluster inventory + API probe), logs &amp; audit (Loki + Alloy — Access Audit and VM Logs, operator + per-tenant), and backup/DR (Velero to Garage S3 plus per-tenant etcd snapshots for KaaS, with a weekly restore drill)." width="920">
 </p>
 
 **Talu works standalone — no external orchestrator required.** You can operate it entirely
@@ -38,9 +38,11 @@ storage via kubevirt-csi → Ceph, tenant LoadBalancers via Cilium LB-IPAM, and 
 Validated end-to-end incl. a full resilience suite. See [`docs/architecture/kaas.md`](docs/architecture/kaas.md)
 and the [`talu-cluster` chart](components/tenancy/cluster-chart/).
 
-> Status: **early scaffold.** The architecture is settled (see `docs/architecture/`); the
-> component manifests are being implemented per the single-node pilot plan. The
-> remote-lab dev loop and the Rocky 10 validation path are runnable today.
+> Status: **actively developed.** The architecture is settled (see `docs/architecture/`); the VM and
+> managed-Kubernetes tenancy paths are implemented and **validated end-to-end on the physical KVM lab**
+> (full resilience suite + backup/DR), with production-readiness work ongoing (see
+> [`docs/development/production-readiness-plan.md`](docs/development/production-readiness-plan.md)).
+> Both the no-KVM quick-mode (Rocky 10) and the physical lab are runnable today.
 
 ## Repository layout
 
