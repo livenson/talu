@@ -17,6 +17,11 @@ kit — and for single-node incidents.
   `data`/`stringData`; Flux and ansible decrypt the *same* files), first-time key setup, the
   kustomize-does-not-decrypt trap, and the phased migration off the committed demo plaintext. Enforced
   by a **gitleaks** CI gate. Component: `components/platform/secrets/`.
+- **[`kaas-deploy.md`](kaas-deploy.md)** — **deploying & accessing a managed Kubernetes (KaaS) tenant
+  cluster**: the graduated `talu-cluster` chart (prereqs incl. the `ClusterResourceSet` gate, what gets
+  created, the direct-mount graduation insight), verification, and **access** — the Pomerium
+  impersonation `kubectl` route (validated: SA token → 403, +Impersonate-User → 200) and the Headlamp
+  console. Validated end-to-end on the physical lab.
 - **[`upgrades.md`](upgrades.md)** — **version upgrades** across the four surfaces (Talos/k8s substrate,
   platform components, KaaS tenants, CAPI providers). The **compat-matrix** (KubeVirt v1.8 → k8s ≤ 1.35)
   enforced by CI + Kyverno + Renovate; the tuppr adoption plan and the drain-must-live-migrate crux.
