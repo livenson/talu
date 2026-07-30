@@ -13,6 +13,10 @@ kit — and for single-node incidents.
 - **[`rotation.md`](rotation.md)** — rotating the **SSH User CA** (dual-trust, zero lockout, via the
   `talu-ca-trust` package — the platform never SSHes into guests) with `dev/lab/ca-rotate.sh`, plus
   platform-secret rotation (`secret-rotate.sh`) and the cert-manager auto-renewal note.
+- **[`secrets.md`](secrets.md)** — **secrets at rest with SOPS + age**: the model (encrypt only
+  `data`/`stringData`; Flux and ansible decrypt the *same* files), first-time key setup, the
+  kustomize-does-not-decrypt trap, and the phased migration off the committed demo plaintext. Enforced
+  by a **gitleaks** CI gate. Component: `components/platform/secrets/`.
 - **[`packages.md`](packages.md)** — how cluster-specific config reaches guests as **OS packages**:
   build → flat apt repo → the in-cluster `pkg-repo` → mutable-guest auto-update (or baked into bootc
   images). Validated end-to-end (install + reboot-less v1→v2 upgrade).

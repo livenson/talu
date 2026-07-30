@@ -70,6 +70,10 @@ talos_node_ip: "10.5.0.2"                                 # Talos-in-podman cont
 dex_version: "v2.45.1"
 dex_user_email: "alice@talu.local"
 dex_user_name: "alice"
+# SECURITY: dex_user_bcrypt + pomerium_idp_client_secret below are DEMO PLACEHOLDERS committed only
+# while the SOPS migration completes (docs/operations/secrets.md § Migration). For any real deployment,
+# move them to an encrypted ansible/group_vars/secrets.sops.yaml (see secrets.sops.example.yaml) and
+# REGENERATE — the committed values are burned. The gitleaks gate allow-lists exactly these two.
 # bcrypt of the demo password (regenerate: htpasswd -nbBC 10 x <pw> | cut -d: -f2 | sed 's/^$2y/$2a/')
 dex_user_bcrypt: "$2a$10$Yq.nLkSyi65yz/8AdmXpW.FEgnh6qXPfmuJDKLDDz67UoJJJKlpea"
 

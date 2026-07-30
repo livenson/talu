@@ -102,3 +102,17 @@ jobs:
         run: |
           bash <(curl -sSLf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.7
           ./actionlint -color
+
+  # ---- Secrets gate: no plaintext secrets in Git (SOPS+age is the mechanism) -------------------
+  # Config + the demo-placeholder allowlist are in .gitleaks.toml (docs/operations/secrets.md).
+  # fetch-depth: 0 so the scan covers full history, not just the tip commit.
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: install gitleaks (pinned)
+        run: |
+          curl -sSLf https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | sudo tar xz -C /usr/local/bin gitleaks
+      - run: gitleaks detect --config .gitleaks.toml --redact --verbose

@@ -1,0 +1,31 @@
+# SOPS creation rules — which files are encrypted, and to whose age key.
+#
+# SOPS + age is Talu's secrets-at-rest mechanism (the repo already assumes it: .gitignore, the
+# *.example stubs, docs/install & docs/customize). This file is what makes `sops -e <file>` and
+# `sops -d <file>` pick the right recipients automatically. Full model + migration:
+# docs/operations/secrets.md.
+#
+# ── BEFORE FIRST USE ──────────────────────────────────────────────────────────────────────────
+# Replace the placeholder recipient below with YOUR age public key(s):
+#   age-keygen -o ~/.config/sops/age/keys.txt        # prints "Public key: age1..."
+# Put that age1... value in `age:` here. Add one recipient per environment key (comma-separated) so
+# a site can be decrypted by its own key. The PRIVATE key never enters Git — Flux reads it from the
+# `sops-age` Secret; humans/ansible read it from SOPS_AGE_KEY_FILE.
+#
+# Encrypted files are matched by these path_regex rules. `encrypted_regex` limits encryption to the
+# value fields that are actually secret, leaving keys/structure readable in diffs.
+creation_rules:
+  # Environment overlay secrets (Flux decrypts these — see components/platform/secrets/).
+  - path_regex: environments/.*/secrets\.ya?ml$
+    encrypted_regex: "^(data|stringData)$"
+    age: &recipients >-
+      age1placeholderreplaceme00000000000000000000000000000000000000000000
+
+  # Any *.secret.yaml or secrets.yaml anywhere (already git-ignored as a backstop).
+  - path_regex: (^|/)(secrets|.*\.secret)\.ya?ml$
+    encrypted_regex: "^(data|stringData)$"
+    age: *recipients
+
+  # Ansible group/host vars carrying secrets: files named *.sops.yaml (loaded via community.sops).
+  - path_regex: ansible/.*\.sops\.ya?ml$
+    age: *recipients

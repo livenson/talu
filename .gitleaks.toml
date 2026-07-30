@@ -1,0 +1,20 @@
+# gitleaks config — the "no secrets in Git" gate (CI job `gitleaks` in .github/workflows/lint.yml).
+# Uses the upstream default ruleset, plus an allowlist for the KNOWN demo placeholders that are
+# committed while the SOPS migration completes (docs/operations/secrets.md § Migration). Anything else
+# secret-shaped fails the job.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known demo placeholders (rotate before any real deployment) + example stubs."
+# The two committed demo secret values (see docs/operations/secrets.md § Migration).
+regexes = [
+  '''pomerium-secret-(lab|phys)''',
+  '''\$2a\$10\$Yq\.nLkSyi65yz/8AdmXpW\.FEgnh6qXPfmuJDKLDDz67UoJJJKlpea''',
+]
+# Example/stub files never carry real secrets by construction.
+paths = [
+  '''.*\.example\.ya?ml$''',
+  '''.*secrets\.example\.ya?ml$''',
+  '''components/platform/secrets/.*\.example\.ya?ml$''',
+]
