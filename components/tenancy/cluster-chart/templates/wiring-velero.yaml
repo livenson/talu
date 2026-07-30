@@ -1,0 +1,59 @@
+{{- if .Values.backup.inTenant.enabled }}
+{{- $ns := include "talu-cluster.namespace" . }}
+{{- if not .Values.backup.inTenant.s3Url }}{{ fail "backup.inTenant.enabled requires backup.inTenant.s3Url (the Garage LB endpoint)" }}{{- end }}
+{{- if not .Values.backup.inTenant.bucket }}{{ fail "backup.inTenant.enabled requires backup.inTenant.bucket" }}{{- end }}
+# ── in-tenant Velero (the PVC-data half of tenant DR) ────────────────────────────────────────────
+# Installed INTO the tenant via a HelmChartProxy (same mechanism as the Cilium CNI proxy), so the
+# node-agent runs on the worker VMs where the kubevirt-csi volumes are actually mounted — the only
+# place tenant PVC data is reachable. Writes to Garage (reached via the garage-lb LoadBalancer, since
+# the mgmt-cluster ClusterIP is not routable from inside the tenant). The etcd half is the mgmt-side
+# kaas-etcd-snapshot CronJob (components/tenancy/kaas-backup/). See that README for the two restore tiers.
+#
+# The creds Secret ({{ .Values.backup.inTenant.existingSecret }}, key `cloud`) must already exist in the
+# tenant's velero namespace — provision it via SOPS/ClusterResourceSet, NEVER inline here.
+apiVersion: addons.cluster.x-k8s.io/v1alpha1
+kind: HelmChartProxy
+metadata:
+  name: velero-{{ .Values.name }}
+  namespace: {{ $ns }}
+  labels: {{- include "talu-cluster.labels" . | nindent 4 }}
+spec:
+  clusterSelector:
+    matchLabels:
+      talu.io/project-uuid: {{ .Values.projectUuid | quote }}
+  repoURL: https://vmware-tanzu.github.io/helm-charts
+  chartName: velero
+  version: {{ .Values.backup.inTenant.veleroChartVersion | quote }}
+  releaseName: velero
+  namespace: velero
+  options:
+    # the velero ns must be PSA-privileged for the node-agent hostPath mounts; wait for CRDs.
+    wait: true
+    timeout: 10m
+  valuesTemplate: |
+    initContainers:
+      - name: velero-plugin-for-aws
+        image: velero/velero-plugin-for-aws:v1.11.1
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+          - { mountPath: /target, name: plugins }
+    credentials:
+      useSecret: true
+      existingSecret: {{ .Values.backup.inTenant.existingSecret }}
+    configuration:
+      backupStorageLocation:
+        - name: default
+          provider: aws
+          bucket: {{ .Values.backup.inTenant.bucket }}
+          default: true
+          config:
+            region: garage
+            s3Url: {{ .Values.backup.inTenant.s3Url }}
+            s3ForcePathStyle: "true"
+      volumeSnapshotLocation: []
+      defaultVolumesToFsBackup: true
+      uploaderType: kopia
+    snapshotsEnabled: false
+    backupsEnabled: true
+    deployNodeAgent: true
+{{- end }}

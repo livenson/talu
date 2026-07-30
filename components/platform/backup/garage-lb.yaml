@@ -1,0 +1,30 @@
+# Garage S3 exposed on a routable IP for IN-TENANT Velero.
+#
+# WHY (standalone, NOT in kustomization.yaml): the default `garage` Service is a ClusterIP — reachable
+# from the management cluster's own pods (mgmt Velero, the kaas-etcd-snapshot job) but NOT from inside
+# a KaaS tenant cluster. In-tenant Velero (the talu-cluster chart's backup.inTenant) runs its node-agent
+# on the worker VMs and needs to reach Garage at a routable address. This LoadBalancer (Cilium LB-IPAM)
+# gives it one. It is kept OUT of the backup kustomization so environments without LB-IPAM (the no-KVM
+# sandbox) don't get a perpetually-Pending Service; apply it only where in-tenant DR is enabled:
+#
+#   kubectl apply -f components/platform/backup/garage-lb.yaml
+#   kubectl -n garage get svc garage-s3-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}'   # the IP
+#   # -> set the tenant chart's backup.inTenant.s3Url to http://<that-ip>:3900
+#
+# Pin the IP with the io.cilium/lb-ipam-ips annotation if you want it stable across recreates.
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage-s3-lb
+  namespace: garage
+  labels:
+    app: garage
+    app.kubernetes.io/part-of: talu
+  # annotations:
+  #   io.cilium/lb-ipam-ips: "172.18.0.60"   # optional: pin a free IP from the LB-IPAM pool
+spec:
+  type: LoadBalancer
+  selector:
+    app: garage
+  ports:
+    - { name: s3, port: 3900, targetPort: 3900 }

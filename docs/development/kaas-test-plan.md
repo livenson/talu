@@ -155,8 +155,10 @@ into the tenant.
 
 ### KT-07 — Tenant → tenant isolation
 With `tenant-b` live: cross-kubeconfig auth must fail (distinct CAs); neither tenant can list the
-other's objects; tenant-b cannot reach tenant-a's API endpoint or pod CIDR (or the gap is recorded
-with the CNP fix specified); kamaji-etcd key prefixes are tenant-scoped.
+other's objects; tenant-b cannot reach tenant-a's API endpoint or pod CIDR; kamaji-etcd key prefixes
+are tenant-scoped. With the tenant chart's **Layer B baseline** (`networkBaseline.enabled`) on, the
+cross-tenant reach must be a **network DROP** (default-deny egress leaves only own-namespace + DNS
+allowed) — re-run expecting a Hubble drop record, not just an auth failure.
 
 ### KT-08 — Cluster delete & garbage collection
 `$M delete cluster tenant-b -n kaas-capi`.
@@ -419,6 +421,10 @@ a Completed snapshot that cannot be restored is a lie (same discipline as the Ve
   (a ConfigMap), take a snapshot, **destroy the tenant's `kamaji-etcd` data**, restore from the
   snapshot (`etcdctl snapshot restore` → re-point members), and confirm the tenant API returns and the
   sentinel is present byte-for-byte. Measure RTO. **WINDOW** (destroys a tenant control plane).
+- **KT-35 — PVC-data round-trip (in-tenant Velero):** with `backup.inTenant.enabled`, write a sentinel
+  file into a tenant PVC, run an in-tenant Velero backup (node-agent/kopia → Garage via `garage-lb`),
+  delete the workload+PVC, restore, and confirm the file returns **byte-for-byte on a new PV**. Proves
+  the workload/data half that the etcd snapshot (KT-33/34) does not cover. **WINDOW.**
 
 ---
 
@@ -435,7 +441,7 @@ a Completed snapshot that cannot be restored is a lie (same discipline as the Ve
 | Performance | KT-26…KT-29 | ~1 day | ANNOUNCE |
 | Observability | KT-30…KT-32 | folded in + 1 h | SAFE-NOW |
 | Disaster recovery | KT-33 | ~30 min | SAFE-NOW |
-| **Maintenance window** | **KT-34** | **~1 h** | **WINDOW** |
+| **Maintenance window** | **KT-34, KT-35** | **~1.5 h** | **WINDOW** |
 
 **Per-run record:** repo git ref · `clastix/kamaji` image digest · CAPI/CAPK/provider versions ·
 tenant k8s version · test id · start/end UTC · measured recovery vs budget · alerts (name, fire,

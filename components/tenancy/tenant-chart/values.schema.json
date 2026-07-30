@@ -76,6 +76,14 @@
       "type": "string",
       "description": "Tier-1 CiliumLoadBalancerIPPool CIDR (empty = off)."
     },
+    "networkBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Layer B opt-in: default-deny egress/ingress on tenant VMs except DNS + own ns + host/health.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false }
+      }
+    },
     "securityGroups": {
       "type": "object",
       "description": "Cloud-style allow-rules attached to VMs, rendered to CiliumNetworkPolicies.",

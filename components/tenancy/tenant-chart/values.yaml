@@ -87,6 +87,15 @@ internalIpPool: ""         # tier-1 CiliumLoadBalancerIPPool CIDR for this tenan
 
 # Security groups: cloud-style ingress/egress allow-rules attached to VMs -> CiliumNetworkPolicy.
 # Managed via the tenant API (edit values), alongside the always-on <vm>-ssh-pin.
+# Layer B network baseline (opt-in hardening). When enabled, every VM in this tenant defaults to
+# DENY egress and ingress except: cluster DNS, its own namespace, and the mandatory host/health path.
+# Grant everything else (internet, specific peers) via securityGroups below — they're additive allows.
+# Cross-tenant isolation (KT-07) and tenant->mgmt-API isolation then fall out for free (the latter is
+# also enforced cluster-wide by Layer A, components/platform/network-policy/). Default off because a
+# general VM usually wants open egress; enable per security-sensitive tenant after a Hubble audit.
+networkBaseline:
+  enabled: false
+
 securityGroups: {}
 #   web:
 #     vms: [app1]          # VMs it applies to (kubevirt.io/vm); omitted/[] = all VMs in the tenant

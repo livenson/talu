@@ -85,6 +85,12 @@ spec:
         spec:
           runStrategy: Always
           template:
+            metadata:
+              labels:
+                # project-uuid so Layer A (the cluster-wide egress deny) covers KaaS worker VMs too,
+                # blocking worker->mgmt-apiserver; kaas-worker so the worker baseline CNP can select them.
+                talu.io/project-uuid: {{ .Values.projectUuid | quote }}
+                talu.io/kaas-worker: {{ .Values.name | quote }}
             spec:
               domain:
                 cpu:

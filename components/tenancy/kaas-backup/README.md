@@ -7,10 +7,13 @@ A tenant cluster's state lives in its **dedicated `kamaji-etcd`** (see
 cluster and VM tenants, but a hosted control plane's etcd is not in that picture — lose it and the
 tenant cluster is gone. A tenant's DR artifact is therefore **two** things:
 
-| Artifact | Where it comes from | This component |
+| Artifact | Where it comes from | Where it's defined |
 |---|---|---|
-| **etcd snapshot** (the control plane) | mgmt-side CronJob, `etcdctl snapshot save` → Garage | **yes** — `etcd-snapshot.yaml` |
-| **workload + PVC data** | in-tenant Velero (node-agent on the worker VMs) | no — `talu-cluster` chart's velero HelmChartProxy |
+| **etcd snapshot** (the control plane) | mgmt-side CronJob, `etcdctl snapshot save` → Garage | **here** — `etcd-snapshot.yaml` |
+| **workload + PVC data** | in-tenant Velero (node-agent on the worker VMs) → Garage | `talu-cluster` chart `backup.inTenant` (a velero `HelmChartProxy`) + `garage-lb.yaml` |
+
+The in-tenant half needs Garage reachable from the tenant (`components/platform/backup/garage-lb.yaml`
+exposes it on LB-IPAM), a per-tenant bucket, and the creds Secret provisioned in the tenant (SOPS/CRS).
 
 ## What's in here
 
