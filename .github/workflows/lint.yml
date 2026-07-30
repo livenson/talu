@@ -34,10 +34,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install "yamllint==1.35.1"
+      - run: pip install "yamllint==1.35.1" "PyYAML==6.0.2"
       # No --strict: real errors (duplicate keys, tabs, bad flow braces) fail the job; style warnings
       # (e.g. long lines) print but don't block. Tighten to --strict once the tree is clean.
       - run: yamllint .
+      # Version compat-matrix: fail if any Cilium/k8s pin drifts from compat-matrix.yaml.
+      - run: python3 ci/check-compat-matrix.py
 
   # ---- Kubernetes manifests: build integrity (kbuild) + schema validation (kubeconform) ---------
   manifests:

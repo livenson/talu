@@ -16,6 +16,7 @@ resources:
   - policies/require-project-uuid.yaml
   - policies/restrict-privileged.yaml
   - policies/verify-images-cosign.yaml
+  - policies/kaas-upgrade-compat.yaml   # upgrade guardrail: enforce the compat-matrix ceiling
 configMapGenerator:
   - name: kyverno-values
     namespace: kyverno

@@ -1,0 +1,52 @@
+# Machine-enforced upgrade guardrail: never let the Kubernetes version cross the compat-matrix ceiling
+# (the binding constraint is KubeVirt v1.8 -> k8s <= 1.35 — jumping the substrate breaks virt-launcher).
+# This turns the comment in group_vars into an admission-time invariant. It reads BOTH the live KubeVirt
+# version (a cross-resource apiCall) and the matrix constraint (the compat-matrix ConfigMap), and denies
+# a tuppr KubernetesUpgrade whose target would exceed the ceiling while KubeVirt still caps it.
+#
+# ⚠️ VERIFY-ON-LAB before flipping to Enforce (Audit-first per the repo's Kyverno convention, lab #39):
+#   1. the tuppr CRD kind/spec path — matched by bare `KubernetesUpgrade`; confirm the target-version
+#      field is `spec.version` (adjust the `target` variable if the installed CRD differs).
+#   2. the KubeVirt status field carrying the running version (observedKubeVirtVersion here).
+# The CI check (ci/check-compat-matrix.py) enforces the same ceiling on the repo's static pins already.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: talu-kaas-upgrade-compat
+  labels:
+    app.kubernetes.io/part-of: talu
+  annotations:
+    policies.kyverno.io/description: >-
+      Deny a Kubernetes upgrade that would exceed the compat-matrix ceiling while KubeVirt caps it
+      (KubeVirt v1.8 -> k8s <= 1.35).
+spec:
+  validationFailureAction: Audit        # env flip -> Enforce (security.kyverno.enforce) once verified
+  background: false
+  rules:
+    - name: k8s-not-above-kubevirt-cap
+      match:
+        any:
+          - resources:
+              kinds: ["KubernetesUpgrade"]
+      context:
+        # the constraint the matrix declares, e.g. "< 1.36.0-0"
+        - name: matrix
+          configMap:
+            name: compat-matrix
+            namespace: flux-system
+        # the version KubeVirt actually reports (may be absent very early — default keeps the gate safe)
+        - name: kvVersion
+          apiCall:
+            urlPath: "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt"
+            jmesPath: "status.observedKubeVirtVersion || 'unknown'"
+      validate:
+        message: >-
+          KubernetesUpgrade target {{ request.object.spec.version || 'unset' }} violates the compat matrix
+          ({{ matrix.data."kubernetes.allowedRange" }}) while KubeVirt is {{ kvVersion }}. Upgrade KubeVirt
+          past v1.8 first, then raise compat-matrix.yaml. See docs/operations/upgrades.md.
+        deny:
+          conditions:
+            all:
+              - key: "{{ semver_compare(request.object.spec.version || '0.0.0', matrix.data.\"kubernetes.allowedRange\") }}"
+                operator: Equals
+                value: false

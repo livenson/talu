@@ -22,6 +22,15 @@ metadata:
     app.kubernetes.io/part-of: talu
     talu.io/role: upgrade-guardrail
 data:
+  # ── flat keys for machine consumers (the Kyverno gate + the CI check read THESE, not the nested
+  # matrix.yaml below — no YAML-in-YAML parsing). Keep in step with matrix.yaml and lab-notes. ──────
+  kubernetes.max: "1.35"            # effective ceiling = min(maxKubernetes) across installed components
+  kubernetes.allowedRange: "< 1.36.0-0"   # Masterminds semver constraint the Kyverno gate feeds to semver_compare
+  kubernetes.current: "1.35.7"
+  kubernetes.managementMin: "1.33"
+  kubevirt.current: "1.8.4"
+  cilium.current: "1.19.6"
+  talos.current: "1.13.7"
   # Human-oriented note echoed into any rejection message the Kyverno gate emits.
   policy.note: |
     Talu upgrade guardrail. The binding constraint is KubeVirt v1.8 -> Kubernetes <= 1.35.

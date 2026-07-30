@@ -8,12 +8,15 @@ machine:
     - 127.0.0.1
     - localhost
   features:
-    # tuppr prerequisite — cheaper to grant now than to re-apply later (pilot plan Phase 3).
+    # tuppr prerequisite — cheaper to grant now than to re-apply later (pilot plan Phase 3). The
+    # namespace must match where the upgrade controller runs: tuppr-system for tuppr, system-upgrade
+    # for the Rancher SUC alternative. Both are listed so either controller can reach the Talos API.
     kubernetesTalosAPIAccess:
       enabled: true
       allowedRoles:
         - os:reader
       allowedKubernetesNamespaces:
+        - tuppr-system
         - system-upgrade
   kubelet:
     extraMounts:

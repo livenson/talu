@@ -17,6 +17,10 @@ kit — and for single-node incidents.
   `data`/`stringData`; Flux and ansible decrypt the *same* files), first-time key setup, the
   kustomize-does-not-decrypt trap, and the phased migration off the committed demo plaintext. Enforced
   by a **gitleaks** CI gate. Component: `components/platform/secrets/`.
+- **[`upgrades.md`](upgrades.md)** — **version upgrades** across the four surfaces (Talos/k8s substrate,
+  platform components, KaaS tenants, CAPI providers). The **compat-matrix** (KubeVirt v1.8 → k8s ≤ 1.35)
+  enforced by CI + Kyverno + Renovate; the tuppr adoption plan and the drain-must-live-migrate crux.
+  Component: `components/platform/upgrades/`.
 - **[`packages.md`](packages.md)** — how cluster-specific config reaches guests as **OS packages**:
   build → flat apt repo → the in-cluster `pkg-repo` → mutable-guest auto-update (or baked into bootc
   images). Validated end-to-end (install + reboot-less v1→v2 upgrade).
