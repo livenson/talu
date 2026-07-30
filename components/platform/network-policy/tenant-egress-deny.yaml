@@ -1,0 +1,41 @@
+# Layer A — cluster-wide tenant egress deny. THE KT-06 fix.
+#
+# ROOT CAUSE it addresses: egress was never enforced. No policy selected tenant endpoints for egress,
+# so Cilium left tenant egress allow-all — which is why KT-06 (tenant VM -> management kube-apiserver)
+# was stopped only by authn (401), not by the network, and KT-07 leaned on distinct CAs. This makes
+# the mgmt control plane unreachable from tenant workloads at L3/L4.
+#
+# SELECTS every endpoint carrying talu.io/project-uuid (tenant VMs stamp it — see the tenant chart).
+# It does NOT catch the Kamaji control-plane pods (they don't carry the label), so hosted tenant APIs
+# keep working. KaaS worker VMs are covered once they too carry the label (Layer B / worker baseline).
+#
+# THE DENY-POLICY FOOTGUN (documented in components/platform/logging/loki-ingress-policy.yaml): in this
+# Cilium a policy that selects an endpoint normally flips that direction to default-deny — which would
+# blackhole ALL tenant egress (internet, DNS). `enableDefaultDeny.egress: false` is the escape: the
+# egressDeny rules are still enforced, but the endpoint is NOT put into egress default-deny, so every
+# other egress path stays allowed. Deny always beats allow, so a tenant that later writes
+# `egress: 0.0.0.0/0` in its own security group still cannot reach the mgmt API — non-overridable.
+#
+# toEntities uses reserved identities (IP-family-agnostic → most of the IPv6 story for free), not CIDRs.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: talu-tenant-egress-deny-mgmt
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  endpointSelector:
+    matchExpressions:
+      - { key: talu.io/project-uuid, operator: Exists }
+  # Enforce the deny WITHOUT flipping tenants to egress default-deny (see the footgun note above).
+  enableDefaultDeny:
+    egress: false
+    ingress: false
+  egressDeny:
+    # The management kube-apiserver (reserved identity). This is the KT-06 fix — precise and safe:
+    # no tenant workload has any business reaching the substrate API.
+    - toEntities: [kube-apiserver]
+    # OPTIONAL HARDENING (stage 2, after a Hubble audit — see README): also cut the node host
+    # namespaces and peer nodes. Left commented because host/remote-node egress needs a real-traffic
+    # Hubble audit first (CCNP has no audit mode). Uncomment per environment once validated.
+    # - toEntities: [host, remote-node]

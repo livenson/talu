@@ -1,0 +1,5 @@
+---
+# Layer A network isolation — the cluster-wide tenant egress deny (components/platform/network-policy/).
+np_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+np_dir: "{{ talos_gen_dir }}/network-policy"
+np_manifest_src: "{{ playbook_dir }}/../components/platform/network-policy/tenant-egress-deny.yaml"

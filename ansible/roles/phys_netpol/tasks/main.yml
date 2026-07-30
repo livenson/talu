@@ -1,0 +1,19 @@
+---
+# Apply Layer A (cluster-wide tenant egress deny). Idempotent. Run after Cilium + tenancy so the
+# CRD exists and tenant endpoints are labelled. See components/platform/network-policy/README.md for
+# the staged host/remote-node hardening.
+- name: Ensure work dir
+  ansible.builtin.file: { path: "{{ np_dir }}", state: directory, mode: "0755" }
+
+- name: Copy the Layer A CCNP
+  ansible.builtin.copy: { src: "{{ np_manifest_src }}", dest: "{{ np_dir }}/tenant-egress-deny.yaml", mode: "0644" }
+
+- name: Apply the cluster-wide tenant egress deny
+  ansible.builtin.command: "{{ np_k }} apply -f {{ np_dir }}/tenant-egress-deny.yaml"
+  register: np_apply
+  changed_when: "'created' in np_apply.stdout or 'configured' in np_apply.stdout"
+
+- ansible.builtin.debug:
+    msg: >-
+      Layer A applied — tenant workloads can no longer reach the management kube-apiserver (KT-06 fix).
+      Enable the host/remote-node deny after a Hubble audit (see the component README).

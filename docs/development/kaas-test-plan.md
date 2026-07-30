@@ -146,9 +146,12 @@ across nodes); PVC delete releases the infra ceph-block PV.
 ### KT-06 — Tenant → management isolation
 From a tenant pod: probe the mgmt API VIP (`172.18.0.10:6443`) and mgmt ingress; attempt auth with
 the tenant SA token.
-**Pass:** tenant workloads hold **no** credential for the management API; any raw reachability is
-recorded as a residual risk with a CiliumNetworkPolicy remediation ticket. The kubevirt-csi/CCM
-credentials live only in `kaas-capi` — confirm no infra kubeconfig Secret is projected into the tenant.
+**Pass:** tenant workloads hold **no** credential for the management API. With **Layer A**
+(`components/platform/network-policy/`, the cluster-wide `egressDeny` to `kube-apiserver`) applied, the
+probe must now be a **network DROP** (a Hubble drop record) — not merely a 401 — and a tenant that
+writes `egress: 0.0.0.0/0` in its own security group still cannot reach it (deny beats allow). The
+kubevirt-csi/CCM credentials live only in `kaas-capi` — confirm no infra kubeconfig Secret is projected
+into the tenant.
 
 ### KT-07 — Tenant → tenant isolation
 With `tenant-b` live: cross-kubeconfig auth must fail (distinct CAs); neither tenant can list the
