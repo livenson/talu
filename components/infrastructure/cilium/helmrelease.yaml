@@ -8,7 +8,11 @@ spec:
   chart:
     spec:
       chart: cilium
-      version: "1.18.1"
+      # Keep in lockstep with ansible/group_vars/{all,phys}.yml (cilium_version) and the
+      # cluster-chart ciliumVersion default — the phys lab validated 1.19.6. Flux always renders
+      # values fresh from the ConfigMap below, so gotcha #24 (never --reuse-values on a bump)
+      # does not apply to this HelmRelease path.
+      version: "1.19.6"
       sourceRef:
         kind: HelmRepository
         name: cilium

@@ -1,0 +1,68 @@
+# compat-matrix — the single machine-readable source of truth for which component versions may run
+# together on Talu. It exists because the load-bearing constraint (KubeVirt v1.8 targets Kubernetes
+# <= 1.35 — jumping the substrate to 1.36 breaks virt-launcher) lived only as a comment in
+# group_vars/phys.yml. Encoding it here lets THREE enforcers read one file:
+#
+#   1. Kyverno ClusterPolicy (components/platform/kyverno/…) — a cross-resource apiCall reads the
+#      LIVE KubeVirt version and rejects any KubernetesUpgrade CR / kube HelmRelease that would put
+#      k8s above `kubevirt[<running>].maxKubernetes`. Kyverno ENFORCES; it never generates (lab #40).
+#   2. Renovate (renovate.json `packageRules[].allowedVersions`) — keeps automated bump PRs inside
+#      these ranges so a drift like the Cilium 1.18.1/1.19.6 pin cannot merge unnoticed.
+#   3. CI (`make` target / script) — fails the build if a pinned version in the repo falls outside
+#      its row here.
+#
+# Versions audited 2026-07-18 on the phys lab (docs/development/lab-notes.md §Component versions);
+# keep this file and that section in lockstep. Ranges are semver; "x" is a wildcard minor/patch.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: compat-matrix
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: talu
+    talu.io/role: upgrade-guardrail
+data:
+  # Human-oriented note echoed into any rejection message the Kyverno gate emits.
+  policy.note: |
+    Talu upgrade guardrail. The binding constraint is KubeVirt v1.8 -> Kubernetes <= 1.35.
+    Do not raise the substrate (or a tenant cluster) past a component's maxKubernetes until the
+    component that caps it has itself been upgraded. Edit compat-matrix.yaml + lab-notes together.
+  # ── the enforced pairwise rules (consumed by the Kyverno gate) ──────────────────────────────────
+  matrix.yaml: |
+    # Each component lists the Kubernetes window it supports at its currently-pinned version.
+    # The effective cluster ceiling is min(maxKubernetes) across every installed component.
+    kubernetes:
+      # substrate (mgmt) and tenant clusters share this authority; tenant <= min(mgmt, capk image).
+      current: "1.35.7"
+      # Kamaji hosted control planes require a management cluster at >= this (validated 2026-07-27).
+      managementMin: "1.33.0"
+    components:
+      kubevirt:
+        current: "1.8.4"
+        # THE binding cap: KubeVirt v1.8.x validates against Kubernetes up to 1.35.
+        minKubernetes: "1.30.0"
+        maxKubernetes: "1.35.x"
+      cdi:
+        current: "1.65.0"
+        minKubernetes: "1.30.0"
+        maxKubernetes: "1.35.x"
+      talos:
+        current: "1.13.7"
+        # Talos 1.13 itself ships k8s images up to 1.36, but KubeVirt caps us below that.
+        minKubernetes: "1.31.0"
+        maxKubernetes: "1.36.x"
+      cilium:
+        current: "1.19.6"
+        # No k8s cap in the validated window; pinned so a bump PR cannot drift the mgmt/tenant lockstep.
+        minKubernetes: "1.30.0"
+        maxKubernetes: "1.36.x"
+      certManager:
+        current: "1.21.0"
+        minKubernetes: "1.30.0"
+        maxKubernetes: "1.36.x"
+    # KaaS provider set (clusterctl upgrade apply is the mechanism; these are the validated pins).
+    capi:
+      core: "1.13.4"
+      controlPlaneKamaji: "0.20.0"
+      infrastructureKubevirt: "0.11.2"
+      addonHelm: "0.6.4"

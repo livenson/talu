@@ -58,3 +58,24 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: "{{ $labels.namespace }} has tenant worker VM(s) not Ready for 10m"
+        # --- gap G6: alert on the CAPI/Kamaji inventory series ksm-crs.yaml already produces
+        # (closes the test plan's KT-20 — a stuck tenant cluster now pages instead of only showing
+        # amber on the dashboard). These fire only when a tenant exists, so they carry no cost on an
+        # empty fleet; the series are the same ones the KaaS dashboard's inventory table reads.
+        - alert: KaasClusterNotReady
+          # CAPI Cluster settles in phase "Provisioned"; anything else sustained is a stuck cluster.
+          expr: talu_kaas_cluster_phase_info{phase!="Provisioned"} == 1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "tenant cluster {{ $labels.namespace }}/{{ $labels.name }} stuck in phase {{ $labels.phase }} for 15m"
+        - alert: KaasMachineDeploymentStalled
+          # desired workers never became ready — bad containerdisk, expired bootstrap token (pre-MHC),
+          # or exhausted infra capacity. MHC remediates node crashes; this catches a join that never lands.
+          expr: |
+            (talu_kaas_workers_ready < talu_kaas_workers_desired) or
+            (talu_kaas_workers_desired > 0 unless talu_kaas_workers_ready)
+          for: 20m
+          labels: { severity: warning }
+          annotations:
+            summary: "tenant {{ $labels.cluster }} ({{ $labels.namespace }}) has workers not reaching Ready for 20m"
