@@ -62,10 +62,18 @@ true` (with `min`/`max`). The chart then:
 - adds **scale-from-zero capacity** annotations (`capacity.cluster.x-k8s.io/{memory,cpu,maxPods}`) to
   the `KubevirtMachineTemplate` — the autoscaler can't introspect a KubeVirt VM's size;
 - deploys the autoscaler in the tenant namespace with **two connections**: `--kubeconfig` = the
-  direct-mounted Kamaji admin Secret (WORKLOAD — pending pods/nodes) and `CAPI_KUBECONFIG` = an
-  in-cluster SA kubeconfig (MANAGEMENT — the CAPI MachineDeployment to scale);
+  direct-mounted Kamaji admin Secret (WORKLOAD — pending pods/nodes) and **`--cloud-config`** = an
+  in-cluster SA kubeconfig (MANAGEMENT — the CAPI MachineDeployment to scale). *Lab finding: the
+  clusterapi provider reads the management kubeconfig from `--cloud-config`, not `CAPI_KUBECONFIG`; the
+  ClusterRole must also grant `machinepools` when the MachinePool feature gate is on.*
 - sets `--max-node-provision-time` ≥ the MHC `nodeStartupTimeout` (a fresh worker pulls the ~200 MB
   Cilium image before it's Ready — ~5 min on the lab — so the autoscaler must not give up early).
+
+**Lab-validated 2026-08-02:** with `min: 1, max: 3`, four unschedulable pods drove the MachineDeployment
+`1 → 3` (autoscaler discovered the node group, templated off the first Ready worker, scaled to max);
+deleting the workload scales back to `min` after `--scale-down-unneeded-time`. Scale-**from-zero**
+(`min: 0`, templated purely from the `capacity.cluster.x-k8s.io/*` annotations) is shipped but not yet
+confirmed on this provider version — use `min ≥ 1` until validated.
 
 > **GitOps caveat:** the deploying `HelmRelease` must **not** reconcile the replica count back, or Flux
 > and the autoscaler fight every scale event. Ignore the drift:

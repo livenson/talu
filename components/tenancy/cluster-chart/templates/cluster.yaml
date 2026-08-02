@@ -158,6 +158,11 @@ metadata:
     # cluster-autoscaler node-group bounds; the autoscaler discovers this MachineDeployment by clusterName.
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: {{ .Values.workers.autoscaling.min | quote }}
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: {{ .Values.workers.autoscaling.max | quote }}
+    # scale-from-zero / template-node capacity (also on the KubevirtMachineTemplate). Building a
+    # template node from these lets the autoscaler reason before a real node exists / is Ready.
+    capacity.cluster.x-k8s.io/memory: {{ .Values.workers.memory | default "8Gi" | quote }}
+    capacity.cluster.x-k8s.io/cpu: {{ .Values.workers.cores | default 4 | quote }}
+    capacity.cluster.x-k8s.io/maxPods: "110"
   {{- end }}
 spec:
   clusterName: {{ .Values.name }}
