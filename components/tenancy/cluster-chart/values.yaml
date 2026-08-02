@@ -27,9 +27,23 @@ controlPlane:
   replicas: 2          # spread across nodes → survives a management-node loss
 
 workers:
-  replicas: 2
+  replicas: 2          # ignored when autoscaling.enabled (the autoscaler owns the count)
   cores: 4
   memory: 8Gi
+  # Node autoscaling via a per-tenant cluster-autoscaler (clusterapi provider). When enabled the
+  # MachineDeployment's spec.replicas is OMITTED (the autoscaler owns it) and min/max annotations are
+  # rendered; scale-from-zero capacity annotations go on the KubevirtMachineTemplate. Default off.
+  # GitOps caveat: the deploying HelmRelease must NOT reconcile spec.replicas back —
+  #   spec.driftDetection.ignore: [{ paths: ["/spec/replicas"], target: { kind: MachineDeployment } }]
+  # or the autoscaler and Flux fight over the count. In-tenant pod autoscaling (HPA) is the tenant's
+  # own concern and needs nothing here.
+  autoscaling:
+    enabled: false
+    min: 1
+    max: 3
+    # Match the tenant Kubernetes minor (cluster-autoscaler tracks k8s).
+    image: registry.k8s.io/autoscaling/cluster-autoscaler:v1.34.0
+    maxNodeProvisionTime: 20m   # ≥ MHC nodeStartupTimeout (15m); a fresh worker pulls Cilium (~5 min)
 
 healthCheck:
   unreadyTimeout: 5m   # node NotReady this long → MachineHealthCheck replaces the Machine

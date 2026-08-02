@@ -70,11 +70,12 @@ jobs:
             helm template t "components/tenancy/$chart" -f "components/tenancy/$chart/ci/lint-values.yaml" \
               | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
           done
-          # cluster-chart with wiring + in-tenant backup enabled (graduated CSI/CCM/CRS + velero HCP).
+          # cluster-chart with wiring + in-tenant backup + worker autoscaling enabled (all opt-in paths).
           helm template t components/tenancy/cluster-chart -f components/tenancy/cluster-chart/ci/lint-values.yaml \
             --set wiring.enabled=true --set wiring.inTenant.adminUser=alice@talu.local \
             --set backup.inTenant.enabled=true --set backup.inTenant.s3Url=http://172.18.0.60:3900 \
             --set backup.inTenant.bucket=kaas-velero-tenant-a \
+            --set workers.autoscaling.enabled=true \
             | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
 
   # ---- Containerfiles (golden images) ----------------------------------------------------------

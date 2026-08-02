@@ -1,0 +1,127 @@
+{{- if .Values.workers.autoscaling.enabled }}
+{{- $ns := include "talu-cluster.namespace" . }}
+{{- $kc := include "talu-cluster.adminKubeconfigSecret" . }}
+# ── per-tenant cluster-autoscaler (clusterapi provider) ──────────────────────────────────────────
+# Scales this tenant's worker MachineDeployment on unschedulable-pod pressure. It runs in the MGMT
+# cluster (tenant namespace) and needs TWO connections (like nothing else in the chart):
+#   • WORKLOAD (tenant) — to watch pending pods/nodes: --kubeconfig = the direct-mounted Kamaji admin
+#     Secret ({{ $kc }}, admin.conf -> value), which is cluster-admin in the tenant.
+#   • MANAGEMENT — to scale the CAPI MachineDeployment: CAPI_KUBECONFIG = an in-cluster kubeconfig that
+#     uses this pod's ServiceAccount token (the ClusterRole below grants the CAPI verbs).
+# Node-group bounds + scale-from-zero capacity are annotations on the MachineDeployment /
+# KubevirtMachineTemplate (see cluster.yaml). Reminder: the deploying HelmRelease must ignore
+# /spec/replicas drift, or Flux and the autoscaler fight over the count.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-autoscaler
+  namespace: {{ $ns }}
+  labels: {{- include "talu-cluster.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-autoscaler-{{ .Values.name }}
+  labels: {{- include "talu-cluster.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["cluster.x-k8s.io"]
+    # machinepools is watched too when the MachinePool feature gate is on (list must not 403).
+    resources: ["machinedeployments", "machinedeployments/scale", "machines", "machinesets", "machinesets/scale", "machinepools", "machinepools/scale"]
+    verbs: ["get", "list", "update", "patch", "watch"]
+  - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cluster-autoscaler-{{ .Values.name }}
+  labels: {{- include "talu-cluster.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: cluster-autoscaler-{{ .Values.name }} }
+subjects:
+  - { kind: ServiceAccount, name: cluster-autoscaler, namespace: {{ $ns }} }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.name }}-autoscaler-mgmt-kubeconfig
+  namespace: {{ $ns }}
+  labels: {{- include "talu-cluster.labels" . | nindent 4 }}
+data:
+  # Reaches the management apiserver as this pod's ServiceAccount (token + CA auto-projected).
+  kubeconfig: |
+    apiVersion: v1
+    kind: Config
+    clusters:
+      - name: mgmt
+        cluster:
+          certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          server: https://kubernetes.default.svc
+    users:
+      - name: sa
+        user:
+          tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    contexts:
+      - name: mgmt
+        context: { cluster: mgmt, user: sa }
+    current-context: mgmt
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.name }}-cluster-autoscaler
+  namespace: {{ $ns }}
+  labels:
+    app: cluster-autoscaler
+    {{- include "talu-cluster.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: cluster-autoscaler, talu.io/cluster: {{ .Values.name }} }
+  template:
+    metadata:
+      labels: { app: cluster-autoscaler, talu.io/cluster: {{ .Values.name }} }
+    spec:
+      serviceAccountName: cluster-autoscaler
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: cluster-autoscaler
+          image: {{ .Values.workers.autoscaling.image | default "registry.k8s.io/autoscaling/cluster-autoscaler:v1.34.0" }}
+          command:
+            - /cluster-autoscaler
+            - --cloud-provider=clusterapi
+            - --node-group-auto-discovery=clusterapi:clusterName={{ .Values.name }},namespace={{ $ns }}
+            # MANAGEMENT (CAPI resources) — the clusterapi provider reads --cloud-config for this.
+            - --cloud-config=/mgmt/kubeconfig
+            # WORKLOAD (tenant) — where pods/nodes are watched.
+            - --kubeconfig=/workload/value
+            - --namespace=kube-system               # status configmap lives in the tenant's kube-system
+            - --leader-elect=false
+            - --scale-down-enabled=true
+            - --scale-down-unneeded-time=10m
+            - --scale-down-delay-after-add=10m
+            - --max-node-provision-time={{ .Values.workers.autoscaling.maxNodeProvisionTime | default "20m" }}
+            - --v=4
+          env:
+            # belt-and-suspenders: some builds read the management kubeconfig from this env instead.
+            - name: CAPI_KUBECONFIG
+              value: /mgmt/kubeconfig
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: workload, mountPath: /workload, readOnly: true }
+            - { name: mgmt, mountPath: /mgmt, readOnly: true }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: workload
+          secret:
+            secretName: {{ $kc }}
+            items: [{ key: admin.conf, path: value }]
+        - name: mgmt
+          configMap: { name: {{ .Values.name }}-autoscaler-mgmt-kubeconfig }
+{{- end }}
