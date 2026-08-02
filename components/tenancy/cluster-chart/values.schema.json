@@ -46,7 +46,19 @@
       "properties": {
         "replicas": { "type": "integer", "minimum": 1, "default": 2 },
         "cores": { "type": "integer", "minimum": 1, "default": 4 },
-        "memory": { "type": "string", "default": "8Gi" }
+        "memory": { "type": "string", "default": "8Gi" },
+        "autoscaling": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Node autoscaling via a per-tenant cluster-autoscaler (clusterapi provider).",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "min": { "type": "integer", "minimum": 0, "default": 1 },
+            "max": { "type": "integer", "minimum": 1, "default": 3 },
+            "image": { "type": "string", "default": "registry.k8s.io/autoscaling/cluster-autoscaler:v1.34.0" },
+            "maxNodeProvisionTime": { "type": "string", "default": "20m" }
+          }
+        }
       }
     },
     "healthCheck": {

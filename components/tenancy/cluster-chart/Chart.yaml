@@ -2,5 +2,5 @@ apiVersion: v2
 name: talu-cluster
 description: Talu managed tenant Kubernetes — the CAPI/Kamaji tenant-cluster API (declarative + wiring).
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.3.0
+appVersion: "0.3.0"

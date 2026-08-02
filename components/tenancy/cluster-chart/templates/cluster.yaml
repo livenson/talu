@@ -74,6 +74,14 @@ kind: KubevirtMachineTemplate
 metadata:
   name: {{ .Values.name }}-md-0
   namespace: {{ $ns }}
+  {{- if .Values.workers.autoscaling.enabled }}
+  annotations:
+    # Scale-from-zero: the cluster-autoscaler can't introspect a KubeVirt VM's size, so declare the
+    # node capacity here (read off the infra machine template by the clusterapi provider).
+    capacity.cluster.x-k8s.io/memory: {{ .Values.workers.memory | default "8Gi" | quote }}
+    capacity.cluster.x-k8s.io/cpu: {{ .Values.workers.cores | default 4 | quote }}
+    capacity.cluster.x-k8s.io/maxPods: "110"
+  {{- end }}
 spec:
   template:
     spec:
@@ -145,9 +153,20 @@ metadata:
   namespace: {{ $ns }}
   labels:
     {{- include "talu-cluster.labels" . | nindent 4 }}
+  {{- if .Values.workers.autoscaling.enabled }}
+  annotations:
+    # cluster-autoscaler node-group bounds; the autoscaler discovers this MachineDeployment by clusterName.
+    cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: {{ .Values.workers.autoscaling.min | quote }}
+    cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: {{ .Values.workers.autoscaling.max | quote }}
+  {{- end }}
 spec:
   clusterName: {{ .Values.name }}
+  {{- if not .Values.workers.autoscaling.enabled }}
   replicas: {{ .Values.workers.replicas | default 2 }}
+  {{- else }}
+  # replicas intentionally OMITTED — the cluster-autoscaler owns the count (see values.yaml). CAPI
+  # seeds 1 on first create; the autoscaler then holds it within [min,max].
+  {{- end }}
   selector:
     matchLabels: {}
   template:
