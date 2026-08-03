@@ -71,9 +71,16 @@ true` (with `min`/`max`). The chart then:
 
 **Lab-validated 2026-08-02:** with `min: 1, max: 3`, four unschedulable pods drove the MachineDeployment
 `1 → 3` (autoscaler discovered the node group, templated off the first Ready worker, scaled to max);
-deleting the workload scales back to `min` after `--scale-down-unneeded-time`. Scale-**from-zero**
-(`min: 0`, templated purely from the `capacity.cluster.x-k8s.io/*` annotations) is shipped but not yet
-confirmed on this provider version — use `min ≥ 1` until validated.
+deleting the workload scales back to `min` after `--scale-down-unneeded-time`.
+
+**Scale-from-zero (`min: 0`) does NOT work — the schema enforces `min ≥ 1`.** Confirmed on the lab
+(2026-08-03): at 0 nodes with a pending pod, `cluster-autoscaler v1.34.0`'s clusterapi provider hangs
+in a permanent `waiting for cache sync on infrastructure resource` loop — its dynamic informer for the
+`KubevirtMachineTemplate` (needed to build a template node from the `capacity.cluster.x-k8s.io/*`
+annotations) never syncs, so it reports *No expansion options* and never scales up. RBAC and the
+capacity annotations (kept for when this is fixed upstream) are correct; the block is in the provider.
+Because a cluster that scales to 0 then can't recover is a trap, `min: 0` is rejected until a provider
+version fixes the infra-informer sync.
 
 > **GitOps caveat:** the deploying `HelmRelease` must **not** reconcile the replica count back, or Flux
 > and the autoscaler fight every scale event. Ignore the drift:
