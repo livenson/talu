@@ -29,9 +29,12 @@
   until: mon_pull is not failed
 
 - name: Install kube-prometheus-stack (Prometheus + Alertmanager)
+  # ksm-crs.yaml is a second values layer (kube-state-metrics.customResourceState) — the source of the
+  # talu_kaas_* / talu_velero_* CRS metrics the billing rules read. The kustomize path merges it via
+  # configMapGenerator; the ansible path must pass it explicitly or a fresh deploy has no CRS metrics.
   ansible.builtin.shell: >-
     {{ mon_helm }} upgrade --install kube-prometheus-stack {{ kps_chart_tgz }}
-    --namespace monitoring -f {{ mon_dir }}/values.yaml
+    --namespace monitoring -f {{ mon_dir }}/values.yaml -f {{ mon_dir }}/ksm-crs.yaml
     {{ ('--set-string alertmanager.config.receivers[0].webhook_configs[0].url=' ~ alerting_webhook_url ~ ' --set-string alertmanager.config.receivers[1].webhook_configs[0].url=' ~ alerting_webhook_url) if (alerting_webhook_url | length > 0) else '' }}
     --wait --timeout 10m
   environment: { KUBECONFIG: "{{ mon_kubeconfig }}" }
