@@ -39,7 +39,7 @@ workers:
   # own concern and needs nothing here.
   autoscaling:
     enabled: false
-    min: 1
+    min: 1          # must be >=1 — scale-from-zero (min:0) is broken on the current provider (see README)
     max: 3
     # Match the tenant Kubernetes minor (cluster-autoscaler tracks k8s).
     image: registry.k8s.io/autoscaling/cluster-autoscaler:v1.34.0

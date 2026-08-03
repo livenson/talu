@@ -53,7 +53,7 @@
           "description": "Node autoscaling via a per-tenant cluster-autoscaler (clusterapi provider).",
           "properties": {
             "enabled": { "type": "boolean", "default": false },
-            "min": { "type": "integer", "minimum": 0, "default": 1 },
+            "min": { "type": "integer", "minimum": 1, "default": 1, "description": "Min nodes. Must be >=1: scale-from-zero is broken on the current provider (see README)." },
             "max": { "type": "integer", "minimum": 1, "default": 3 },
             "image": { "type": "string", "default": "registry.k8s.io/autoscaling/cluster-autoscaler:v1.34.0" },
             "maxNodeProvisionTime": { "type": "string", "default": "20m" }
