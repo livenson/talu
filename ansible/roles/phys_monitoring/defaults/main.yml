@@ -29,6 +29,7 @@ mon_rules:
   # Harmless before a tenant exists (the rules are conditional; the Probe target list is empty).
   - kaas-scrape.yaml
   - kaas-rules.yaml
+  - kaas-usage-rules.yaml
   - blackbox-exporter.yaml
   - kaas-probe.yaml
 # Perses instance + dashboards (backup/pomerium/certs render empty until those layers land — harmless).

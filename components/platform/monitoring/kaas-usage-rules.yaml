@@ -1,0 +1,57 @@
+# KaaS per-tenant usage — the billing half of the integration contract for MANAGED KUBERNETES tenants
+# (the VM analog is recording-rules.yaml `talu:tenant_*`). Closes gap G8.
+#
+# A managed-cluster tenant's whole footprint lives in its own `kaas-<name>` namespace (the talu-cluster
+# chart's default), so — like VM tenants — everything keys on `namespace`. Two cost components a
+# consumer must bill separately:
+#   • CONTROL-PLANE / infra overhead — the hosted apiserver/CM/scheduler/konnectivity + the per-tenant
+#     CSI/CCM/autoscaler pods. These are PODS, not VMIs, so `talu:tenant_*` (which meters kubevirt_vmi_*)
+#     misses them entirely — this is exactly the metering hole G8 named. Metered here from pod requests,
+#     excluding `virt-launcher-*` (the worker VMs, billed as worker vCPU below).
+#   • WORKER VMs — ordinary KubeVirt VMIs; same source as the VM-tenant rules.
+# CAVEAT: a DEDICATED per-tenant etcd runs as `etcd-<name>-*` in kamaji-system (not kaas-<name>), so its
+# cost is NOT in these namespace sums; attribute it by release name if you bill dedicated etcd. €-
+# conversion stays in the orchestrator — Talu only exposes usage. See docs/integrations/integrations.md §6.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: talu-kaas-usage
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  groups:
+    # Allocation — what a managed cluster reserves (the primary billing signal).
+    - name: talu.kaas.allocation
+      interval: 30s
+      rules:
+        # hosted control plane + per-tenant infra pods (apiserver/CM/scheduler/konnectivity/CSI/CCM/CA)
+        - record: talu:kaas_controlplane_cpu_cores:requested
+          expr: sum by (namespace) (kube_pod_container_resource_requests{namespace=~"kaas-.*", resource="cpu", pod!~"virt-launcher-.*"})
+        - record: talu:kaas_controlplane_memory_bytes:requested
+          expr: sum by (namespace) (kube_pod_container_resource_requests{namespace=~"kaas-.*", resource="memory", pod!~"virt-launcher-.*"})
+        # worker VMs (KubeVirt VMIs in the tenant's namespace)
+        - record: talu:kaas_worker_vcpu_cores:allocated
+          expr: sum by (namespace) (kubevirt_vm_resource_requests{namespace=~"kaas-.*", resource="cpu"})
+        - record: talu:kaas_worker_memory_bytes:allocated
+          expr: sum by (namespace) (kubevirt_vm_resource_requests{namespace=~"kaas-.*", resource="memory"})
+        - record: talu:kaas_worker_count
+          expr: sum by (namespace) (talu_kaas_workers_ready)
+        # tenant storage — the kubevirt-csi backing PVCs (+ any) in the namespace
+        - record: talu:kaas_storage_bytes:requested
+          expr: sum by (namespace) (kube_persistentvolumeclaim_resource_requests_storage_bytes{namespace=~"kaas-.*"})
+    # Usage — actual worker consumption (utilisation dashboards; informs metered billing).
+    - name: talu.kaas.usage
+      interval: 30s
+      rules:
+        - record: talu:kaas_worker_vcpu_seconds:rate5m
+          expr: sum by (namespace) (rate(kubevirt_vmi_vcpu_seconds_total{namespace=~"kaas-.*"}[5m]))
+        - record: talu:kaas_worker_network_transmit_bytes:rate5m
+          expr: sum by (namespace) (rate(kubevirt_vmi_network_transmit_bytes_total{namespace=~"kaas-.*"}[5m]))
+    # Info — namespace -> project_uuid, so a consumer joins managed-cluster usage to the tenant identity
+    # (mirrors talu:tenant_project_uuid:info). Sourced from talu_kaas_cluster_phase_info (ksm-crs.yaml).
+    - name: talu.kaas.info
+      interval: 30s
+      rules:
+        - record: talu:kaas_project_uuid:info
+          expr: count by (namespace, project_uuid) (talu_kaas_cluster_phase_info)
