@@ -13,6 +13,7 @@ resources:
   - servicemonitors.yaml
   - controlplane-scrape.yaml
   - kaas-scrape.yaml
+  - kaas-usage-rules.yaml   # G8: per-tenant KaaS billing (talu:kaas_*)
   # G1: tenant-apiserver blackbox availability probe + its target reconciler
   - blackbox-exporter.yaml
   - kaas-probe.yaml

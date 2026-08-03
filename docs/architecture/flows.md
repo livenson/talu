@@ -90,6 +90,13 @@ sequenceDiagram
 are truth, names are handles (`talu.io/project-uuid` is the join key); and Talu may run with **no
 orchestrator at all** — never design objects that require one to exist.
 
+**Managed Kubernetes (KaaS)** rides the *same four verbs*: **write** a `HelmRelease` for the
+`talu-cluster` chart; **watch** the CAPI/Kamaji `.status` (`Cluster` phase, `TenantControlPlane`
+readiness, `MachineDeployment` ready/desired) or the `talu_kaas_*` series; **read** the dedicated
+`talu:kaas_*` billing rules (a hosted control plane is pods, not VMs, so `talu:tenant_*` misses it);
+**delegate** kubectl via the Pomerium impersonation route. See
+[`../integrations/integrations.md` §6](../integrations/integrations.md#6--managed-kubernetes-kaas).
+
 ## Golden-image lifecycle and patching
 
 How an OS image is built, catalogued, and delivered — to **new** VMs and to **already-running** ones.

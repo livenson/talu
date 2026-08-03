@@ -40,6 +40,16 @@ is the same object, either applied directly or committed under `environments/<si
 reconciled from Git — so an orchestrator *adopts* Git-managed tenants rather than migrating them.
 See [`../architecture/flows.md`](../architecture/flows.md#tenant--vm-provisioning).
 
+## Managed Kubernetes (KaaS) tenants
+
+A tenant can instead get its **own Kubernetes cluster** — same four verbs, a different chart. Provision
+a `HelmRelease` referencing the **[`talu-cluster`](../../components/tenancy/cluster-chart/)** chart
+(its `values.schema.json` is the API); **watch** `Cluster.status.phase`, `TenantControlPlane` readiness,
+and `MachineDeployment` ready/desired (or the `talu_kaas_*` Prometheus series); **read** the dedicated
+`talu:kaas_*` recording rules for billing — the hosted control plane is *pods, not VMs*, so the VM
+`talu:tenant_*` rules miss it; **delegate** kubectl via the Pomerium impersonation route. Full details:
+[`integrations.md` §6](integrations.md#6--managed-kubernetes-kaas).
+
 ## Identity, secrets, SSH, console — where to look
 
 | Concern | Mechanism | Reference |
@@ -48,7 +58,8 @@ See [`../architecture/flows.md`](../architecture/flows.md#tenant--vm-provisionin
 | Guest secrets | cloud-init from a Kubernetes `Secret` (`cloudInitNoCloud.secretRef`) | §2 |
 | Shell access | Pomerium **Native SSH** — Pomerium is the SSH proxy + User CA; short-lived certs, no public :22 | §3 |
 | VM console | virt-api VNC subresource via a per-tenant ServiceAccount | §5 |
-| Usage → billing | Prometheus HTTP API — the `talu:tenant_*` per-namespace recording rules | [`monitoring/`](../../components/platform/monitoring/) |
+| Managed Kubernetes (KaaS) | `talu-cluster` chart; watch CAPI/Kamaji `.status`; `talu:kaas_*` billing; Pomerium impersonation kubectl | §6 |
+| Usage → billing | Prometheus HTTP API — `talu:tenant_*` (VMs) + `talu:kaas_*` (managed clusters) recording rules | [`monitoring/`](../../components/platform/monitoring/) |
 
 ## What a consumer must NOT assume
 

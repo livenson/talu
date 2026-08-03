@@ -160,6 +160,9 @@ kube-state-metrics:
                       ready: [status, kubernetesResources, version, status]
                       datastore: [spec, dataStore]
           # --- CAPI cluster phase --------------------------------------------------------------
+          # project_uuid rides here (the Cluster carries talu.io/project-uuid) so the billing rules
+          # can join a kaas-<name> namespace to the tenant identity — the KaaS analog of
+          # talu:tenant_project_uuid:info.
           - groupVersionKind:
               group: cluster.x-k8s.io
               version: v1beta1
@@ -168,6 +171,7 @@ kube-state-metrics:
             labelsFromPath:
               name: [metadata, name]
               namespace: [metadata, namespace]
+              project_uuid: [metadata, labels, "talu.io/project-uuid"]
             metrics:
               - name: cluster_phase_info
                 help: "CAPI Cluster phase (value always 1)."
