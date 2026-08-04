@@ -13,8 +13,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/component-base/cli"
 
-	taluserver "github.com/livenson/talu/apiserver/pkg/server"
 	tenantstore "github.com/livenson/talu/apiserver/pkg/registry/tenant"
+	taluserver "github.com/livenson/talu/apiserver/pkg/server"
 )
 
 type options struct {

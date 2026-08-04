@@ -17,8 +17,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/apiserver/pkg/registry/rest"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1"
@@ -45,28 +45,28 @@ type REST struct {
 }
 
 var (
-	_ rest.Storage               = &REST{}
-	_ rest.Scoper                = &REST{}
-	_ rest.Getter                = &REST{}
-	_ rest.Lister                = &REST{}
-	_ rest.Creater               = &REST{}
-	_ rest.GracefulDeleter       = &REST{}
-	_ rest.SingularNameProvider  = &REST{}
+	_ rest.Storage              = &REST{}
+	_ rest.Scoper               = &REST{}
+	_ rest.Getter               = &REST{}
+	_ rest.Lister               = &REST{}
+	_ rest.Creater              = &REST{}
+	_ rest.GracefulDeleter      = &REST{}
+	_ rest.SingularNameProvider = &REST{}
 )
 
 func NewREST(c dynamic.Interface, o Options) *REST {
 	return &REST{
-		client: c,
-		opts:   o,
+		client:         c,
+		opts:           o,
 		TableConvertor: rest.NewDefaultTableConvertor(v1alpha1.Resource("tenants")),
 	}
 }
 
-func (r *REST) New() runtime.Object                        { return &v1alpha1.Tenant{} }
-func (r *REST) NewList() runtime.Object                    { return &v1alpha1.TenantList{} }
-func (r *REST) NamespaceScoped() bool                      { return true }
-func (r *REST) GetSingularName() string                    { return "tenant" }
-func (r *REST) Destroy()                                   {}
+func (r *REST) New() runtime.Object     { return &v1alpha1.Tenant{} }
+func (r *REST) NewList() runtime.Object { return &v1alpha1.TenantList{} }
+func (r *REST) NamespaceScoped() bool   { return true }
+func (r *REST) GetSingularName() string { return "tenant" }
+func (r *REST) Destroy()                {}
 
 func namespaceFrom(ctx context.Context) (string, error) {
 	ns, ok := genericapirequest.NamespaceFrom(ctx)
