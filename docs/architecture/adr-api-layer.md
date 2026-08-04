@@ -521,15 +521,21 @@ auditability grounds — any `status.usage` is convenience only.
    is no way to ask for more. Named sizes fix that by construction, because an instancetype must
    state CPU.
 
-   ⚠ **Consequence for billing, worth fixing independently of this ADR.**
-   `talu:tenant_vcpu_cores:allocated` is `sum(kubevirt_vm_resource_requests{resource="cpu"})` — that
-   is the *pod CPU request*, which KubeVirt derives as `vCPUs × 1/cpuAllocationRatio` (default ratio
-   **10**). So the series reports **one tenth of guest vCPUs**, not vCPU cores as its name and the
-   fleet dashboard imply — and today, with no VM ever setting CPU, it is a near-constant ~0.1 per VM
-   that cannot distinguish a small tenant from a large one. Sizes make it at least *proportional*;
-   making it *correct* additionally needs either `cpuAllocationRatio: 1` (right if the platform bills
-   on reservation and does not overcommit) or a corrected/renamed recording rule. Tracked here
-   because the API review surfaced it, but it is a monitoring bug, not an API decision.
+   That the API cannot set CPU is confirmed by the metrics themselves: on `rocky-phys`, `acme/app1`
+   reports `kubevirt_vm_resource_requests{resource="cpu", source="default"}` — KubeVirt's marker for
+   "the VM specified no CPU topology at all".
+
+   ⚠ **A billing bug fell out of this review and is now fixed** (see the `fix(monitoring)` commit in
+   this series; it is a monitoring bug, not an API decision, so it is recorded here only as
+   provenance). The four allocation rules selected `kubevirt_vm_resource_requests` on `resource`
+   alone, but that metric is multi-dimensional: virt-controller emits the raw topology components
+   (`unit=cores|sockets|threads`) *and* the computed total (`unit=cores, source=guest_effective`),
+   so the sums added the parts to the whole. Measured on the lab: `acme` billed **4 vCPU for one
+   1-vCPU VM**, `kaas-capi` **16 for 8**, and memory was 2× everywhere. The overcount factor is not
+   constant — 4× for a VM that sets no topology, 2× for one that sets only `cores` — so it varies
+   per VM shape and could not have been calibrated out downstream. Fixed by pinning
+   `unit="cores"`/`unit="bytes"` and `source="guest_effective"`, the one series emitted exactly once
+   per VM.
 3. ~~**Group name.**~~ **Settled (2026-08-04): `tenancy.talu.io`**, leaving room for a future
    `compute.talu.io` / `net.talu.io`. Settling it mattered because the group is unversionable — and
    because §7's source review showed adopting `cozystack-api` would have served Talu's contract under
