@@ -301,13 +301,59 @@ type ApplicationDefinitionSpec struct {
 `talu-tenant` / `talu-cluster` `OCIRepository` unchanged. In principle Talu could deploy
 `cozystack-api` plus two `ApplicationDefinition`s and have §3 working without writing an API server.
 
-**Recommendation: prototype against `cozystack-api`, decide after.** It is the fastest route to a
-validated schema and it de-risks the whole ADR. The open questions that decide adopt-vs-fork-vs-build
-are: how much of `cozystack-api` assumes Cozystack's own conventions (`cozy-system`, release prefixes,
-tenant-namespace naming, the v1.x `Package`/`PackageSource` architecture); whether its release
-artifacts are consumable outside the Cozystack distribution; and whether depending on a CNCF Sandbox
-project's cadence is acceptable for Talu's core write path. Forking a ~single-purpose Go binary is a
-legitimate outcome; so is contributing the decoupling upstream.
+### Findings from the source review (2026-08-04)
+
+The mapping layer really is generic — `pkg/registry/apps/application/rest.go` drives everything off
+`releaseConfig.Prefix`, `kindName` and `gvk`, all supplied by the `ApplicationDefinition`. But
+adopting it **unmodified is blocked today**, and the blocker is the one thing that can never be fixed
+later:
+
+> `pkg/apis/apps/v1alpha1/register.go`: `const GroupName = "apps.cozystack.io"`
+
+The **kind** is configurable per definition; the **group is a compile-time constant**. Talu's kinds
+would be served as `apps.cozystack.io/v1alpha1 Tenant` — another project's group name on Talu's
+integration contract, and §10's open question 3 already notes the group is unversionable.
+
+Upstream is fixing exactly this. Draft PR
+[**cozystack#3448 — "dynamic API group registration via `ApplicationGroupDefinition`"**](https://github.com/cozystack/cozystack/pull/3448)
+(opened 2026-07-24 by **@lllamnyp, a core maintainer**; +1339/−65 across 23 files, `size/XXL`, no
+human review yet) adds a cluster-scoped `ApplicationGroupDefinition` plus an optional
+`spec.application.group`, so a third party can bring its own group. Its stated motivation is
+verbatim Talu's problem: *"Third-party catalogs and platform extensions cannot bring their own API
+group — everything lands in the platform's namespace."*
+
+Residual coupling that survives even if #3448 merges:
+
+- **No per-group versions.** #3448 fixes every group at `v1alpha1` ("a `versions` field can be added
+  compatibly later"). That collides head-on with **§1 problem 6 — "no API versioning story"**, which
+  is one of the ADR's core motivations. Adopting would trade a chart with no versions for an API with
+  one hardcoded version.
+- **RBAC for custom groups is explicitly deferred** — Talu would stamp its own ClusterRoles.
+- **Three extra API groups come along for the ride.** `start.go` registers `corev1alpha1`,
+  `appsv1alpha1` and `sdnv1alpha1` unconditionally, so a Talu cluster would also serve Cozystack's
+  `tenantnamespaces` / `tenantsecrets` / `tenantmodules` and its SDN kinds — concepts Talu does not
+  have. Hierarchical `quota.go` and `validateTenantNamespaceLength` likewise assume Cozystack's
+  nested-tenant model.
+- **The config-rollout mechanism comes too:** `ApplicationDefinition` is a `cozystack.io` CRD
+  reconciled by *cozystack-operator*, which hashes definitions into a pod annotation to restart
+  `cozystack-api`. Adopting means taking that, or reimplementing it.
+
+### Recommendation
+
+**Lean: build a minimal Talu apiserver, using Cozystack as the design reference, not the dependency.**
+The appeal of adopting was "don't write an apiserver" — but the integration surface above is not
+obviously smaller than a purpose-built server for **two kinds** with no nested tenancy, no quota
+hierarchy and no SDN. And adopting would import the very defect (a single hardcoded API version) that
+this ADR exists to fix.
+
+**Do not fork.** Changing one constant is trivial; owning a fork of a fast-moving XXL codebase to
+keep that constant changed is the worst of the three options, and #3448 would make the fork pointless.
+
+**Do engage upstream anyway.** Talu is precisely the second real-world consumer #3448 needs to
+justify merging; a comment on the PR costs nothing and improves the ecosystem either way. If it lands
+*and* grows per-group versions, adopting becomes attractive again and this recommendation should be
+revisited — the schema (§3/§4) is portable between the two paths, which is why Phase 0 was worth
+doing first regardless.
 
 **What is *not* negotiable either way:** §4's schema split and §3's kinds. Those are Talu's design
 work and they survive any choice of serving code.
