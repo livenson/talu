@@ -1,0 +1,13 @@
+# Two-stage build for talu-apiserver. Static (CGO_ENABLED=0) so the runtime image can be scratch:
+# client-go reads the ServiceAccount CA from its projected volume, so no system trust store is needed.
+FROM docker.io/library/golang:1.24 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/talu-apiserver ./cmd/talu-apiserver
+
+FROM scratch
+COPY --from=build /out/talu-apiserver /talu-apiserver
+USER 65532:65532
+ENTRYPOINT ["/talu-apiserver"]
