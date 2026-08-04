@@ -338,10 +338,10 @@ Residual coupling that survives even if #3448 merges:
   reconciled by *cozystack-operator*, which hashes definitions into a pod annotation to restart
   `cozystack-api`. Adopting means taking that, or reimplementing it.
 
-### Recommendation
+### Decision (2026-08-04): build minimal
 
-**Lean: build a minimal Talu apiserver, using Cozystack as the design reference, not the dependency.**
-The appeal of adopting was "don't write an apiserver" — but the integration surface above is not
+**Build a minimal Talu apiserver, using Cozystack as the design reference, not the dependency.** The
+appeal of adopting was "don't write an apiserver" — but the integration surface above is not
 obviously smaller than a purpose-built server for **two kinds** with no nested tenancy, no quota
 hierarchy and no SDN. And adopting would import the very defect (a single hardcoded API version) that
 this ADR exists to fix.
@@ -349,11 +349,21 @@ this ADR exists to fix.
 **Do not fork.** Changing one constant is trivial; owning a fork of a fast-moving XXL codebase to
 keep that constant changed is the worst of the three options, and #3448 would make the fork pointless.
 
-**Do engage upstream anyway.** Talu is precisely the second real-world consumer #3448 needs to
-justify merging; a comment on the PR costs nothing and improves the ecosystem either way. If it lands
-*and* grows per-group versions, adopting becomes attractive again and this recommendation should be
-revisited — the schema (§3/§4) is portable between the two paths, which is why Phase 0 was worth
-doing first regardless.
+**Revisit trigger — watch [cozystack#3448](https://github.com/cozystack/cozystack/pull/3448).** This
+decision is contingent, not permanent. Reopen it if *both* of these become true:
+
+1. #3448 (or a successor) **merges**, so a third party can register its own API group; **and**
+2. per-group **`versions`** land — the field the PR explicitly defers ("a `versions` field can be
+   added compatibly later"). Without it, adopting still means one hardcoded `v1alpha1`, which is
+   §1 problem 6 all over again.
+
+If only (1) happens, stay on the built server. Nothing is stranded either way: the schema (§3/§4,
+landed in Phase 0) is portable between both paths, which is why it was worth doing first. Re-check
+the PR's state before starting any milestone of §8 Phase 1 — if it has landed with versions, the
+cheapest move may be to stop building and adopt.
+
+**Engage upstream regardless.** Talu is precisely the second real-world consumer #3448 needs to
+justify merging; a comment on the PR costs nothing and improves the ecosystem whichever way Talu goes.
 
 **What is *not* negotiable either way:** §4's schema split and §3's kinds. Those are Talu's design
 work and they survive any choice of serving code.
@@ -439,7 +449,15 @@ auditability grounds — any `status.usage` is convenience only.
 2. **Named sizes (`size: small`) vs raw `cores`/`memory`.** Named sizes are a cleaner integrator API
    and map to KubeVirt instancetypes, but need a site-owned catalog and a story for a consumer that
    wants something not in it.
-3. **Group name.** `tenancy.talu.io` leaves room for a future `compute.talu.io` / `net.talu.io`.
-   Confirm before anything is served, since the group is unversionable.
+3. ~~**Group name.**~~ **Settled (2026-08-04): `tenancy.talu.io`**, leaving room for a future
+   `compute.talu.io` / `net.talu.io`. Settling it mattered because the group is unversionable — and
+   because §7's source review showed adopting `cozystack-api` would have served Talu's contract under
+   `apps.cozystack.io` instead.
+   The related worry — that Talu's `Tenant` kind collides with Cozystack's `Tenant` (kinds must be
+   globally unique across groups, since OpenAPI refs are keyed by kind alone) — is **closed as
+   out of scope: Talu and Cozystack are not expected to run in the same cluster.** They are
+   alternatives, not layers. So `Tenant` stays `Tenant`. Note this does *not* apply to
+   **`ManagedCluster`**: that name avoids `cluster.x-k8s.io/Cluster`, which genuinely does run on
+   Talu's own substrate (CAPI drives KaaS), so that choice stands on its own.
 4. **`v1alpha1` sequencing vs the physical lab.** The KaaS path is validated on `rocky-phys`; the
    typed `ManagedCluster` should be exercised there before it is documented as the contract.
