@@ -1,11 +1,42 @@
 # Small in-cluster OCI registry the platform pushes the talu-tenant chart to.
 # Lab-grade (http, no auth). Production: use the adopter's registry / a HelmRepository source instead.
+#
+# PERSISTENCE IS LOAD-BEARING. This registry is the source of truth for the OCIRepository every tenant
+# HelmRelease resolves against. It originally ran with no volume at all, so the chart lived on the
+# container's writable layer: a single pod restart de-published it, every tenant HelmRelease went
+# Ready=False ("does not have an artifact"), and nothing alerted — the rocky-phys lab sat broken that
+# way for 8 days (docs/architecture/adr-api-layer.md §8, "Phase 0 — what was validated").
+#
+# storageClassName: local-path matches the precedent for platform-internal state in this repo (Loki,
+# Garage). The trade-off is deliberate: local-path is node-local, so this survives a pod restart but
+# NOT the loss of its node. That is acceptable because the chart is reproducible — the ansible tenancy
+# role republishes it via chart-publish-job.yaml — whereas silent loss on every restart was not.
+# A site that would rather have it survive node loss can point this at a replicated class
+# (e.g. ceph-block, the default on rocky-phys) in its environment overlay.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: registry-data
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: talu
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: registry, namespace: flux-system }
 spec:
   replicas: 1
   selector: { matchLabels: { app: registry } }
+  # Recreate, not RollingUpdate: the RWO PVC can only be mounted by one pod, so a rolling update would
+  # deadlock (new pod Pending on the volume the old pod still holds). This also stops the orphaned
+  # second pod the default strategy left behind on the lab.
+  strategy: { type: Recreate }
   template:
     metadata: { labels: { app: registry } }
     spec:
@@ -13,6 +44,22 @@ spec:
         - name: registry
           image: registry:2
           ports: [{ containerPort: 5000 }]
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/registry }
+          # So a registry that is up but not serving shows as NotReady instead of silently 500-ing
+          # pushes. /v2/ is the OCI distribution base endpoint; it answers 200 once storage is usable.
+          readinessProbe:
+            httpGet: { path: /v2/, port: 5000 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /v2/, port: 5000 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 10m, memory: 64Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: registry-data }
 ---
 apiVersion: v1
 kind: Service
@@ -24,3 +71,7 @@ spec:
 # inside the cluster. (A NodePort would also be reachable from the host — the host routes to the
 # talos-docker node's eth0 over the podman bridge and Cilium's eBPF NodePort forwards it; add one if
 # you need host/off-cluster pushes.)
+#
+# NOTE when pushing from a lab gateway: a host registry mirror may already bind :5000 there, so
+# `kubectl port-forward svc/registry 5000:5000` can silently serve the MIRROR instead (and a
+# pull-through cache rejects pushes with a confusing 500). Forward to a free local port: 15000:5000.

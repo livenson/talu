@@ -606,3 +606,30 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     domain. Note the `dev/lab/*.sh` helpers (`expose-vm.sh`, `vm-ssh.sh`, `gen-vm-manifests.sh`) still
     *default* `LAB_DOMAIN` to the same placeholder — export it (or source `env.sh`) before running them.
     Related: #29 — keep `lab_floating_ip` in sync with the real VM IP after every reinstall.
+
+41. **The in-cluster chart registry had no persistence — one pod restart silently broke every tenant.**
+    `components/tenancy/flux/oci-registry.yaml` ran `registry:2` with **no volume at all**, so the
+    published `talu-tenant` chart lived on the container's writable layer. When the pod restarted on
+    the physical lab the chart vanished, the `OCIRepository` went `Ready=False`
+    ("failed to determine artifact digest … MANIFEST_UNKNOWN"), and **every tenant `HelmRelease`
+    followed** — for 8 days, with nothing alerting. The running VMs were unaffected (they keep running
+    off the last good render), which is exactly why it stayed invisible. Fix: a `local-path` PVC
+    mounted at `/var/lib/registry`, `strategy: Recreate` (an RWO PVC + the default RollingUpdate
+    deadlocks — new pod Pending on the volume the old one holds, which is also what left an orphaned
+    `Error` pod around), plus readiness/liveness probes on `/v2/`. Validated by deleting the pod and
+    confirming the chart, the `OCIRepository` and the tenant `HelmRelease` all came back Ready.
+    Caveat accepted deliberately: `local-path` is **node-local**, so this survives a pod restart but
+    not the loss of its node — the chart is reproducible (`chart-publish-job.yaml`), so that trade is
+    fine; point the PVC at a replicated class in the site overlay if you want more.
+    **Two probe traps found while debugging this, both of which look like data loss and are not:**
+    (a) on a lab gateway a **host registry mirror may already bind `:5000`**, so
+    `kubectl port-forward svc/registry 5000:5000` silently fails to bind and your client talks to the
+    **mirror** instead — and a pull-through cache rejects pushes with a bare `500 Internal Server
+    Error`. Forward to a free port (`15000:5000`) and confirm with `/v2/_catalog` (the mirror's catalog
+    is full of Docker Hub images; the real one holds only `charts/talu-tenant`).
+    (b) `curl .../manifests/<tag>` **without an OCI Accept header returns 404** —
+    `OCI manifest found, but accept header does not support OCI manifests`. That reads as a missing
+    chart but is a client bug; add
+    `-H 'Accept: application/vnd.oci.image.manifest.v1+json'`, or just trust Flux, which sends it.
+    Also note `find -maxdepth 8` cuts off exactly at the registry's `_manifests/tags` level, so a
+    truncated tree looks like missing link files — use an unbounded `find` before concluding anything.
