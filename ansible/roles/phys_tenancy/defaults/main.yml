@@ -13,5 +13,13 @@ ten_src: "{{ playbook_dir }}/../components/tenancy"
 ten_dir: "{{ talos_gen_dir }}/components/tenancy"
 tenants_src: "{{ playbook_dir }}/../environments/rocky-phys/tenants"
 tenants_dir: "{{ talos_gen_dir }}/tenants"
+# The operator-owned half of the tenant contract (x-talu-owner: operator in the chart schema),
+# rendered into ConfigMap <tenants-ns>/talu-tenant-defaults and merged by every tenant HelmRelease.
+tenant_defaults_src: "{{ playbook_dir }}/../environments/rocky-phys/tenant-defaults.yaml"
+tenant_defaults_file: "{{ talos_gen_dir }}/tenant-defaults.yaml"
+# The VM half — separate because both chart schemas are additionalProperties:false, so one shared
+# ConfigMap would be rejected by whichever chart does not own the key (adr-api-layer.md §10.1).
+vm_defaults_src: "{{ playbook_dir }}/../environments/rocky-phys/vm-defaults.yaml"
+vm_defaults_file: "{{ talos_gen_dir }}/vm-defaults.yaml"
 
 tenant_release_namespace: tenants

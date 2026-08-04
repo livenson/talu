@@ -1,0 +1,48 @@
+# Operator-owned talu-tenant values for YOUR site. Copy this file into environments/<site>/ and edit.
+#
+# Talu's tenant contract has two owners (docs/architecture/adr-api-layer.md §4):
+#   consumer — the integrator/orchestrator writes it per tenant (projectUuid, slug, allowedUsers,
+#              vms, resourceQuota, securityGroups, quotas, dashboards.enabled, logging.agent…)
+#   operator — YOU write it once, here (image catalog coordinates, component image pins, in-cluster
+#              endpoints, CA trust delivery)
+# Which is which is machine-readable: `x-talu-owner` on every property of
+# components/tenancy/tenant-chart/values.schema.json.
+#
+# The tenancy role renders this into ConfigMap <tenants-ns>/talu-tenant-defaults; every tenant
+# HelmRelease merges it via valuesFrom BEFORE spec.values:
+#   chart values.yaml  <  THIS FILE  <  pomerium-user-ca (targetPath)  <  the tenant file
+# A tenant that sets an operator-owned field still wins the merge — the split is a contract, not an
+# enforcement — but only the consumer-owned subset carries a compatibility promise.
+#
+# Do NOT put sshUserCaPubKey here: the Pomerium User CA is injected live from ConfigMap
+# pomerium-user-ca so a rotation needs no edit. A value here would be stale by design.
+
+# --- how VMs address their root image --------------------------------------------------------------
+# containerDisk = ephemeral, needs no golden-image catalog (the standalone-first default).
+# dataSource    = persistent DataVolume cloned from a golden-image DataSource; new VMs get the latest
+#                 patched image and bootc self-update survives reboot. Requires the catalog
+#                 (components/infrastructure/cdi/ + zot).
+defaults:
+  source: containerDisk
+  image: quay.io/containerdisks/ubuntu:24.04
+  # source: dataSource
+  # dataSource: centos-bootc
+  # dataSourceNamespace: golden-images
+
+# --- SSH User CA trust delivery --------------------------------------------------------------------
+# package: true installs the rotatable talu-ca-trust package instead of hand-writing the trust file,
+# so a CA rotation does not need the VM recreated (dev/lab/ca-rotate.sh).
+# caTrust:
+#   package: false
+#   baked: false
+#   aptRepoLine: "deb [trusted=yes] http://pkg-repo.golden-images.svc/deb/ ./"
+#   aptOrigin: talu
+
+# --- component pins + in-cluster endpoints ---------------------------------------------------------
+# dashboards:
+#   persesImage: docker.io/persesdev/perses:v0.53.0
+#   proxyImage: quay.io/prometheuscommunity/prom-label-proxy:v0.11.1
+#   prometheusUrl: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+# logging:
+#   lokiUrl: http://loki.logging.svc.cluster.local:3100
+#   gatewayImage: docker.io/grafana/alloy:v1.17.1

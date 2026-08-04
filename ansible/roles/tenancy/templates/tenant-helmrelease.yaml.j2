@@ -1,6 +1,6 @@
-# Rendered by the tenancy role — one HelmRelease per environments/<env>/tenants/<name>.yaml.
-# The tenant file's contents ARE spec.values; the Pomerium User CA is injected at reconcile time via
-# valuesFrom (never duplicated into the values). Delete this object → Flux GC removes the whole tenant.
+# Rendered by the tenancy role — one HelmRelease per environments/<env>/tenants/<slug>/tenant.yaml.
+# The tenant file's contents ARE spec.values. Deleting this object GCs the tenant namespace; the VM
+# releases are separate objects (see vm-helmrelease.yaml.j2).
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -18,12 +18,15 @@ spec:
   releaseName: {{ tenant_name }}
   # The chart self-namespaces (creates a Namespace named after .Values.slug and pins every resource to
   # it), so the release lives here in the management namespace and renders into the tenant's own ns.
+  # Merge order (later wins): chart values.yaml < talu-tenant-defaults < spec.values.
+  # Since the chart split (adr-api-layer.md §10.1) this release renders only the NAMESPACE half —
+  # quota, RBAC, netpol baseline, security-group policies, dashboards, log gateway. Each VM is its own
+  # talu-vm HelmRelease, and the SSH User CA is injected there, not here (this chart no longer accepts
+  # sshUserCaPubKey — its schema is additionalProperties:false).
   valuesFrom:
     - kind: ConfigMap
-      name: pomerium-user-ca
-      valuesKey: user_ca.pub
-      targetPath: sshUserCaPubKey
-  # Strip any sshUserCaPubKey from the tenant file: Flux merges spec.values AFTER valuesFrom, so an
-  # inline placeholder (even "") would OVERRIDE the CA injection above. valuesFrom is the sole source.
+      name: talu-tenant-defaults
+      valuesKey: values.yaml
+      optional: true
   values:
-{{ tenant_values | regex_replace('(?m)^sshUserCaPubKey:.*$', '') | indent(4, true) }}
+{{ tenant_values | indent(4, true) }}

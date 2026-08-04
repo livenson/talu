@@ -1,13 +1,19 @@
 # Minimal VALID values for `helm lint` / `helm template` in CI. The chart's default values.yaml is
-# intentionally incomplete (projectUuid/slug/sshUserCaPubKey are filled per tenant), which fails the
+# intentionally incomplete (projectUuid/slug are filled per tenant), which fails the
 # values.schema.json on its own — so CI overlays these placeholders. Not used at runtime.
+# VMs are no longer part of this chart — see ../../vm-chart/ci/lint-values.yaml.
 projectUuid: "aaaaaaaa-1111-2222-3333-444444444444"
 slug: citest
-sshUserCaPubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILINTonlyPlaceholderKeyNotARealCA citest"
-vms:
-  app1:
-    principal: alice
 dashboards:
   enabled: true
 logging:
   agent: true
+securityGroups:
+  web:
+    ingress:
+      - ports: [{ port: 80, protocol: TCP }]
+        fromCIDR: ["0.0.0.0/0"]
+  egress-all:
+    allVMs: true
+    egress:
+      - toCIDR: ["0.0.0.0/0"]

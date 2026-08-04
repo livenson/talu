@@ -65,7 +65,7 @@ jobs:
           done
       - name: helm lint + template (charts, against values.schema.json)
         run: |
-          for chart in tenant-chart cluster-chart; do
+          for chart in tenant-chart vm-chart cluster-chart; do
             helm lint "components/tenancy/$chart" -f "components/tenancy/$chart/ci/lint-values.yaml"
             helm template t "components/tenancy/$chart" -f "components/tenancy/$chart/ci/lint-values.yaml" \
               | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
@@ -91,7 +91,30 @@ jobs:
           sudo curl -sSLf -o /usr/local/bin/hadolint \
             https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-Linux-x86_64
           sudo chmod +x /usr/local/bin/hadolint
-      - run: hadolint --config .hadolint.yaml --failure-threshold warning images/*/Containerfile
+      - run: hadolint --config .hadolint.yaml --failure-threshold warning images/*/Containerfile apiserver/Containerfile
+
+  # ---- The apiserver Go module (the repo's only compiled artifact) ------------------------------
+  # Without this, nothing in CI would catch a non-compiling apiserver — the module is built on the lab
+  # by hand today, which is not a gate.
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apiserver/go.mod, cache-dependency-path: apiserver/go.sum }
+      - name: go build + vet
+        working-directory: apiserver
+        run: |
+          go build ./...
+          go vet ./...
+      - name: gofmt (must be clean)
+        working-directory: apiserver
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "gofmt needed on:"; echo "$unformatted"; exit 1; fi
+      - name: go test
+        working-directory: apiserver
+        run: go test ./...
 
   # ---- Ansible install roles/playbooks ---------------------------------------------------------
   ansible-lint:

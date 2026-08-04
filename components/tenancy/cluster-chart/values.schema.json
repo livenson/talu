@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "talu-cluster values — the managed tenant-Kubernetes API",
+  "description": "Every property carries x-talu-owner: 'consumer' = the integrator/orchestrator writes it per cluster; 'operator' = the site owns it, supplied once from environments/<site>/cluster-defaults.yaml (merged by the HelmRelease BEFORE spec.values). Note debugPublicKey stays in 'required' — it is operator-owned but load-bearing, so a site that forgets to configure it must fail loudly rather than render an unreachable cluster. See docs/architecture/adr-api-layer.md §4.",
   "type": "object",
   "required": ["name", "projectUuid", "debugPublicKey"],
   "additionalProperties": false,
@@ -9,33 +10,39 @@
       "type": "string",
       "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
       "maxLength": 40,
-      "description": "CAPI cluster name (DNS-1123 label)."
+      "description": "CAPI cluster name (DNS-1123 label).",
+      "x-talu-owner": "consumer"
     },
     "projectUuid": {
       "type": "string",
-      "description": "The manager join key stamped on every object (talu.io/project-uuid)."
+      "description": "The manager join key stamped on every object (talu.io/project-uuid).",
+      "x-talu-owner": "consumer"
     },
     "namespace": {
       "type": "string",
       "default": "",
-      "description": "Infra namespace for the CAPI objects + worker VMs. Empty => dedicated 'kaas-<name>'."
+      "description": "OPERATOR. Infra namespace for the CAPI objects + worker VMs. Empty => dedicated 'kaas-<name>' (the correct default); set only for the legacy single-tenant-per-namespace layout.",
+      "x-talu-owner": "operator"
     },
     "kubernetesVersion": {
       "type": "string",
       "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
       "default": "v1.34.1",
-      "description": "Tenant k8s version; must have a matching quay.io/capk containerdisk tag."
+      "description": "Tenant k8s version; must have a matching quay.io/capk containerdisk tag.",
+      "x-talu-owner": "consumer"
     },
     "dataStore": {
       "type": "string",
       "default": "",
-      "description": "Kamaji DataStore name. Empty => '<name>-local' (dedicated etcd on local-path). 'default' = shared."
+      "description": "OPERATOR. Kamaji DataStore name. Empty => '<name>-local' (dedicated etcd on local-path). 'default' = shared. The DataStore must be provisioned by the operator before the cluster reconciles.",
+      "x-talu-owner": "operator"
     },
-    "podCidr": { "type": "string", "default": "10.243.0.0/16" },
-    "serviceCidr": { "type": "string", "default": "10.95.0.0/16" },
+    "podCidr": { "type": "string", "default": "10.243.0.0/16", "description": "OPERATOR — must not collide with the management CIDRs or another tenant's.", "x-talu-owner": "operator" },
+    "serviceCidr": { "type": "string", "default": "10.95.0.0/16", "description": "OPERATOR — see podCidr.", "x-talu-owner": "operator" },
     "controlPlane": {
       "type": "object",
       "additionalProperties": false,
+      "x-talu-owner": "consumer",
       "properties": {
         "replicas": { "type": "integer", "minimum": 1, "default": 2 }
       }
@@ -44,19 +51,19 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "replicas": { "type": "integer", "minimum": 1, "default": 2 },
-        "cores": { "type": "integer", "minimum": 1, "default": 4 },
-        "memory": { "type": "string", "default": "8Gi" },
+        "replicas": { "type": "integer", "minimum": 1, "default": 2, "x-talu-owner": "consumer" },
+        "cores": { "type": "integer", "minimum": 1, "default": 4, "x-talu-owner": "consumer" },
+        "memory": { "type": "string", "default": "8Gi", "x-talu-owner": "consumer" },
         "autoscaling": {
           "type": "object",
           "additionalProperties": false,
           "description": "Node autoscaling via a per-tenant cluster-autoscaler (clusterapi provider).",
           "properties": {
-            "enabled": { "type": "boolean", "default": false },
-            "min": { "type": "integer", "minimum": 1, "default": 1, "description": "Min nodes. Must be >=1: scale-from-zero is broken on the current provider (see README)." },
-            "max": { "type": "integer", "minimum": 1, "default": 3 },
-            "image": { "type": "string", "default": "registry.k8s.io/autoscaling/cluster-autoscaler:v1.34.0" },
-            "maxNodeProvisionTime": { "type": "string", "default": "20m" }
+            "enabled": { "type": "boolean", "default": false, "x-talu-owner": "consumer" },
+            "min": { "type": "integer", "minimum": 1, "default": 1, "description": "Min nodes. Must be >=1: scale-from-zero is broken on the current provider (see README).", "x-talu-owner": "consumer" },
+            "max": { "type": "integer", "minimum": 1, "default": 3, "x-talu-owner": "consumer" },
+            "image": { "type": "string", "default": "registry.k8s.io/autoscaling/cluster-autoscaler:v1.34.0", "description": "OPERATOR — component image pin, tracks the tenant k8s minor.", "x-talu-owner": "operator" },
+            "maxNodeProvisionTime": { "type": "string", "default": "20m", "description": "OPERATOR — must stay >= the MHC nodeStartupTimeout.", "x-talu-owner": "operator" }
           }
         }
       }
@@ -64,25 +71,29 @@
     "healthCheck": {
       "type": "object",
       "additionalProperties": false,
+      "description": "OPERATOR. MachineHealthCheck tuning — a site reliability policy, not a tenant knob.",
+      "x-talu-owner": "operator",
       "properties": {
         "unreadyTimeout": { "type": "string", "default": "5m" }
       }
     },
-    "ciliumVersion": { "type": "string", "default": "1.19.6" },
+    "ciliumVersion": { "type": "string", "default": "1.19.6", "description": "OPERATOR — kept in lockstep with the management Cilium pin.", "x-talu-owner": "operator" },
     "debugPublicKey": {
       "type": "string",
       "minLength": 1,
-      "description": "Operator break-glass SSH public key baked into worker nodes (CAPK skips its own under managed-by: kamaji)."
+      "description": "OPERATOR. Operator break-glass SSH public key baked into worker nodes (CAPK skips its own under managed-by: kamaji). Required, but supplied by the site — a consumer must never be asked for a key that is not theirs.",
+      "x-talu-owner": "operator"
     },
     "wiring": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Cross-cluster wiring (CSI/CCM/in-tenant RBAC) rendered when enabled, mounting Kamaji's admin kubeconfig directly.",
+      "description": "OPERATOR. Cross-cluster wiring (CSI/CCM/in-tenant RBAC) rendered when enabled, mounting Kamaji's admin kubeconfig directly. Substrate plumbing — except inTenant.adminUser, which is the tenant's first cluster-admin.",
       "properties": {
-        "enabled": { "type": "boolean", "default": false },
+        "enabled": { "type": "boolean", "default": false, "x-talu-owner": "operator" },
         "csi": {
           "type": "object",
           "additionalProperties": false,
+          "x-talu-owner": "operator",
           "properties": {
             "infraStorageClass": { "type": "string", "default": "ceph-block" },
             "image": { "type": "string", "default": "quay.io/kubevirt/kubevirt-csi-driver:latest" }
@@ -91,6 +102,7 @@
         "ccm": {
           "type": "object",
           "additionalProperties": false,
+          "x-talu-owner": "operator",
           "properties": {
             "enabled": { "type": "boolean", "default": true },
             "image": { "type": "string", "default": "quay.io/kubevirt/kubevirt-cloud-controller-manager:main" }
@@ -100,8 +112,8 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enabled": { "type": "boolean", "default": true },
-            "adminUser": { "type": "string", "default": "", "description": "Gets cluster-admin in the tenant via the Pomerium impersonation route." }
+            "enabled": { "type": "boolean", "default": true, "x-talu-owner": "operator" },
+            "adminUser": { "type": "string", "default": "", "description": "Gets cluster-admin in the tenant via the Pomerium impersonation route.", "x-talu-owner": "consumer" }
           }
         }
       }
@@ -115,11 +127,11 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enabled": { "type": "boolean", "default": false },
-            "s3Url": { "type": "string", "default": "" },
-            "bucket": { "type": "string", "default": "" },
-            "existingSecret": { "type": "string", "default": "velero-garage" },
-            "veleroChartVersion": { "type": "string", "default": "8.1.0" }
+            "enabled": { "type": "boolean", "default": false, "x-talu-owner": "consumer" },
+            "s3Url": { "type": "string", "default": "", "description": "OPERATOR — the site's Garage endpoint.", "x-talu-owner": "operator" },
+            "bucket": { "type": "string", "default": "", "description": "OPERATOR — provisioned per tenant by the site alongside its credentials Secret.", "x-talu-owner": "operator" },
+            "existingSecret": { "type": "string", "default": "velero-garage", "description": "OPERATOR — Secret in the tenant's velero ns.", "x-talu-owner": "operator" },
+            "veleroChartVersion": { "type": "string", "default": "8.1.0", "description": "OPERATOR — chart version pin.", "x-talu-owner": "operator" }
           }
         }
       }

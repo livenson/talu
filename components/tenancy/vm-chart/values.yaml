@@ -1,0 +1,43 @@
+# talu-vm — ONE tenant VM. The per-VM half of the tenant API; talu-tenant owns the namespace,
+# quota, RBAC, network baseline, security-group policies, dashboards and log gateway.
+#
+# Split rationale (docs/architecture/adr-api-layer.md §10.1): with VMs inline in the tenant object,
+# "may add a VM" is `update` on the whole tenant — which is also the power to change the quota and the
+# member list. One object per VM makes that grantable separately, and gives each VM its own status.
+
+# ── tenant context (the tenant this VM belongs to) ────────────────────────────────────────────────
+projectUuid: ""            # REQUIRED — talu.io/project-uuid on every object; the manager join key
+slug: ""                   # REQUIRED — the tenant's namespace (talu-tenant creates it)
+allowedUsers: []           # the tenant's members; stamped on the ssh Service for the Pomerium renderer
+
+# ── this VM ───────────────────────────────────────────────────────────────────────────────────────
+name: ""                   # REQUIRED — VM name, unique within the tenant
+principal: talu            # guest OS user / SSH cert principal
+
+# Sizing: `size` (preferred) or `memory` (legacy) — exactly one. `size` renders a KubeVirt
+# instancetype reference (components/tenancy/sizes/), which KubeVirt enforces and which is the only
+# way this API can express vCPU at all. `memory` keeps pre-split tenants rendering unchanged.
+size: ""                   # small | medium | large  -> instancetype talu-<size>
+memory: ""                 # DEPRECATED, e.g. 1536Mi. Cannot express vCPU (guest always gets 1).
+
+guestSecrets: ""           # optional — written to /etc/talu/app.env in the guest
+securityGroups: []         # group names; rendered as talu.io/sg.<name> labels the tenant's CNPs select
+
+# ── image (operator-owned; site defaults live in environments/<site>/tenant-defaults.yaml) ────────
+source: containerDisk                        # containerDisk | dataSource
+image: quay.io/containerdisks/ubuntu:24.04   # used when source=containerDisk
+dataSource: ubuntu                           # used when source=dataSource
+dataSourceNamespace: golden-images
+rootDiskSize: 10Gi                           # persistent root PVC size (source=dataSource)
+
+# ── operator-owned guest plumbing (mirrors talu-tenant; supplied by the site) ─────────────────────
+sshUserCaPubKey: ""        # injected from ConfigMap pomerium-user-ca; never written by a consumer
+caTrust:
+  package: false
+  baked: false
+  aptRepoLine: "deb [trusted=yes] http://pkg-repo.golden-images.svc/deb/ ./"
+  aptOrigin: "talu"
+logging:
+  consoleLevel: info       # Tier 1: journald→console max level
+  agent: false             # Tier 2: run the in-guest agent (needs the tenant's logs-gateway)
+  paths: []

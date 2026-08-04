@@ -1,0 +1,11 @@
+# Tenant "acme" — the NAMESPACE half, reconciled by Flux via the talu-tenant chart. Its VMs are
+# separate objects under vms/ (adr-api-layer.md §10.1). Consumer-owned fields only; the operator half
+# lives once per site in ../../tenant-defaults.yaml (and ../../vm-defaults.yaml for the VM side).
+projectUuid: "aaaaaaaa-1111-2222-3333-444444444444"
+slug: acme
+allowedUsers: [alice@talu.local]
+
+resourceQuota:
+  requests.memory: 8Gi
+  requests.cpu: "4"
+  persistentvolumeclaims: "10"

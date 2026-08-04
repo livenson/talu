@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# The consumer-facing VM size vocabulary (VirtualMachineClusterInstancetype). Cluster-scoped, applied
+# once per cluster — the tenancy ansible roles apply this before any tenant, because a VM referencing
+# an absent instancetype is rejected at admission.
+resources:
+  - instancetypes.yaml

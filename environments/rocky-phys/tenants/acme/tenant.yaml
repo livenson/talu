@@ -1,0 +1,12 @@
+# Tenant "acme" on the physical lab — the NAMESPACE half (quota, RBAC, network baseline, security
+# groups, dashboards). Its VMs are separate objects under vms/ (adr-api-layer.md §10.1).
+#
+# CONSUMER-OWNED FIELDS ONLY. The operator half lives once per site in ../../tenant-defaults.yaml.
+projectUuid: "aaaaaaaa-1111-2222-3333-444444444444"
+slug: acme
+allowedUsers: [alice@talu.local]
+
+resourceQuota:
+  requests.memory: 8Gi
+  requests.cpu: "4"
+  persistentvolumeclaims: "10"

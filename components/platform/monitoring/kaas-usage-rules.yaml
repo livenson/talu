@@ -31,10 +31,13 @@ spec:
         - record: talu:kaas_controlplane_memory_bytes:requested
           expr: sum by (namespace) (kube_pod_container_resource_requests{namespace=~"kaas-.*", resource="memory", pod!~"virt-launcher-.*"})
         # worker VMs (KubeVirt VMIs in the tenant's namespace)
+        # unit + source are MANDATORY here — see the long note in recording-rules.yaml. Selecting on
+        # `resource` alone sums the raw topology components together with the computed total, which
+        # billed these workers at 2x (cores/domain + cores/guest_effective).
         - record: talu:kaas_worker_vcpu_cores:allocated
-          expr: sum by (namespace) (kubevirt_vm_resource_requests{namespace=~"kaas-.*", resource="cpu"})
+          expr: sum by (namespace) (kubevirt_vm_resource_requests{namespace=~"kaas-.*", resource="cpu", unit="cores", source="guest_effective"})
         - record: talu:kaas_worker_memory_bytes:allocated
-          expr: sum by (namespace) (kubevirt_vm_resource_requests{namespace=~"kaas-.*", resource="memory"})
+          expr: sum by (namespace) (kubevirt_vm_resource_requests{namespace=~"kaas-.*", resource="memory", unit="bytes", source="guest_effective"})
         - record: talu:kaas_worker_count
           expr: sum by (namespace) (talu_kaas_workers_ready)
         # tenant storage — the kubevirt-csi backing PVCs (+ any) in the namespace

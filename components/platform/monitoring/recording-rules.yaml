@@ -18,10 +18,20 @@ spec:
       rules:
         - record: talu:tenant_vmi_count
           expr: count by (namespace) (kubevirt_vmi_info)
+        # NEVER select kubevirt_vm_resource_requests on `resource` alone — it is multi-dimensional and
+        # summing it double-counts. virt-controller emits SEVERAL series per VM: the raw topology
+        # components (unit=cores|sockets|threads, source=domain, or source=default when nothing is
+        # set) AND the computed total (unit=cores, source=guest_effective =
+        # sockets*cores*threads, or 1 when spec.domain.cpu is nil). The old selector summed all of
+        # them, so a 1-vCPU VM billed as 4 and a 4-vCPU VM as 8 — a variable overcount that depends on
+        # how the VM was specified, not a constant you could calibrate out.
+        # source="guest_effective" is exactly one series per VM and is what the guest actually gets.
         - record: talu:tenant_vcpu_cores:allocated
-          expr: sum by (namespace) (kubevirt_vm_resource_requests{resource="cpu"})
+          expr: sum by (namespace) (kubevirt_vm_resource_requests{resource="cpu", unit="cores", source="guest_effective"})
+        # Same trap: memory is emitted as source=domain (and/or guest, and hugepages) PLUS
+        # guest_effective, so an unqualified sum double-counted every VM.
         - record: talu:tenant_memory_bytes:allocated
-          expr: sum by (namespace) (kubevirt_vm_resource_requests{resource="memory"})
+          expr: sum by (namespace) (kubevirt_vm_resource_requests{resource="memory", unit="bytes", source="guest_effective"})
         - record: talu:tenant_storage_bytes:requested
           expr: sum by (namespace) (kube_persistentvolumeclaim_resource_requests_storage_bytes)
     # Usage — actual consumption (utilisation dashboards; also informs metered billing).

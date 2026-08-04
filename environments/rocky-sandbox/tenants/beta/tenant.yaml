@@ -1,0 +1,16 @@
+# Tenant "beta" — the full-featured example: per-tenant dashboards, and a VM on a persistent
+# auto-patching golden-image disk. Requires the golden-image catalog
+# (components/infrastructure/cdi/ + zot) and the monitoring stack.
+projectUuid: "bbbbbbbb-2222-3333-4444-555555555555"
+slug: beta
+allowedUsers: [bob@talu.local]
+
+resourceQuota:
+  requests.cpu: "8"
+  requests.memory: 16Gi
+  requests.storage: 200Gi
+
+# Per-tenant Perses dashboards (overview + per-VM detail), reachable only via Pomerium at
+# https://beta-dashboard.<domain>, data hard-scoped to this namespace by prom-label-proxy.
+dashboards:
+  enabled: true

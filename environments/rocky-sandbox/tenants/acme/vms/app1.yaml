@@ -1,0 +1,7 @@
+# Simplest VM: inherits the site's ephemeral containerDisk image, states only its own sizing.
+# For the persistent, auto-patching, bootc-self-updating path see ../../beta/vms/web1.yaml.
+principal: alice
+memory: 1536Mi          # DEPRECATED legacy sizing; `size: small` is the supported form (§10.2)
+guestSecrets: |
+  DB_PASSWORD=acme-db-secret
+  TENANT=acme

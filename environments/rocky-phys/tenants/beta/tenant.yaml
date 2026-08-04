@@ -2,16 +2,6 @@
 projectUuid: "bbbbbbbbb-1111-2222-3333-444444444444"
 slug: beta
 allowedUsers: [bob@talu.local]
-sshUserCaPubKey: ""
-defaults:
-  image: quay.io/containerdisks/ubuntu:24.04
-  memory: 1536Mi
-  principal: talu
-vms:
-  bvm:
-    principal: bob
-    guestSecrets: |
-      TENANT=beta
 resourceQuota:
   requests.memory: 4Gi
   requests.cpu: "2"

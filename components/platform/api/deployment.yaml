@@ -1,0 +1,149 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: talu-system
+  labels: { app.kubernetes.io/part-of: talu }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: talu-apiserver, namespace: talu-system }
+---
+# What the server may touch. It stores nothing of its own — a Tenant IS its HelmRelease — so this is
+# the entire blast radius of the API (ADR §2).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: talu-apiserver }
+rules:
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: talu-apiserver }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: talu-apiserver }
+subjects: [{ kind: ServiceAccount, name: talu-apiserver, namespace: talu-system }]
+---
+# Delegated authn/authz: lets this server call TokenReview / SubjectAccessReview so RBAC on
+# tenancy.talu.io behaves exactly like RBAC on a built-in resource.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: talu-apiserver:system:auth-delegator }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:auth-delegator }
+subjects: [{ kind: ServiceAccount, name: talu-apiserver, namespace: talu-system }]
+---
+# Read the extension-apiserver authentication config (client CA for front-proxy auth).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: talu-apiserver-auth-reader, namespace: kube-system }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: extension-apiserver-authentication-reader }
+subjects: [{ kind: ServiceAccount, name: talu-apiserver, namespace: talu-system }]
+---
+# Serving certs. A dedicated self-signed CA rather than the site PKI: the only consumer is
+# kube-apiserver, which learns the CA through cainjector, so this needs no external trust.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata: { name: talu-apiserver-selfsign, namespace: talu-system }
+spec: { selfSigned: {} }
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: { name: talu-apiserver-ca, namespace: talu-system }
+spec:
+  isCA: true
+  commonName: talu-apiserver-ca
+  secretName: talu-apiserver-ca
+  privateKey: { algorithm: ECDSA, size: 256 }
+  issuerRef: { name: talu-apiserver-selfsign, kind: Issuer, group: cert-manager.io }
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata: { name: talu-apiserver-ca, namespace: talu-system }
+spec: { ca: { secretName: talu-apiserver-ca } }
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: { name: talu-apiserver-cert, namespace: talu-system }
+spec:
+  secretName: talu-apiserver-cert
+  dnsNames:
+    - talu-apiserver.talu-system.svc
+    - talu-apiserver.talu-system.svc.cluster.local
+  issuerRef: { name: talu-apiserver-ca, kind: Issuer, group: cert-manager.io }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: talu-apiserver, namespace: talu-system }
+spec:
+  selector: { app: talu-apiserver }
+  ports: [{ name: https, port: 443, targetPort: 6443 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: talu-apiserver, namespace: talu-system }
+spec:
+  # Two replicas is not redundancy theatre here: while this is down, namespace deletion stalls
+  # CLUSTER-WIDE (ADR §5).
+  replicas: 2
+  selector: { matchLabels: { app: talu-apiserver } }
+  template:
+    metadata: { labels: { app: talu-apiserver } }
+    spec:
+      serviceAccountName: talu-apiserver
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: { matchLabels: { app: talu-apiserver } }
+      containers:
+        - name: apiserver
+          # REPLACE with a registry the NODES can pull from (see README).
+          image: ghcr.io/livenson/talu-apiserver:0.1.0
+          args:
+            - --secure-port=6443
+            - --tls-cert-file=/certs/tls.crt
+            - --tls-private-key-file=/certs/tls.key
+            - --audit-log-path=-
+          ports: [{ containerPort: 6443, name: https }]
+          volumeMounts: [{ name: certs, mountPath: /certs, readOnly: true }]
+          readinessProbe:
+            httpGet: { path: /readyz, port: 6443, scheme: HTTPS }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /livez, port: 6443, scheme: HTTPS }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
+      volumes:
+        - name: certs
+          secret: { secretName: talu-apiserver-cert }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: talu-apiserver, namespace: talu-system }
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: talu-apiserver } }
+---
+# The aggregation registration. cainjector fills caBundle from the Certificate above, so the CA
+# rotates without anyone touching this object.
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.tenancy.talu.io
+  annotations:
+    cert-manager.io/inject-ca-from: talu-system/talu-apiserver-cert
+spec:
+  group: tenancy.talu.io
+  version: v1alpha1
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+  service: { name: talu-apiserver, namespace: talu-system, port: 443 }

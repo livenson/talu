@@ -1,0 +1,38 @@
+# Rendered by the tenancy role — one HelmRelease per environments/<env>/tenants/<slug>/vms/<name>.yaml.
+# Since the chart split (docs/architecture/adr-api-layer.md §10.1) a VM is its OWN object, so that
+# "may add a VM" is grantable without granting "may change the tenant's quota or members".
+# projectUuid / slug / allowedUsers are injected from the tenant file — never repeated per VM.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ tenant_name }}-{{ vm_name }}
+  namespace: {{ tenant_release_namespace }}
+  labels:
+    app.kubernetes.io/part-of: talu
+    talu.io/tenant: "{{ tenant_name }}"
+    talu.io/vm: "{{ vm_name }}"
+spec:
+  interval: 5m
+  chartRef:
+    kind: OCIRepository
+    name: talu-vm
+    namespace: flux-system
+  releaseName: {{ tenant_name }}-{{ vm_name }}
+  # Merge order (later wins): chart values.yaml < talu-vm-defaults < pomerium-user-ca < spec.values.
+  valuesFrom:
+    - kind: ConfigMap
+      name: talu-vm-defaults
+      valuesKey: values.yaml
+      optional: true
+    - kind: ConfigMap
+      name: pomerium-user-ca
+      valuesKey: user_ca.pub
+      targetPath: sshUserCaPubKey
+  values:
+    projectUuid: "{{ tenant_data.projectUuid }}"
+    slug: {{ tenant_data.slug }}
+    name: {{ vm_name }}
+    allowedUsers: {{ tenant_data.allowedUsers | default([]) | to_json }}
+    # Strip any sshUserCaPubKey from the VM file: spec.values is merged AFTER valuesFrom, so an
+    # inline placeholder (even "") would OVERRIDE the CA injection above (lab-notes #37).
+{{ vm_values | regex_replace('(?m)^sshUserCaPubKey:.*$', '') | indent(4, true) }}

@@ -1,0 +1,26 @@
+# Operator-owned talu-tenant values for the rocky-sandbox site — everything marked x-talu-owner:
+# "operator" in components/tenancy/tenant-chart/values.schema.json.
+#
+# The tenancy role renders this into ConfigMap tenants/talu-tenant-defaults, and every tenant
+# HelmRelease merges it via valuesFrom BEFORE spec.values — so a tenant file states only what is
+# genuinely tenant-specific, and a site-wide change (a new golden image, a component image pin) is
+# one edit here instead of one per tenant.
+#
+# Merge order (later wins):  chart values.yaml  <  THIS FILE  <  the tenant file
+# (the SSH User CA is injected into the VM releases now, not this one — see vm-defaults.yaml)
+#
+# NOT here: sshUserCaPubKey. The User CA is injected live from ConfigMap pomerium-user-ca so a CA
+# rotation takes effect without editing this file; putting it here would make it stale by design.
+
+# The image/CA/guest-side operator values moved to vm-defaults.yaml when the charts split
+# (adr-api-layer.md §10.1) — both schemas are additionalProperties:false, so they cannot share one
+# ConfigMap. Nothing tenant-side needs overriding on this site yet; the chart defaults are correct.
+#
+# dashboards:
+#   persesImage: docker.io/persesdev/perses:v0.53.0
+#   proxyImage: quay.io/prometheuscommunity/prom-label-proxy:v0.11.1
+#   prometheusUrl: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+# logging:
+#   lokiUrl: http://loki.logging.svc.cluster.local:3100
+#   gatewayImage: docker.io/grafana/alloy:v1.17.1
+{}

@@ -1,0 +1,23 @@
+# The alert that makes ADR §5's failure mode visible. Without it, an unavailable APIService is silent
+# until someone notices that no namespace anywhere will finish terminating.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: talu-apiserver
+  namespace: monitoring
+  labels: { app.kubernetes.io/part-of: talu }
+spec:
+  groups:
+    - name: talu.api.alerts
+      rules:
+        - alert: TaluAPIServiceUnavailable
+          expr: aggregator_unavailable_apiservice{name="v1alpha1.tenancy.talu.io"} == 1
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "The Talu API (tenancy.talu.io) is unavailable"
+            description: >-
+              The aggregated APIService is down. Tenant state is SAFE — it lives in HelmReleases and
+              Flux keeps reconciling — but cluster-wide discovery is degraded and namespace deletion
+              stalls everywhere. Break-glass: kubectl delete apiservice v1alpha1.tenancy.talu.io
+              (see components/platform/api/README.md).

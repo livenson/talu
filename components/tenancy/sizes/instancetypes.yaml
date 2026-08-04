@@ -1,0 +1,59 @@
+# The Talu VM size catalog — the vocabulary behind a tenant's `size:` field.
+#
+# WHY NAMED SIZES (docs/architecture/adr-api-layer.md §10.2): raw cores/memory in the consumer API
+# cannot be enforced, and the tenant API could not express vCPU at all before this (templates set only
+# resources.requests.memory, so KubeVirt defaulted every VM to sockets*cores*threads = 1). An
+# instancetype fixes both: KubeVirt REJECTS a VM that tries to override it, so a size is a real
+# guarantee rather than a suggestion, and it must state CPU.
+#
+# WHY THIS IS SAFE TO EDIT: KubeVirt snapshots the instancetype into a ControllerRevision when a VM is
+# created, so changing a size here does NOT resize existing VMs — only ones created afterwards. That
+# is what makes a named-size catalog maintainable.
+#
+# SITE-OVERRIDABLE. These are Talu's defaults; a site may replace them wholesale, or point `size:` at
+# the upstream common-instancetypes families (u1/o1/cx1…) that KubeVirt can ship — the tenant API only
+# ever sees the name. Keep names stable: they are consumer-facing, and a rename is a breaking change.
+#
+# Note `memory.guest` is what the GUEST sees. KubeVirt derives the launcher pod's CPU request from
+# vCPUs via cpuAllocationRatio (default 10:1) — that is a scheduling/overcommit concern and is
+# deliberately NOT what Talu bills on; billing reads the guest-effective series
+# (components/platform/monitoring/recording-rules.yaml).
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterInstancetype
+metadata:
+  name: talu-small
+  labels:
+    app.kubernetes.io/part-of: talu
+    talu.io/size: small
+spec:
+  cpu:
+    guest: 1
+  memory:
+    guest: 2Gi
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterInstancetype
+metadata:
+  name: talu-medium
+  labels:
+    app.kubernetes.io/part-of: talu
+    talu.io/size: medium
+spec:
+  cpu:
+    guest: 2
+  memory:
+    guest: 4Gi
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterInstancetype
+metadata:
+  name: talu-large
+  labels:
+    app.kubernetes.io/part-of: talu
+    talu.io/size: large
+spec:
+  cpu:
+    guest: 4
+  memory:
+    guest: 8Gi

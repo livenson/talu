@@ -61,3 +61,9 @@ docs/development/lab-notes.md **#36**, **#37**): the Flux controllers' host→po
 nested node (distroless images → the role removes the probes), and Flux merges `spec.values` after
 `valuesFrom` (so the role strips the tenant files' `sshUserCaPubKey: ""` placeholder — it would
 otherwise override the CA injection).
+
+Since Phase 0 of the API-layer split the same precedence carries the **operator/consumer split**: the
+role renders `environments/<site>/tenant-defaults.yaml` into ConfigMap `talu-tenant-defaults` and each
+HelmRelease merges it *before* `spec.values`, so tenant files hold consumer-owned fields only.
+See [`../tenant-chart/README.md`](../tenant-chart/README.md) and
+[`docs/architecture/adr-api-layer.md`](../../../docs/architecture/adr-api-layer.md) §4.

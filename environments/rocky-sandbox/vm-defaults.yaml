@@ -1,0 +1,20 @@
+# Operator-owned talu-vm values for the rocky-sandbox site — everything marked x-talu-owner: "operator"
+# in components/tenancy/vm-chart/values.schema.json. Rendered into ConfigMap tenants/talu-vm-defaults
+# and merged by every VM HelmRelease BEFORE its own values.
+#
+# Separate from tenant-defaults.yaml because the charts split (adr-api-layer.md §10.1) and both
+# schemas are additionalProperties:false — a VM-side key merged into a tenant release is rejected.
+#
+# NOT here: sshUserCaPubKey. The User CA is injected live from ConfigMap pomerium-user-ca so a
+# rotation takes effect without editing this file.
+
+# The sandbox keeps the catalog-free baseline so a bare install works: ephemeral containerDisks, no
+# golden-image catalog required. tenants/beta/vms/web1.yaml overrides these to demonstrate the
+# persistent auto-patching bootc path.
+source: containerDisk
+image: quay.io/containerdisks/ubuntu:24.04
+
+# caTrust:            # SSH User CA trust delivery (site-wide, tied to the golden-image build)
+#   package: false
+# logging:
+#   consoleLevel: info

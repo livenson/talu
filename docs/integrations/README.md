@@ -35,7 +35,13 @@ architecture in [`../architecture/`](../architecture/). This page is the integra
 
 A tenant is one **`HelmRelease`** applied directly to the Kubernetes API — Flux's helm-controller
 renders the `talu-tenant` chart into the full bundle; deleting the `HelmRelease` garbage-collects the
-tenant. The **chart's `values.schema.json` is the API surface**. The standalone (orchestrator-free) way
+tenant. The **chart's `values.schema.json` is the API surface** — but only its **consumer-owned
+half**: every property carries **`x-talu-owner`**, and you write the `consumer` ones. The `operator`
+ones (image catalog coordinates, component image pins, in-cluster endpoints, the SSH User CA) are
+supplied once per site and merged ahead of your values, so you never state them and never need to
+know them. Only the consumer-owned subset carries a compatibility promise.
+This split is the first step toward a typed API (`tenancy.talu.io` kinds) that will replace the
+`HelmRelease` envelope entirely — see [`../architecture/adr-api-layer.md`](../architecture/adr-api-layer.md). The standalone (orchestrator-free) way
 is the same object, either applied directly or committed under `environments/<site>/tenants/` and
 reconciled from Git — so an orchestrator *adopts* Git-managed tenants rather than migrating them.
 See [`../architecture/flows.md`](../architecture/flows.md#tenant--vm-provisioning).

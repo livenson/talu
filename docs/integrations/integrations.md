@@ -66,22 +66,28 @@ component. Architecture: [`../architecture/kaas.md`](../architecture/kaas.md); o
 
 ### Provision (WRITE)
 A managed cluster is a **`HelmRelease` referencing the [`talu-cluster`](../../components/tenancy/cluster-chart/)
-chart** — its **`values.schema.json` is the API**, mirroring `talu-tenant`. The consumer sets:
+chart** — its **`values.schema.json` is the API**, mirroring `talu-tenant`, and like `talu-tenant` it
+marks each property **`x-talu-owner: consumer|operator`**; the operator half comes from the site
+(see [`../architecture/adr-api-layer.md`](../architecture/adr-api-layer.md) §4). The consumer sets:
 
 | Value | Meaning |
 |---|---|
 | `name`, `projectUuid` | cluster name + the join key stamped on every object |
-| `debugPublicKey` | operator break-glass SSH key baked into workers (required) |
 | `kubernetesVersion` | tenant k8s (≤ min(mgmt, newest capk image)) |
 | `controlPlane.replicas`, `workers.{replicas,cores,memory}` | CP + worker sizing |
 | `workers.autoscaling.{enabled,min,max}` | node autoscaling (`min ≥ 1`) |
 | `dataStore` | dedicated per-tenant etcd (default) or `default` (shared) |
-| `wiring.enabled`, `wiring.inTenant.adminUser` | render CSI/CCM/in-tenant RBAC; who gets cluster-admin |
-| `backup.inTenant.*` | in-tenant Velero DR (optional) |
+| `wiring.inTenant.adminUser` | who gets cluster-admin in the tenant |
+| `backup.inTenant.enabled` | in-tenant Velero DR (optional; the endpoint/bucket/creds are the site's) |
 
 Substrate prerequisites the consumer **assumes exist** (the operator provides them, not the consumer):
 CAPI providers + `EXP_CLUSTER_RESOURCE_SET`, Rook-Ceph `ceph-block`, Cilium LB-IPAM, and — for a
 dedicated datastore — a `kamaji-etcd` DataStore named `<name>-local`.
+
+Operator-owned and therefore **not** the consumer's to supply: `debugPublicKey` (the break-glass SSH
+key baked into workers — required by the chart, provided by the site), `namespace`, `dataStore`,
+`podCidr`/`serviceCidr`, `ciliumVersion`, `healthCheck.*`, `wiring.{enabled,csi,ccm}` and every
+`*.image` / chart-version pin.
 
 ### Watch (STATUS)
 Readiness is ordinary CR `.status`, watchable directly or via Prometheus:

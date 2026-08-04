@@ -1,0 +1,7 @@
+# VM "app1" of tenant acme. projectUuid/slug/allowedUsers are injected from ../tenant.yaml by the
+# tenancy role (the API server does the same job once it lands) — never repeat them here.
+principal: alice
+memory: 1536Mi          # DEPRECATED legacy sizing; `size: small` is the supported form (§10.2)
+guestSecrets: |
+  DB_PASSWORD=acme-db-secret
+  TENANT=acme

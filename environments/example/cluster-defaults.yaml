@@ -1,0 +1,51 @@
+# Operator-owned talu-cluster (KaaS) values for YOUR site. Copy into environments/<site>/ and edit.
+#
+# Same two-owner split as tenant-defaults.yaml, machine-readable via `x-talu-owner` in
+# components/tenancy/cluster-chart/values.schema.json (docs/architecture/adr-api-layer.md §4).
+# The consumer writes: name, projectUuid, kubernetesVersion, controlPlane.replicas, workers.*
+# (replicas/cores/memory/autoscaling.enabled/min/max), wiring.inTenant.adminUser,
+# backup.inTenant.enabled. Everything below is yours.
+#
+# NOTE debugPublicKey stays in the schema's `required` list even though it is operator-owned: it is
+# the ONLY way into a worker guest (CAPK skips its own keypair under Kamaji), so a site that forgets
+# to configure it must fail loudly rather than render an unreachable cluster.
+
+# Operator break-glass SSH key baked into worker nodes. REQUIRED — set it, or every KaaS render fails.
+debugPublicKey: ""
+
+# Tenant cluster networking. Must not collide with the management CIDRs or with another tenant's.
+podCidr: 10.243.0.0/16
+serviceCidr: 10.95.0.0/16
+
+# Kept in lockstep with the management Cilium pin.
+ciliumVersion: "1.19.6"
+
+# MachineHealthCheck tuning — a site reliability policy.
+healthCheck:
+  unreadyTimeout: 5m
+
+workers:
+  autoscaling:
+    # Tracks the tenant Kubernetes minor.
+    image: registry.k8s.io/autoscaling/cluster-autoscaler:v1.34.0
+    maxNodeProvisionTime: 20m   # must stay >= the MHC nodeStartupTimeout (15m)
+
+# Cross-cluster wiring (CSI/CCM/in-tenant RBAC). Substrate plumbing — except inTenant.adminUser,
+# which is the tenant's first cluster-admin and is consumer-owned.
+# wiring:
+#   enabled: true
+#   csi:
+#     infraStorageClass: ceph-block
+#     image: quay.io/kubevirt/kubevirt-csi-driver:latest
+#   ccm:
+#     enabled: true
+#     image: quay.io/kubevirt/kubevirt-cloud-controller-manager:main
+
+# In-tenant Velero DR. The consumer flips backup.inTenant.enabled; the endpoint, bucket and creds
+# are provisioned by the site.
+# backup:
+#   inTenant:
+#     s3Url: "http://<garage-lb-ip>:3900"
+#     bucket: "kaas-velero-<name>"
+#     existingSecret: velero-garage
+#     veleroChartVersion: "8.1.0"

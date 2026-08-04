@@ -1,0 +1,12 @@
+# Persistent root disk cloned from a golden-image DataSource: new VMs always get the latest patched
+# image (the DataImportCron rolls the DataSource), and the disk persists so bootc self-update sticks.
+#
+# source/dataSource/dataSourceNamespace are OPERATOR-owned (x-talu-owner) — normally set once in
+# ../../../vm-defaults.yaml. Overriding them here is deliberate: this VM demonstrates the persistent
+# path against a site whose default is ephemeral. A VM file always wins the merge.
+principal: talu
+memory: 2Gi
+source: dataSource
+dataSource: centos-bootc     # a Talu-built bootc image (or "ubuntu" for the upstream base)
+dataSourceNamespace: golden-images
+rootDiskSize: 15Gi

@@ -1,0 +1,13 @@
+# Minimal VALID values for `helm lint` / `helm template` in CI. Not used at runtime.
+projectUuid: "aaaaaaaa-1111-2222-3333-444444444444"
+slug: citest
+name: app1
+principal: alice
+size: small
+allowedUsers: [alice@talu.local]
+securityGroups: [web]
+sshUserCaPubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILINTonlyPlaceholderKeyNotARealCA citest"
+guestSecrets: |
+  DB_PASSWORD=citest
+logging:
+  agent: true
