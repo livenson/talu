@@ -4,8 +4,8 @@
 [the integration contract](flows.md#the-integration-contract).
 
 **Decision in one line:** expose Talu's tenant surface as **typed Kubernetes kinds
-(`tenancy.talu.io/v1alpha1` — `Tenant`, `ManagedCluster`) served by an aggregated API server that
-projects onto Flux `HelmRelease`s**, keeping the charts as the private implementation.
+(`tenancy.talu.io/v1alpha1` — `Tenant`, `VirtualMachine`, `ManagedCluster`) served by an aggregated
+API server that projects onto Flux `HelmRelease`s**, keeping the charts as the private implementation.
 
 ---
 
@@ -65,8 +65,8 @@ closes the gap it identified.
 
 ## 2 · Decision
 
-Introduce **`tenancy.talu.io/v1alpha1`** with two namespaced kinds — **`Tenant`** and
-**`ManagedCluster`** — served by an **aggregated API server** (`APIService` +
+Introduce **`tenancy.talu.io/v1alpha1`** with three namespaced kinds — **`Tenant`**,
+**`VirtualMachine`** and **`ManagedCluster`** — served by an **aggregated API server** (`APIService` +
 `k8s.io/apiserver`-based binary) whose **backing storage is the `HelmRelease` it renders**. The
 charts stay exactly as they are and become **private implementation**.
 
@@ -79,7 +79,7 @@ graph LR
     FLUX["Flux helm-controller"]
     TNS["Tenant namespace<br/>VMs · quota · RBAC · CNPs"]
 
-    ORCH -->|"kubectl / client-go<br/>Tenant, ManagedCluster"| KAS
+    ORCH -->|"kubectl / client-go<br/>Tenant, VirtualMachine, ManagedCluster"| KAS
     KAS -->|APIService| TAPI
     TAPI <-->|"read/write<br/>(the only copy)"| HR
     HR --> FLUX --> TNS
@@ -133,16 +133,8 @@ spec:
   observability:
     dashboard: true           # was dashboards.enabled
     logs: agent               # off | console | agent  (was logging.{consoleLevel,agent})
-  vms:
-    app1:
-      size: small             # named size, not raw memory/cores (see §8)
-      image: rocky-10         # catalog name; resolves to DataSource or containerDisk
-      principal: alice
-      rootDiskSize: 20Gi
-      guestSecretsRef: acme-app1     # Secret name, not inline values
   securityGroups:
-    web:
-      vms: [app1]
+    web:                      # selects VMs by label, not by name (§10.1)
       ingress:
         - ports: [{ port: 80, protocol: TCP }, { port: 443, protocol: TCP }]
           fromCIDR: ["0.0.0.0/0"]
@@ -151,16 +143,44 @@ status:
   observedGeneration: 3
   vms:
     running: 1
-    desired: 1
+    total: 1                              # aggregated from the child VirtualMachines
   sshEndpoint: ssh.talu.example:2222
   dashboardUrl: https://acme.talu.example
   conditions:
-    - type: Ready          # rolled up: chart applied AND every VMI Running
+    - type: Ready          # rolled up: chart applied AND every child VM Ready
     - type: Reconciled     # the HelmRelease applied cleanly
     - type: QuotaExceeded
 ```
 
-Printer columns: `PROJECT` · `VMS` (running/desired) · `PHASE` · `AGE`.
+Printer columns: `PROJECT` · `VMS` (running/total) · `PHASE` · `AGE`.
+
+### `VirtualMachine`
+
+One object per VM (§10.1), so "may add a VM" is grantable without granting "may change the quota".
+
+```yaml
+apiVersion: tenancy.talu.io/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: app1
+  namespace: acme               # the tenant's namespace
+  ownerReferences: [{ kind: Tenant, name: acme, ... }]   # set by the API server; Tenant delete GCs it
+spec:
+  size: small                   # a VirtualMachineClusterInstancetype the site defines (§10.2)
+  image: rocky-10               # catalog name; the site resolves it to DataSource or containerDisk
+  principal: alice              # guest user / SSH cert principal
+  rootDiskSize: 20Gi
+  guestSecretsRef: acme-app1    # Secret name — never inline values
+  securityGroups: [web]         # rendered as labels the Tenant's CNPs select on
+status:
+  phase: Running                # Pending | Provisioning | Running | Stopped | Degraded
+  address: 10.244.1.46
+  sshPrincipal: alice
+  node: talos-w1
+  conditions: [...]
+```
+
+Printer columns: `SIZE` · `IMAGE` · `PHASE` · `IP` · `AGE`.
 
 ### `ManagedCluster`
 
@@ -342,7 +362,7 @@ Residual coupling that survives even if #3448 merges:
 
 **Build a minimal Talu apiserver, using Cozystack as the design reference, not the dependency.** The
 appeal of adopting was "don't write an apiserver" — but the integration surface above is not
-obviously smaller than a purpose-built server for **two kinds** with no nested tenancy, no quota
+obviously smaller than a purpose-built server for **three kinds** with no nested tenancy, no quota
 hierarchy and no SDN. And adopting would import the very defect (a single hardcoded API version) that
 this ADR exists to fix.
 
@@ -375,7 +395,8 @@ work and they survive any choice of serving code.
 | Phase | Content | Breaks anyone? |
 |---|---|---|
 | **0** ✅ **done, validated on rocky-phys 2026-08-04** | Land §4's split: `x-talu-owner` on every property of both schemas; `environments/<site>/tenant-defaults.yaml` → ConfigMap `talu-tenant-defaults`, merged by every tenant HelmRelease; tenant files reduced to consumer-owned fields. Operator fields stay *accepted* — nothing is removed. | no |
-| **1** | Ship `talu-apiserver` behind a site flag, **off by default**. Both paths write the same `HelmRelease`; the typed API is additive. | no |
+| **0b** | **Split `talu-tenant` into `talu-tenant` + `talu-vm`** (§10.1), invert `securityGroups` to label selection, move `allowedUsers` off the ssh `Service` annotation, and introduce the site's `VirtualMachineClusterInstancetype` size catalog (§10.2). Charts only — no serving code. Validate on `rocky-phys` by the same byte-identical-render method Phase 0 used. | tenant files gain a per-VM release; migration is mechanical |
+| **1** | Ship `talu-apiserver` behind a site flag, **off by default**. Both paths write the same `HelmRelease`s; the typed API is additive. | no |
 | **2** | Point `docs/integrations/` at the typed API as *the* contract; demote `HelmRelease` to "documented escape hatch, no compatibility promise". Ship the alert + break-glass runbook. | no |
 | **3** | Graduate `v1alpha1` → `v1beta1` once a real consumer (Waldur or the reference portal) has driven it end-to-end, with a conversion path. | versioned, so no |
 
@@ -442,13 +463,73 @@ auditability grounds — any `status.usage` is convenience only.
 
 ## 10 · Open questions
 
-1. **Fat `Tenant` vs `Tenant` + child `VirtualMachine`.** v1alpha1 keeps `vms` inline (it mirrors the
-   chart and keeps one object per project). Cozystack split `VMInstance`/`VMDisk`. Splitting buys
-   per-VM RBAC, per-VM status, and safe concurrent edits from a portal UI; it costs the "one object
-   per tenant" simplicity. Decide before `v1beta1` — it is not a compatible change afterwards.
-2. **Named sizes (`size: small`) vs raw `cores`/`memory`.** Named sizes are a cleaner integrator API
-   and map to KubeVirt instancetypes, but need a site-owned catalog and a story for a consumer that
-   wants something not in it.
+1. ~~**Fat `Tenant` vs `Tenant` + child `VirtualMachine`.**~~ **Settled (2026-08-04): split.**
+   `Tenant` owns the namespace, quota, members, network baseline and security groups; each VM is its
+   own namespaced **`VirtualMachine`** with an ownerReference to its `Tenant`, so deleting the Tenant
+   still GCs everything.
+
+   The decisive argument is **RBAC, and it is a privilege-escalation shape**: with `vms` inline, "may
+   add a VM" is `update` on the `Tenant` — which is also the power to change the quota, the member
+   list and the security groups. A self-service portal cannot be granted that. Splitting also removes
+   write contention (two concurrent portal actions no longer collide on one object), gives each VM its
+   own `.status` and conditions, and is the only shape that can later carry per-VM subresources
+   (`vm/console-url`, and `vm/start`/`vm/stop` if §6's rule-4 amendment is ever made). Every
+   comparable system agrees — Cozystack splits `VMInstance`/`VMDisk`, Harvester exposes
+   `kubevirt.io/VirtualMachine` directly; nobody nests N VMs inside a tenant object.
+
+   **This costs a chart split, and that is the real work.** §2 makes a CR a view over *its own*
+   `HelmRelease`, so one kind = one chart = one release (exactly Cozystack's `release.prefix` model).
+   So `talu-tenant` keeps namespace/quota/RBAC/netpol-baseline/dashboards/logging/ippool, and a new
+   **`talu-vm`** chart renders the per-VM quad that `templates/vms.yaml` already produces as a unit:
+   cloud-init `Secret` + `VirtualMachine` + ssh `Service` + the `<vm>-ssh-pin` `CiliumNetworkPolicy`.
+   Two couplings have to be inverted on the way:
+
+   - **`securityGroups` currently selects VMs *by name*** (`kubevirt.io/vm In [names]` in
+     `templates/securitygroups.yaml`) — a cross-object reference the tenant chart cannot resolve once
+     VMs are separate objects. Invert it: the **VM declares its groups via a label**, and the tenant's
+     CNP selects on that label. More idiomatic, and it removes the name reference entirely.
+   - **`allowedUsers` is stamped onto every VM's ssh `Service` annotation.** In a split, either the
+     API server injects the member list into each VM release or `route-sync` reads it from the
+     `Tenant`. Prefer the latter: one source of truth, and it stops annotations going stale when
+     membership changes.
+
+   Sequencing: **do the chart split first and validate it on `rocky-phys`**, before any serving code.
+   The API server's mapping is trivial once charts are 1:1 with kinds, and the split is independently
+   verifiable by the same byte-identical-render method Phase 0 used.
+
+   Cost accepted: the Git-first path becomes N+1 files per tenant instead of one. Mitigate with a
+   directory per tenant under `environments/<site>/tenants/<slug>/`.
+
+2. ~~**Named sizes vs raw `cores`/`memory`.**~~ **Settled (2026-08-04): named sizes, implemented as
+   KubeVirt instancetypes.** `size: small` renders
+   `spec.instancetype: {kind: VirtualMachineClusterInstancetype, name: talu-small}`; the site owns the
+   catalog of `VirtualMachineClusterInstancetype` objects. No raw `cores`/`memory` in the consumer
+   API — a site that needs an odd shape defines a size for it.
+
+   Three properties of [KubeVirt instancetypes](https://kubevirt.io/user-guide/user_workloads/instancetypes/)
+   make this strictly better than raw fields rather than merely tidier:
+   - **an instancetype cannot be overridden from the `VirtualMachine`** — exactly the enforcement a
+     platform contract wants, and impossible to get with free-form values;
+   - KubeVirt snapshots the instancetype into a **`ControllerRevision`** at VM creation, so
+     redefining a size does *not* retroactively resize existing VMs — which was the main objection to
+     named sizes;
+   - device/OS defaults live separately in **preferences**, so sizes stay purely about compute.
+
+   **This also closes a real gap: the tenant API cannot express vCPU at all today.**
+   `templates/vms.yaml` sets only `resources.requests.memory` — no `domain.cpu` — and KubeVirt
+   defaults a VM to `sockets × cores × threads = 1`. So every Talu tenant VM is a 1-vCPU VM and there
+   is no way to ask for more. Named sizes fix that by construction, because an instancetype must
+   state CPU.
+
+   ⚠ **Consequence for billing, worth fixing independently of this ADR.**
+   `talu:tenant_vcpu_cores:allocated` is `sum(kubevirt_vm_resource_requests{resource="cpu"})` — that
+   is the *pod CPU request*, which KubeVirt derives as `vCPUs × 1/cpuAllocationRatio` (default ratio
+   **10**). So the series reports **one tenth of guest vCPUs**, not vCPU cores as its name and the
+   fleet dashboard imply — and today, with no VM ever setting CPU, it is a near-constant ~0.1 per VM
+   that cannot distinguish a small tenant from a large one. Sizes make it at least *proportional*;
+   making it *correct* additionally needs either `cpuAllocationRatio: 1` (right if the platform bills
+   on reservation and does not overcommit) or a corrected/renamed recording rule. Tracked here
+   because the API review surfaced it, but it is a monitoring bug, not an API decision.
 3. ~~**Group name.**~~ **Settled (2026-08-04): `tenancy.talu.io`**, leaving room for a future
    `compute.talu.io` / `net.talu.io`. Settling it mattered because the group is unversionable — and
    because §7's source review showed adopting `cozystack-api` would have served Talu's contract under
