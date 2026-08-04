@@ -1,15 +1,16 @@
 ---
 # Tenant control plane — tenant-as-HelmRelease (Cozystack-style: chart + HelmRelease, no aggregation
 # apiserver, no Git). Installs Flux's source + helm controllers, stands up the in-cluster chart registry
-# + OCIRepository source + route-sync, publishes the talu-tenant chart, and reconciles each
-# environments/<tenant_env>/tenants/*.yaml as a HelmRelease. A tenant is then ONE object the orchestrator
-# applies to the API; Flux renders the whole bundle (namespace, VMs, quota, RBAC, netpol, routes).
+# + OCIRepository sources + route-sync, publishes the talu-tenant + talu-vm charts, and reconciles each
+# environments/<tenant_env>/tenants/<slug>/{tenant.yaml,vms/*.yaml} as a HelmRelease. Since the chart
+# split (adr-api-layer.md §10.1) a tenant is one object for the namespace half and one per VM.
 # Design + validated round-trip: components/tenancy/flux/README.md.
 - name: Tenancy dirs (on the lab, from the synced repo)
   ansible.builtin.set_fact:
     flux_dir: "{{ playbook_dir }}/../components/tenancy/flux"
     tenants_dir: "{{ playbook_dir }}/../environments/{{ tenant_env }}/tenants"
     tenant_defaults_file: "{{ playbook_dir }}/../environments/{{ tenant_env }}/tenant-defaults.yaml"
+    vm_defaults_file: "{{ playbook_dir }}/../environments/{{ tenant_env }}/vm-defaults.yaml"
 
 # --- Flux (minimal: only what the tenant pattern needs) --------------------------------------------
 # source-controller serves the OCIRepository/HelmChart; helm-controller renders HelmReleases. No
@@ -55,7 +56,7 @@
   changed_when: false
 
 # --- publish the chart, then pull it -----------------------------------------------------------------
-- name: (Re)publish the talu-tenant chart to the in-cluster registry
+- name: (Re)publish the talu-tenant + talu-vm charts to the in-cluster registry
   ansible.builtin.shell: |
     set -e
     kubectl -n flux-system delete job chart-publish --ignore-not-found
@@ -64,9 +65,10 @@
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
 
-- name: Reconcile the OCIRepository so it pulls the freshly-published chart
-  ansible.builtin.command: "flux reconcile source oci talu-tenant --namespace flux-system"
+- name: Reconcile the OCIRepositories so they pull the freshly-published charts
+  ansible.builtin.command: "flux reconcile source oci {{ item }} --namespace flux-system"
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  loop: [talu-tenant, talu-vm]
   changed_when: true
 
 # --- tenants: management namespace + mirrored CA + a HelmRelease per tenant file ---------------------
@@ -86,39 +88,74 @@
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
 
-# The operator half of the tenant contract (x-talu-owner: operator) lives once per site, not once per
-# tenant. Flux merges it BEFORE spec.values, so a tenant file still wins where it overlaps.
+# The operator half of the contract (x-talu-owner: operator) lives once per site, not once per tenant.
+# TWO files since the chart split (adr-api-layer.md §10.1): both schemas are additionalProperties:false,
+# so a VM-side key merged into a tenant release would be rejected. Flux merges them BEFORE spec.values,
+# so a tenant/VM file still wins where it overlaps.
 - name: Check for site-level operator defaults
   ansible.builtin.stat:
-    path: "{{ tenant_defaults_file }}"
-  register: tenant_defaults_stat
+    path: "{{ item }}"
+  loop:
+    - "{{ tenant_defaults_file }}"
+    - "{{ vm_defaults_file }}"
+  register: defaults_stat
 
-- name: Render the site's operator defaults into the talu-tenant-defaults ConfigMap
+- name: Render the site's operator defaults into ConfigMaps
   ansible.builtin.shell: |
-    kubectl -n {{ tenant_release_namespace }} create configmap talu-tenant-defaults \
-      --from-file=values.yaml={{ tenant_defaults_file }} --dry-run=client -o yaml | kubectl apply -f -
+    kubectl -n {{ tenant_release_namespace }} create configmap {{ item.cm }} \
+      --from-file=values.yaml={{ item.file }} --dry-run=client -o yaml | kubectl apply -f -
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
-  when: tenant_defaults_stat.stat.exists
+  loop:
+    - { cm: talu-tenant-defaults, file: "{{ tenant_defaults_file }}" }
+    - { cm: talu-vm-defaults, file: "{{ vm_defaults_file }}" }
+  when: (defaults_stat.results | selectattr('item', 'equalto', item.file) | map(attribute='stat.exists') | first | default(false))
   changed_when: true
 
+# The VM size vocabulary (VirtualMachineClusterInstancetype). Cluster-scoped and applied BEFORE any
+# VM: a VM referencing an absent instancetype is rejected at admission.
+- name: Apply the VM size catalog
+  ansible.builtin.command: "kubectl apply -k {{ playbook_dir }}/../components/tenancy/sizes"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+# Layout since the split: tenants/<slug>/tenant.yaml + tenants/<slug>/vms/<name>.yaml.
 - name: Discover tenant definitions for this environment
   ansible.builtin.find:
     paths: "{{ tenants_dir }}"
-    patterns: "*.yaml"
+    patterns: "tenant.yaml"
+    recurse: true
   register: tenant_files
+
+- name: Discover VM definitions for this environment
+  ansible.builtin.find:
+    paths: "{{ tenants_dir }}"
+    patterns: "*.yaml"
+    recurse: true
+  register: all_yaml
 
 - name: Render a HelmRelease per tenant
   ansible.builtin.template:
     src: tenant-helmrelease.yaml.j2
-    dest: "/tmp/talu-hr-{{ item.path | basename }}"
+    dest: "/tmp/talu-hr-{{ item.path | dirname | basename }}.yaml"
     mode: "0644"
   vars:
-    tenant_name: "{{ item.path | basename | splitext | first }}"
+    tenant_name: "{{ item.path | dirname | basename }}"
     tenant_values: "{{ lookup('file', item.path) }}"
   loop: "{{ tenant_files.files }}"
 
-- name: Apply the tenant HelmReleases (Flux renders each into its own namespace)
-  ansible.builtin.command: "kubectl apply -f /tmp/talu-hr-{{ item.path | basename }}"
+- name: Render a HelmRelease per VM
+  ansible.builtin.template:
+    src: vm-helmrelease.yaml.j2
+    dest: "/tmp/talu-hr-{{ item.path | dirname | dirname | basename }}-{{ item.path | basename | splitext | first }}.yaml"
+    mode: "0644"
+  vars:
+    tenant_name: "{{ item.path | dirname | dirname | basename }}"
+    vm_name: "{{ item.path | basename | splitext | first }}"
+    vm_values: "{{ lookup('file', item.path) }}"
+    tenant_data: "{{ lookup('file', item.path | dirname | dirname + '/tenant.yaml') | from_yaml }}"
+  loop: "{{ all_yaml.files | selectattr('path', 'search', '/vms/') | list }}"
+
+- name: Apply the tenant + VM HelmReleases (Flux renders each into the tenant namespace)
+  ansible.builtin.shell: "kubectl apply -f /tmp/talu-hr-*.yaml"
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
-  loop: "{{ tenant_files.files }}"
   changed_when: true

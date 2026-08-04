@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Talu VM API",
+  "description": "The typed contract for one Talu tenant VM. Ownership is marked with x-talu-owner exactly as in talu-tenant: 'consumer' = the integrator writes it per VM; 'operator' = the site supplies it once from environments/<site>/tenant-defaults.yaml. See docs/architecture/adr-api-layer.md §4 and §10.1.",
+  "type": "object",
+  "required": ["projectUuid", "slug", "name"],
+  "additionalProperties": false,
+  "properties": {
+    "projectUuid": {
+      "type": "string",
+      "description": "talu.io/project-uuid stamped on every object; the manager join key.",
+      "pattern": "^[0-9a-fA-F-]{8,}$",
+      "x-talu-owner": "consumer"
+    },
+    "slug": {
+      "type": "string",
+      "description": "The tenant's namespace (created by talu-tenant).",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "maxLength": 63,
+      "x-talu-owner": "consumer"
+    },
+    "allowedUsers": {
+      "type": "array",
+      "description": "The tenant's members, stamped on the ssh Service for the Pomerium route renderer. Comes from the Tenant, not chosen per VM.",
+      "items": { "type": "string" },
+      "x-talu-owner": "consumer"
+    },
+    "name": {
+      "type": "string",
+      "description": "VM name, unique within the tenant.",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "maxLength": 63,
+      "x-talu-owner": "consumer"
+    },
+    "principal": { "type": "string", "description": "Guest OS user / SSH cert principal.", "x-talu-owner": "consumer" },
+    "size": {
+      "type": "string",
+      "enum": ["", "small", "medium", "large"],
+      "description": "Named size -> VirtualMachineClusterInstancetype talu-<size> (components/tenancy/sizes/). Preferred over memory: it is the only way this API expresses vCPU, and KubeVirt enforces it. Mutually exclusive with memory.",
+      "x-talu-owner": "consumer"
+    },
+    "memory": {
+      "type": "string",
+      "description": "DEPRECATED legacy sizing, e.g. 1536Mi. Cannot express vCPU — KubeVirt defaults the guest to 1. Kept so pre-split tenants render unchanged; use size instead. Mutually exclusive with size.",
+      "x-talu-owner": "consumer"
+    },
+    "guestSecrets": { "type": "string", "description": "Written to /etc/talu/app.env in the guest.", "x-talu-owner": "consumer" },
+    "securityGroups": {
+      "type": "array",
+      "description": "Names of the tenant's security groups this VM joins. Rendered as talu.io/sg.<name> labels that the tenant's CiliumNetworkPolicies select on.",
+      "items": { "type": "string" },
+      "x-talu-owner": "consumer"
+    },
+    "source": { "type": "string", "enum": ["dataSource", "containerDisk"], "description": "OPERATOR — which image mechanism the site's catalog uses.", "x-talu-owner": "operator" },
+    "image": { "type": "string", "description": "OPERATOR — raw registry reference (source=containerDisk).", "x-talu-owner": "operator" },
+    "dataSource": { "type": "string", "description": "OPERATOR — golden-image catalog entry (source=dataSource).", "x-talu-owner": "operator" },
+    "dataSourceNamespace": { "type": "string", "description": "OPERATOR — where the catalog lives.", "x-talu-owner": "operator" },
+    "rootDiskSize": { "type": "string", "description": "Persistent root PVC size (source=dataSource).", "x-talu-owner": "consumer" },
+    "sshUserCaPubKey": {
+      "type": "string",
+      "description": "OPERATOR. Pomerium SSH User CA public key. Injected at reconcile time from ConfigMap pomerium-user-ca — never written by a consumer.",
+      "x-talu-owner": "operator"
+    },
+    "caTrust": {
+      "type": "object",
+      "description": "OPERATOR. How SSH User CA trust reaches the guest — a site-wide choice tied to the golden-image build.",
+      "x-talu-owner": "operator",
+      "additionalProperties": false,
+      "properties": {
+        "package": { "type": "boolean" },
+        "baked": { "type": "boolean" },
+        "aptRepoLine": { "type": "string" },
+        "aptOrigin": { "type": "string" }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Guest-side logging. Tier 1 (serial console) is always on; Tier 2 (agent) needs the tenant's logs-gateway, rendered by talu-tenant.",
+      "properties": {
+        "consoleLevel": { "type": "string", "enum": ["debug", "info", "notice", "warning", "err"], "x-talu-owner": "consumer" },
+        "agent": { "type": "boolean", "x-talu-owner": "consumer" },
+        "paths": { "type": "array", "items": { "type": "string" }, "x-talu-owner": "consumer" }
+      }
+    }
+  }
+}

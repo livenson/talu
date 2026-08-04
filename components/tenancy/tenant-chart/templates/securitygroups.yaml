@@ -4,6 +4,9 @@
 {{- $sg = $sg | default dict }}
 ---
 # Security group "{{ $sgName }}" — cloud-style allow-rules on the tenant's VMs.
+# Membership is declared BY THE VM (talu-vm renders a talu.io/sg.<name> label), not listed here by
+# name: since the split (docs/architecture/adr-api-layer.md §10.1) a VM is its own object and this
+# chart cannot know their names. `allVMs: true` keeps the old "every VM in the tenant" behaviour.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -14,12 +17,13 @@ metadata:
     {{- include "talu-tenant.labels" $root | nindent 4 }}
 spec:
   endpointSelector:
+    {{- if $sg.allVMs }}
     matchExpressions:
-      {{- if $sg.vms }}
-      - { key: kubevirt.io/vm, operator: In, values: [{{ join ", " $sg.vms }}] }
-      {{- else }}
       - { key: kubevirt.io/vm, operator: Exists }
-      {{- end }}
+    {{- else }}
+    matchLabels:
+      talu.io/sg.{{ $sgName }}: "true"
+    {{- end }}
   {{- if $sg.ingress }}
   ingress:
     {{- range $sg.ingress }}

@@ -1,0 +1,4 @@
+principal: bob
+memory: 1536Mi
+guestSecrets: |
+  TENANT=beta

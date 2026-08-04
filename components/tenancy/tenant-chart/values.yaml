@@ -1,10 +1,12 @@
-# Talu native tenant bundle — the manager-agnostic tenant API. A tenant (and its VMs) is a
-# values file under environments/<site>/tenants/, reconciled by Flux. Every rendered object
-# carries talu.io/project-uuid — the join key any external orchestrator reconciles on.
+# Talu native tenant bundle — the namespace half of the tenant API. Since the split
+# (docs/architecture/adr-api-layer.md §10.1) this chart owns the namespace, quota, RBAC, network
+# baseline, security-group policies, dashboards and log gateway; each VM is a SEPARATE talu-vm
+# release. Every rendered object carries talu.io/project-uuid — the join key any external
+# orchestrator reconciles on.
 #
-# SSH access is Pomerium Native SSH: each VM's Service is labelled talu.io/ssh-expose and
-# annotated talu.io/allowed-users, and the Pomerium config renderer turns that into an
-# ssh://<vm> route scoped to the tenant's members (see components/platform/access/).
+# SSH access is Pomerium Native SSH: each VM's Service (rendered by talu-vm) is labelled
+# talu.io/ssh-expose and annotated talu.io/allowed-users, and the Pomerium config renderer turns that
+# into an ssh://<vm> route scoped to the tenant's members (see components/platform/access/).
 
 projectUuid: ""            # REQUIRED, e.g. 3f2a91bc-...  -> talu.io/project-uuid on every object
 slug: ""                   # REQUIRED, the tenant namespace name; frozen at creation (survives renames)
@@ -12,47 +14,6 @@ slug: ""                   # REQUIRED, the tenant namespace name; frozen at crea
 # Tenant members — emails that may SSH into this tenant's VMs (Pomerium per-route policy) and,
 # where apiserver OIDC is wired, hold the scoped RBAC role in this namespace.
 allowedUsers: []           # e.g. [alice@talu.local]
-
-# Pomerium SSH User CA public key the VMs trust (TrustedUserCAKeys). In-cluster this comes from
-# ConfigMap pomerium/pomerium-user-ca; set it here (the manager injects it) or via HelmRelease valueFrom.
-sshUserCaPubKey: ""
-
-# Defaults applied to each VM unless the per-VM entry overrides them.
-# SSH User CA trust delivery. Default (package: false) hand-writes the trust file from sshUserCaPubKey
-# at boot — simple + repo-free, but a CA rotation needs the VM recreated. package: true installs the
-# rotatable `talu-ca-trust` package from an apt repo and auto-updates it (see dev/lab/ca-rotate.sh).
-caTrust:
-  package: false             # true → install the talu-ca-trust package (mutable/apt guests)
-  baked: false               # true → bootc golden image already carries the rpm; write no trust in cloud-init
-  aptRepoLine: "deb [trusted=yes] http://pkg-repo.golden-images.svc/deb/ ./"   # the in-cluster pkg-repo (flat repo)
-  aptOrigin: "talu"          # unattended-upgrades Origins-Pattern origin= match (the Release Origin field)
-
-defaults:
-  # Root disk source (standalone-first: default is containerDisk, which needs no catalog):
-  #   containerDisk -> ephemeral, boots straight from a registry image; reset on restart. Works out of
-  #                    the box (a bare install has no golden-image catalog). Patched by bumping the tag.
-  #   dataSource    -> OPT-IN. Persistent DataVolume cloned from a golden-image DataSource. New VMs get
-  #                    the latest patched image automatically (a CDI DataImportCron rolls the DataSource),
-  #                    and the disk survives reboot so bootc self-update sticks. Requires the golden-image
-  #                    catalog (components/infrastructure/cdi/ + zot). Set at the site or per VM.
-  source: containerDisk
-  image: quay.io/containerdisks/ubuntu:24.04   # used when source=containerDisk (OpenSSH guest)
-  dataSource: ubuntu                           # DataSource name (used when source=dataSource)
-  dataSourceNamespace: golden-images
-  rootDiskSize: 10Gi                           # persistent root PVC size (source=dataSource)
-  memory: 1536Mi
-  principal: talu                              # guest OS user / cert principal
-
-# VMs this tenant owns: name -> spec. Each renders a cloud-init Secret + VirtualMachine +
-# ssh Service (labelled/annotated) + CiliumNetworkPolicy pin.
-vms: {}
-#   web1:
-#     principal: bob            # optional (else defaults.principal)
-#     image: quay.io/...        # optional (else defaults.image)
-#     memory: 2Gi               # optional (else defaults.memory)
-#     guestSecrets: |           # optional — written to /etc/talu/app.env in the guest
-#       DB_PASSWORD=s3cr3t
-#       API_TOKEN=tok_abc
 
 # Per-tenant guardrails. resourceQuota is a DEFAULT (always rendered) so every tenant has a metering
 # envelope — `kube_resourcequota` then yields per-namespace utilisation for dashboards/accounting.
@@ -73,20 +34,17 @@ dashboards:
   proxyImage: quay.io/prometheuscommunity/prom-label-proxy:v0.11.1
   prometheusUrl: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
 
-# VM internal logs. Tier 1 (serial console → guest-console-log → Alloy → Loki) is ALWAYS on: the
-# platform stamps namespace/vm from pod metadata (spoof-proof). Tier 2 (opt-in) runs an in-guest agent
-# for rich app logs, pushing to a per-tenant, Cilium-pinned ingest gateway that hard-stamps this
-# tenant's namespace (the guest is never trusted with the tenant label). See logging component README.
+# VM internal logs, tenant side. Tier 1 (serial console → guest-console-log → Alloy → Loki) is ALWAYS
+# on and needs nothing here. Tier 2 (opt-in) renders this tenant's Cilium-pinned ingest gateway, which
+# hard-stamps the namespace on every line the guests push (the guest is never trusted with the tenant
+# label). The guest-side half of Tier 2 lives in talu-vm (logging.agent/paths/consoleLevel).
 logging:
-  consoleLevel: info         # Tier 1: journald→console max level (debug|info|notice|warning|err)
-  agent: false               # Tier 2: run the in-guest agent + render the per-tenant ingest gateway
-  paths: []                  # Tier 2: extra log files the in-guest agent tails (e.g. [/var/log/app/*.log])
+  agent: false             # Tier 2: render the per-tenant ingest gateway
   lokiUrl: http://loki.logging.svc.cluster.local:3100   # gateway → Loki (VMs never reach this directly)
   gatewayImage: docker.io/grafana/alloy:v1.17.1         # the per-tenant ingest gateway (receive+stamp)
+
 internalIpPool: ""         # tier-1 CiliumLoadBalancerIPPool CIDR for this tenant (empty = feature off)
 
-# Security groups: cloud-style ingress/egress allow-rules attached to VMs -> CiliumNetworkPolicy.
-# Managed via the tenant API (edit values), alongside the always-on <vm>-ssh-pin.
 # Layer B network baseline (opt-in hardening). When enabled, every VM in this tenant defaults to
 # DENY egress and ingress except: cluster DNS, its own namespace, and the mandatory host/health path.
 # Grant everything else (internet, specific peers) via securityGroups below — they're additive allows.
@@ -96,14 +54,19 @@ internalIpPool: ""         # tier-1 CiliumLoadBalancerIPPool CIDR for this tenan
 networkBaseline:
   enabled: false
 
+# Security groups: cloud-style ingress/egress allow-rules -> CiliumNetworkPolicy.
+# MEMBERSHIP IS DECLARED BY THE VM, not listed here: a talu-vm release sets `securityGroups: [web]`,
+# which renders a talu.io/sg.web label the policy below selects on. Set `allVMs: true` to apply a
+# group to every VM in the tenant regardless of what the VMs declare.
 securityGroups: {}
 #   web:
-#     vms: [app1]          # VMs it applies to (kubevirt.io/vm); omitted/[] = all VMs in the tenant
 #     ingress:
 #       - ports: [{ port: 80, protocol: TCP }, { port: 443, protocol: TCP }]
 #         fromCIDR: ["0.0.0.0/0"]
+#   egress-all:
+#     allVMs: true
 #     egress:
-#       - toCIDR: ["0.0.0.0/0"]      # allow all egress (omit to keep default)
+#       - toCIDR: ["0.0.0.0/0"]
 
 # Scoped RBAC: bind allowedUsers to a namespace-admin Role (needs apiserver OIDC to actually log in).
 rbac:

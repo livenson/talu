@@ -1,0 +1,6 @@
+apiVersion: v2
+name: talu-vm
+description: One Talu tenant VM — the per-VM half of the tenant API (see talu-tenant for the namespace).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

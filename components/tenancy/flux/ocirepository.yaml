@@ -8,3 +8,14 @@ spec:
   insecure: true
   url: oci://registry.flux-system.svc:5000/charts/talu-tenant
   ref: { tag: "0.1.0" }
+---
+# Flux source for the talu-vm chart — one VM is its own release since the chart split
+# (docs/architecture/adr-api-layer.md §10.1).
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata: { name: talu-vm, namespace: flux-system }
+spec:
+  interval: 5m
+  insecure: true
+  url: oci://registry.flux-system.svc:5000/charts/talu-vm
+  ref: { tag: "0.1.0" }

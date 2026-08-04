@@ -6,19 +6,16 @@
 # genuinely tenant-specific, and a site-wide change (a new golden image, a component image pin) is
 # one edit here instead of one per tenant.
 #
-# Merge order (later wins):  chart values.yaml  <  THIS FILE  <  pomerium-user-ca (targetPath)  <  the tenant file
+# Merge order (later wins):  chart values.yaml  <  THIS FILE  <  the tenant file
+# (the SSH User CA is injected into the VM releases now, not this one — see vm-defaults.yaml)
 #
 # NOT here: sshUserCaPubKey. The User CA is injected live from ConfigMap pomerium-user-ca so a CA
 # rotation takes effect without editing this file; putting it here would make it stale by design.
 
-# How VMs address their root image. Real KVM here, so ephemeral containerDisks are fine as the
-# baseline; a tenant that needs persistent, auto-patching bootc disks overrides source/dataSource.
-defaults:
-  source: containerDisk
-  image: quay.io/containerdisks/ubuntu:24.04
-
-# Component image pins + in-cluster endpoints are operator-owned; the chart defaults are correct for
-# this site, so they are listed here only as the documented override point.
+# The image/CA/guest-side operator values moved to vm-defaults.yaml when the charts split
+# (adr-api-layer.md §10.1) — both schemas are additionalProperties:false, so they cannot share one
+# ConfigMap. Nothing tenant-side needs overriding on this site yet; the chart defaults are correct.
+#
 # dashboards:
 #   persesImage: docker.io/persesdev/perses:v0.53.0
 #   proxyImage: quay.io/prometheuscommunity/prom-label-proxy:v0.11.1
@@ -26,5 +23,4 @@ defaults:
 # logging:
 #   lokiUrl: http://loki.logging.svc.cluster.local:3100
 #   gatewayImage: docker.io/grafana/alloy:v1.17.1
-# caTrust:
-#   package: false
+{}

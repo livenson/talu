@@ -395,10 +395,38 @@ work and they survive any choice of serving code.
 | Phase | Content | Breaks anyone? |
 |---|---|---|
 | **0** ✅ **done, validated on rocky-phys 2026-08-04** | Land §4's split: `x-talu-owner` on every property of both schemas; `environments/<site>/tenant-defaults.yaml` → ConfigMap `talu-tenant-defaults`, merged by every tenant HelmRelease; tenant files reduced to consumer-owned fields. Operator fields stay *accepted* — nothing is removed. | no |
-| **0b** | **Split `talu-tenant` into `talu-tenant` + `talu-vm`** (§10.1), invert `securityGroups` to label selection, move `allowedUsers` off the ssh `Service` annotation, and introduce the site's `VirtualMachineClusterInstancetype` size catalog (§10.2). Charts only — no serving code. Validate on `rocky-phys` by the same byte-identical-render method Phase 0 used. | tenant files gain a per-VM release; migration is mechanical |
+| **0b** ✅ **done, validated on rocky-phys 2026-08-04** | Split `talu-tenant` into `talu-tenant` + `talu-vm` (§10.1); `securityGroups` now selects on a `talu.io/sg.<name>` label the VM declares; added the `VirtualMachineClusterInstancetype` catalog in [`../../components/tenancy/sizes/`](../../components/tenancy/sizes/) behind `size:` (§10.2). Layout is now `tenants/<slug>/{tenant.yaml,vms/<name>.yaml}`, and the site defaults split into `tenant-defaults.yaml` + `vm-defaults.yaml` (both schemas are `additionalProperties:false`, so one shared ConfigMap is impossible). **Deferred:** moving `allowedUsers` off the ssh `Service` annotation — it needs a `route-sync` change, which owns the live Pomerium routes (lab-notes #40), so it is kept as its own risk-isolated step. | migration is mechanical, and no-downtime — see below |
 | **1** | Ship `talu-apiserver` behind a site flag, **off by default**. Both paths write the same `HelmRelease`s; the typed API is additive. | no |
 | **2** | Point `docs/integrations/` at the typed API as *the* contract; demote `HelmRelease` to "documented escape hatch, no compatibility promise". Ship the alert + break-glass runbook. | no |
 | **3** | Graduate `v1alpha1` → `v1beta1` once a real consumer (Waldur or the reference portal) has driven it end-to-end, with a conversion path. | versioned, so no |
+
+### Phase 0b — what was validated (rocky-phys, 2026-08-04)
+
+Equivalence first, locally: the pre-split chart and `talu-tenant` + `talu-vm` render **the same 8
+objects with identical content**, the only difference being the intended
+`managed-by: talu-tenant-chart` → `talu-vm-chart` relabel on the four VM objects (nothing selects on
+that label).
+
+On the lab, migrating the live `acme` tenant:
+
+- `HelmRelease acme` (namespace half) and `acme-app1` (VM) both `Ready=True`.
+- **The running VMI kept its uid *and* its start timestamp** — it was never recreated or restarted.
+- Helm ownership split correctly: the VM objects to `acme-app1`, `resourcequota/acme-quota` to `acme`.
+
+⚠ **The naive migration destroys VMs.** The outgoing `talu-tenant` release owns the VM objects, so a
+plain apply makes Helm prune the `VirtualMachine` — and with it any `dataVolumeTemplates` disk — before
+the VM release recreates it. The no-downtime path is `helm.sh/resource-policy: keep` plus a
+`meta.helm.sh/release-name` transfer so the incoming release *adopts*; the exact commands are in
+[`../../components/tenancy/vm-chart/README.md`](../../components/tenancy/vm-chart/README.md).
+
+The two new behaviours, checked with a throwaway `size: small` VM:
+
+- `spec.instancetype` → `talu-small` with `domain.resources` **empty** (both would be rejected), and
+  the VMI materialised at **1 core / 2Gi guest** — so `size:` really does what it says.
+- `talu.io/sg.web: "true"` landed on the VMI template, which is what the tenant's CNP selects on.
+- Billing followed correctly: `talu:tenant_vcpu_cores:allocated` went 1 → **2** and
+  `talu:tenant_memory_bytes:allocated` to **3.5Gi** (1.5Gi legacy + 2Gi sized) — the first end-to-end
+  confirmation that a Talu VM can express vCPU at all, and that the fixed rules meter it.
 
 ### Phase 0 — what was validated (rocky-phys, 2026-08-04)
 

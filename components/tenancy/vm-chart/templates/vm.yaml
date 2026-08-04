@@ -1,14 +1,8 @@
+{{- include "talu-vm.validate" . -}}
 {{- $root := . -}}
 {{- $ns := .Values.slug -}}
-{{- range $name, $vm := .Values.vms }}
-{{- $vm = $vm | default dict -}}
-{{- $principal := $vm.principal | default $root.Values.defaults.principal -}}
-{{- $image := $vm.image | default $root.Values.defaults.image -}}
-{{- $memory := $vm.memory | default $root.Values.defaults.memory -}}
-{{- $source := $vm.source | default $root.Values.defaults.source -}}
-{{- $ds := $vm.dataSource | default $root.Values.defaults.dataSource -}}
-{{- $dsNs := $vm.dataSourceNamespace | default $root.Values.defaults.dataSourceNamespace -}}
-{{- $rootSize := $vm.rootDiskSize | default $root.Values.defaults.rootDiskSize -}}
+{{- $name := .Values.name -}}
+{{- $principal := .Values.principal | default "talu" -}}
 ---
 # Cloud-init lives in a Secret (guest secrets stay out of the VM manifest; the manager writes it).
 apiVersion: v1
@@ -18,7 +12,7 @@ metadata:
   namespace: {{ $ns }}
   labels:
     talu.io/vm: {{ $name | quote }}
-    {{- include "talu-tenant.labels" $root | nindent 4 }}
+    {{- include "talu-vm.labels" $root | nindent 4 }}
 type: Opaque
 stringData:
   userdata: |
@@ -75,11 +69,11 @@ stringData:
           RestartSec=2
           [Install]
           WantedBy=multi-user.target
-    {{- if $vm.guestSecrets }}
+    {{- if $root.Values.guestSecrets }}
       - path: /etc/talu/app.env
         permissions: "0600"
         content: |
-          {{- $vm.guestSecrets | nindent 10 }}
+          {{- $root.Values.guestSecrets | nindent 10 }}
     {{- end }}
     {{- if $root.Values.logging.agent }}
       # VM logs Tier 2 (opt-in): the in-guest agent (Fluent Bit, baked into the golden image) tails
@@ -134,30 +128,44 @@ metadata:
   namespace: {{ $ns }}
   labels:
     talu.io/vm: {{ $name | quote }}
-    {{- include "talu-tenant.labels" $root | nindent 4 }}
+    {{- include "talu-vm.labels" $root | nindent 4 }}
 spec:
   runStrategy: Always
-  {{- if eq $source "dataSource" }}
+  {{- if $root.Values.size }}
+  # Named size (preferred). KubeVirt REJECTS a VM that also sets domain.cpu/domain.resources, which is
+  # the point: the size is enforced, not advisory. Snapshotted into a ControllerRevision at creation,
+  # so redefining the size later does not resize this VM. See components/tenancy/sizes/.
+  instancetype:
+    kind: VirtualMachineClusterInstancetype
+    name: talu-{{ $root.Values.size }}
+  {{- end }}
+  {{- if eq $root.Values.source "dataSource" }}
   # Persistent root disk cloned from the golden-image DataSource (CDI). New VMs get the latest patched
   # image automatically (the DataImportCron rolls the DataSource); the disk persists → bootc self-update.
   dataVolumeTemplates:
     - metadata:
         name: {{ $name }}-root
         labels:
-          {{- include "talu-tenant.labels" $root | nindent 10 }}
+          {{- include "talu-vm.labels" $root | nindent 10 }}
       spec:
         sourceRef:
           kind: DataSource
-          name: {{ $ds | quote }}
-          namespace: {{ $dsNs | quote }}
+          name: {{ $root.Values.dataSource | quote }}
+          namespace: {{ $root.Values.dataSourceNamespace | quote }}
         storage:
-          resources: { requests: { storage: {{ $rootSize }} } }
+          resources: { requests: { storage: {{ $root.Values.rootDiskSize }} } }
   {{- end }}
   template:
     metadata:
       labels:
         kubevirt.io/vm: {{ $name }}
         talu.io/project-uuid: {{ $root.Values.projectUuid | quote }}
+        {{- /* Security-group membership is declared BY THE VM and selected by the tenant's
+               CiliumNetworkPolicies (docs/architecture/adr-api-layer.md §10.1). The tenant chart no
+               longer needs to know VM names. */}}
+        {{- range $root.Values.securityGroups }}
+        talu.io/sg.{{ . }}: "true"
+        {{- end }}
     spec:
       domain:
         devices:
@@ -165,15 +173,19 @@ spec:
             - { name: rootdisk, disk: { bus: virtio } }
             - { name: cloudinit, disk: { bus: virtio } }
           interfaces: [{ name: default, masquerade: {} }]
-        resources: { requests: { memory: {{ $memory }} } }
+        {{- if $root.Values.memory }}
+        # Legacy sizing. Deprecated in favour of `size:` — it cannot express vCPU, so KubeVirt defaults
+        # the guest to 1 (sockets*cores*threads), and nothing stops a consumer asking for any value.
+        resources: { requests: { memory: {{ $root.Values.memory }} } }
+        {{- end }}
       networks: [{ name: default, pod: {} }]
       volumes:
-        {{- if eq $source "dataSource" }}
+        {{- if eq $root.Values.source "dataSource" }}
         - name: rootdisk
           dataVolume: { name: {{ $name }}-root }
         {{- else }}
         - name: rootdisk
-          containerDisk: { image: {{ $image }} }
+          containerDisk: { image: {{ $root.Values.image }} }
         {{- end }}
         - name: cloudinit
           cloudInitNoCloud:
@@ -187,9 +199,11 @@ metadata:
   labels:
     talu.io/ssh-expose: "true"
     talu.io/vm: {{ $name | quote }}
-    {{- include "talu-tenant.labels" $root | nindent 4 }}
+    {{- include "talu-vm.labels" $root | nindent 4 }}
   annotations:
-    # per-tenant SSH allow-list read by the Pomerium route renderer (annotation: emails have '@')
+    # per-tenant SSH allow-list read by the Pomerium route renderer (annotation: emails have '@').
+    # Still passed in per VM — moving route-sync to read it from the Tenant instead is deferred, see
+    # docs/architecture/adr-api-layer.md §10.1.
     talu.io/allowed-users: {{ join "," $root.Values.allowedUsers | quote }}
 spec:
   selector: { kubevirt.io/vm: {{ $name }} }
@@ -203,11 +217,10 @@ metadata:
   namespace: {{ $ns }}
   labels:
     talu.io/vm: {{ $name | quote }}
-    {{- include "talu-tenant.labels" $root | nindent 4 }}
+    {{- include "talu-vm.labels" $root | nindent 4 }}
 spec:
   endpointSelector: { matchLabels: { kubevirt.io/vm: {{ $name }} } }
   ingress:
     - fromEndpoints:
         - matchLabels: { k8s:io.kubernetes.pod.namespace: pomerium }
       toPorts: [{ ports: [{ port: "22", protocol: TCP }] }]
-{{- end }}
