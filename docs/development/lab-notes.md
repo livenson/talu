@@ -568,6 +568,14 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     not the dotted ConfigMap key (`user_ca.pub`), was the culprit — verified by re-applying with the line
     removed → `HelmRelease Ready`, VM `Running`.
 
+    **Update (Phase 0 of the API-layer split, 2026-08-04):** the placeholder is now gone from every
+    `environments/*/tenants/*.yaml` — `sshUserCaPubKey` is `x-talu-owner: operator` and tenant files
+    carry consumer-owned fields only. The role's strip stays as belt-and-braces for hand-written files.
+    The same precedence rule is now *load-bearing in the good direction*: the site's operator defaults
+    (ConfigMap `talu-tenant-defaults`, from `environments/<site>/tenant-defaults.yaml`) are merged
+    FIRST, so a tenant file still overrides them where it overlaps. Order:
+    `chart values.yaml < talu-tenant-defaults < pomerium-user-ca < spec.values`.
+
 38. **Tetragon is real-hardware ONLY — the nested lab can't run it (same wall class as #14/#15).**
     Tetragon loads eBPF programs and needs kernel **BTF** (`CONFIG_DEBUG_INFO_BTF`) plus
     `/sys/kernel/tracing`. The nested Talos-in-Podman node exposes neither reliably (its curated

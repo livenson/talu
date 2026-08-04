@@ -9,6 +9,7 @@
   ansible.builtin.set_fact:
     flux_dir: "{{ playbook_dir }}/../components/tenancy/flux"
     tenants_dir: "{{ playbook_dir }}/../environments/{{ tenant_env }}/tenants"
+    tenant_defaults_file: "{{ playbook_dir }}/../environments/{{ tenant_env }}/tenant-defaults.yaml"
 
 # --- Flux (minimal: only what the tenant pattern needs) --------------------------------------------
 # source-controller serves the OCIRepository/HelmChart; helm-controller renders HelmReleases. No
@@ -83,6 +84,21 @@
     kubectl -n {{ tenant_release_namespace }} create configmap pomerium-user-ca \
       --from-literal=user_ca.pub="$CA" --dry-run=client -o yaml | kubectl apply -f -
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
+
+# The operator half of the tenant contract (x-talu-owner: operator) lives once per site, not once per
+# tenant. Flux merges it BEFORE spec.values, so a tenant file still wins where it overlaps.
+- name: Check for site-level operator defaults
+  ansible.builtin.stat:
+    path: "{{ tenant_defaults_file }}"
+  register: tenant_defaults_stat
+
+- name: Render the site's operator defaults into the talu-tenant-defaults ConfigMap
+  ansible.builtin.shell: |
+    kubectl -n {{ tenant_release_namespace }} create configmap talu-tenant-defaults \
+      --from-file=values.yaml={{ tenant_defaults_file }} --dry-run=client -o yaml | kubectl apply -f -
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  when: tenant_defaults_stat.stat.exists
   changed_when: true
 
 - name: Discover tenant definitions for this environment

@@ -1,0 +1,10 @@
+# Operator-owned talu-tenant values for the rocky-sandbox site — everything marked x-talu-owner:
+# "operator" in components/tenancy/tenant-chart/values.schema.json. See the header of
+# environments/rocky-phys/tenant-defaults.yaml for the merge order and the reasoning.
+#
+# The sandbox deliberately keeps the catalog-free baseline so a bare install works: ephemeral
+# containerDisks, no golden-image catalog required. tenants/beta.yaml overrides source/dataSource to
+# demonstrate the persistent auto-patching path.
+defaults:
+  source: containerDisk
+  image: quay.io/containerdisks/ubuntu:24.04

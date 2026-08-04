@@ -1,33 +1,38 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "Talu tenant API",
-  "description": "The typed contract for a Talu tenant. Helm/Flux validate a HelmRelease's values against this.",
+  "description": "The typed contract for a Talu tenant. Helm/Flux validate a HelmRelease's values against this. Every property carries x-talu-owner: 'consumer' = the integrator/orchestrator writes it per tenant; 'operator' = the site owns it, supplied once from environments/<site>/tenant-defaults.yaml (rendered into the talu-tenant-defaults ConfigMap and merged by the HelmRelease BEFORE spec.values). A consumer that sets an operator-owned field still wins the merge — the split is a contract, not an enforcement — but only the consumer-owned subset is API surface with a compatibility promise. See docs/architecture/adr-api-layer.md §4.",
   "type": "object",
   "required": ["projectUuid", "slug"],
   "properties": {
     "projectUuid": {
       "type": "string",
       "description": "talu.io/project-uuid stamped on every object; the manager join key.",
-      "pattern": "^[0-9a-fA-F-]{8,}$"
+      "pattern": "^[0-9a-fA-F-]{8,}$",
+      "x-talu-owner": "consumer"
     },
     "slug": {
       "type": "string",
       "description": "Tenant namespace name; frozen at creation.",
       "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-      "maxLength": 63
+      "maxLength": 63,
+      "x-talu-owner": "consumer"
     },
     "allowedUsers": {
       "type": "array",
       "description": "Tenant members (emails) allowed to SSH and hold the scoped RBAC role.",
-      "items": { "type": "string" }
+      "items": { "type": "string" },
+      "x-talu-owner": "consumer"
     },
     "sshUserCaPubKey": {
       "type": "string",
-      "description": "Pomerium SSH User CA public key the VMs trust (injected via valuesFrom cm pomerium-user-ca). Not needed when caTrust.package=true."
+      "description": "OPERATOR. Pomerium SSH User CA public key the VMs trust. Injected at reconcile time from ConfigMap pomerium-user-ca via the HelmRelease's valuesFrom/targetPath — never written by a consumer and never committed to a tenant file (an inline value, even \"\", overrides the injection). Not needed when caTrust.package=true.",
+      "x-talu-owner": "operator"
     },
     "caTrust": {
       "type": "object",
-      "description": "How SSH User CA trust reaches guests: hand-written file (default) or the rotatable talu-ca-trust package.",
+      "description": "OPERATOR. How SSH User CA trust reaches guests: hand-written file (default) or the rotatable talu-ca-trust package. A site-wide choice tied to the golden-image build, not a per-tenant one.",
+      "x-talu-owner": "operator",
       "properties": {
         "package": { "type": "boolean", "description": "Install the talu-ca-trust package (rotatable, auto-updating) instead of hand-writing the trust file." },
         "baked": { "type": "boolean", "description": "The bootc golden image already carries the talu-ca-trust rpm — write no trust in cloud-init." },
@@ -38,31 +43,33 @@
     },
     "defaults": {
       "type": "object",
+      "description": "Defaults applied to each VM unless the per-VM entry overrides them. Split ownership: how an image is addressed (source/dataSource/dataSourceNamespace/image) is catalog plumbing the site owns; sizing and the guest principal are the consumer's. The typed API collapses the four operator fields into one consumer-facing catalog name.",
       "properties": {
-        "source": { "type": "string", "enum": ["dataSource", "containerDisk"] },
-        "dataSource": { "type": "string" },
-        "dataSourceNamespace": { "type": "string" },
-        "rootDiskSize": { "type": "string" },
-        "image": { "type": "string" },
-        "memory": { "type": "string" },
-        "principal": { "type": "string" }
+        "source": { "type": "string", "enum": ["dataSource", "containerDisk"], "description": "OPERATOR — which image mechanism the site's catalog uses.", "x-talu-owner": "operator" },
+        "dataSource": { "type": "string", "description": "OPERATOR — golden-image catalog entry.", "x-talu-owner": "operator" },
+        "dataSourceNamespace": { "type": "string", "description": "OPERATOR — where the catalog lives.", "x-talu-owner": "operator" },
+        "image": { "type": "string", "description": "OPERATOR — a raw registry reference.", "x-talu-owner": "operator" },
+        "rootDiskSize": { "type": "string", "x-talu-owner": "consumer" },
+        "memory": { "type": "string", "x-talu-owner": "consumer" },
+        "principal": { "type": "string", "x-talu-owner": "consumer" }
       },
       "additionalProperties": false
     },
     "vms": {
       "type": "object",
       "description": "VMs the tenant owns: name -> spec.",
+      "x-talu-owner": "consumer",
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "principal": { "type": "string" },
-          "source": { "type": "string", "enum": ["dataSource", "containerDisk"] },
-          "dataSource": { "type": "string" },
-          "dataSourceNamespace": { "type": "string" },
-          "rootDiskSize": { "type": "string" },
-          "image": { "type": "string" },
-          "memory": { "type": "string" },
-          "guestSecrets": { "type": "string" }
+          "principal": { "type": "string", "x-talu-owner": "consumer" },
+          "memory": { "type": "string", "x-talu-owner": "consumer" },
+          "rootDiskSize": { "type": "string", "x-talu-owner": "consumer" },
+          "guestSecrets": { "type": "string", "x-talu-owner": "consumer" },
+          "source": { "type": "string", "enum": ["dataSource", "containerDisk"], "description": "OPERATOR escape hatch — raw image plumbing. The typed API replaces source/image/dataSource* with one catalog name.", "x-talu-owner": "operator" },
+          "dataSource": { "type": "string", "description": "OPERATOR escape hatch — see 'source'.", "x-talu-owner": "operator" },
+          "dataSourceNamespace": { "type": "string", "description": "OPERATOR escape hatch — see 'source'.", "x-talu-owner": "operator" },
+          "image": { "type": "string", "description": "OPERATOR escape hatch — a raw registry reference. Prefer a site default in tenant-defaults.yaml.", "x-talu-owner": "operator" }
         },
         "additionalProperties": false
       }
@@ -70,16 +77,19 @@
     "resourceQuota": {
       "type": "object",
       "description": "Optional ResourceQuota hard limits (e.g. requests.cpu, requests.memory).",
+      "x-talu-owner": "consumer",
       "additionalProperties": { "type": ["string", "integer"] }
     },
     "internalIpPool": {
       "type": "string",
-      "description": "Tier-1 CiliumLoadBalancerIPPool CIDR (empty = off)."
+      "description": "Tier-1 CiliumLoadBalancerIPPool CIDR (empty = off). Consumer-owned, but the CIDR must come from the site's IPAM plan — a consumer cannot invent one.",
+      "x-talu-owner": "consumer"
     },
     "networkBaseline": {
       "type": "object",
       "additionalProperties": false,
       "description": "Layer B opt-in: default-deny egress/ingress on tenant VMs except DNS + own ns + host/health.",
+      "x-talu-owner": "consumer",
       "properties": {
         "enabled": { "type": "boolean", "default": false }
       }
@@ -87,6 +97,7 @@
     "securityGroups": {
       "type": "object",
       "description": "Cloud-style allow-rules attached to VMs, rendered to CiliumNetworkPolicies.",
+      "x-talu-owner": "consumer",
       "additionalProperties": {
         "type": "object",
         "properties": {
@@ -99,6 +110,7 @@
     },
     "rbac": {
       "type": "object",
+      "x-talu-owner": "consumer",
       "properties": { "enabled": { "type": "boolean" } },
       "additionalProperties": false
     },
@@ -106,10 +118,10 @@
       "type": "object",
       "description": "Per-tenant Perses dashboard + prom-label-proxy (reachable only via Pomerium); off by default.",
       "properties": {
-        "enabled": { "type": "boolean" },
-        "persesImage": { "type": "string" },
-        "proxyImage": { "type": "string" },
-        "prometheusUrl": { "type": "string" }
+        "enabled": { "type": "boolean", "x-talu-owner": "consumer" },
+        "persesImage": { "type": "string", "description": "OPERATOR — component image pin.", "x-talu-owner": "operator" },
+        "proxyImage": { "type": "string", "description": "OPERATOR — component image pin.", "x-talu-owner": "operator" },
+        "prometheusUrl": { "type": "string", "description": "OPERATOR — in-cluster endpoint.", "x-talu-owner": "operator" }
       },
       "additionalProperties": false
     },
@@ -120,16 +132,18 @@
         "consoleLevel": {
           "type": "string",
           "enum": ["debug", "info", "notice", "warning", "err"],
-          "description": "Tier 1: journald→console max level."
+          "description": "Tier 1: journald→console max level.",
+          "x-talu-owner": "consumer"
         },
-        "agent": { "type": "boolean", "description": "Tier 2: run the in-guest agent + render the per-tenant ingest gateway." },
+        "agent": { "type": "boolean", "description": "Tier 2: run the in-guest agent + render the per-tenant ingest gateway.", "x-talu-owner": "consumer" },
         "paths": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Tier 2: extra log files the in-guest agent tails."
+          "description": "Tier 2: extra log files the in-guest agent tails.",
+          "x-talu-owner": "consumer"
         },
-        "lokiUrl": { "type": "string" },
-        "gatewayImage": { "type": "string" }
+        "lokiUrl": { "type": "string", "description": "OPERATOR — in-cluster endpoint.", "x-talu-owner": "operator" },
+        "gatewayImage": { "type": "string", "description": "OPERATOR — component image pin.", "x-talu-owner": "operator" }
       },
       "additionalProperties": false
     }

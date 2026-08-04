@@ -49,19 +49,39 @@ shown in the per-tenant **VM Logs** dashboard and the operator one.
   malicious guest therefore can only mislabel its *own* logs — never write into another tenant's stream.
   Validated on the lab: a push with a spoofed `namespace` was stored as the tenant's real namespace.
 
+## Two owners: which values are whose
+
+Every property in `values.schema.json` carries **`x-talu-owner`**:
+
+- **`consumer`** — the integrator/orchestrator writes it per tenant (`projectUuid`, `slug`,
+  `allowedUsers`, `vms`, `resourceQuota`, `securityGroups`, `dashboards.enabled`, `logging.agent`…).
+  This is the API surface with a compatibility promise.
+- **`operator`** — the site writes it **once**, in `environments/<site>/tenant-defaults.yaml`: image
+  catalog coordinates, component image pins, in-cluster endpoints, CA-trust delivery.
+
+The tenancy role renders that file into ConfigMap `<tenants-ns>/talu-tenant-defaults`, which every
+tenant `HelmRelease` merges *before* `spec.values`. A tenant that sets an operator-owned field still
+wins the merge — the split is a contract, not an enforcement. Rationale and the typed API this feeds:
+[`docs/architecture/adr-api-layer.md`](../../../docs/architecture/adr-api-layer.md) §4.
+
+```
+chart values.yaml  <  talu-tenant-defaults  <  pomerium-user-ca (targetPath)  <  spec.values
+```
+
 ## Render / apply
 
 ```sh
 # CA pubkey comes from the cluster (never duplicated in Git):
 CAPUB=$(kubectl -n pomerium get cm pomerium-user-ca -o jsonpath='{.data.user_ca\.pub}')
 helm template <slug> components/tenancy/tenant-chart \
+  -f environments/<site>/tenant-defaults.yaml \
   -f environments/<site>/tenants/<slug>.yaml --set sshUserCaPubKey="$CAPUB" | kubectl apply -f -
 ```
 
 ## Flux wiring (production)
 
-Mirror `components/infrastructure/cilium/` — one `HelmRelease` per tenant, `valuesFrom` the tenant
-values file, and `sshUserCaPubKey` injected from the `pomerium-user-ca` ConfigMap:
+Mirror `components/infrastructure/cilium/` — one `HelmRelease` per tenant, the site's operator
+defaults and `sshUserCaPubKey` both injected via `valuesFrom`, the tenant's own values last:
 
 ```yaml
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -72,10 +92,14 @@ spec:
     spec: { chart: ./components/tenancy/tenant-chart, sourceRef: { kind: GitRepository, name: talu } }
   valuesFrom:
     - kind: ConfigMap
+      name: talu-tenant-defaults        # the site's operator-owned half
+      valuesKey: values.yaml
+      optional: true
+    - kind: ConfigMap
       name: pomerium-user-ca            # maps user_ca.pub -> sshUserCaPubKey
       valuesKey: user_ca.pub
       targetPath: sshUserCaPubKey
-  values: { }                            # + the tenant's acme.yaml values
+  values: { }                            # + the tenant's acme.yaml values (consumer-owned only)
 ```
 
 ## Validated (rocky-sandbox)

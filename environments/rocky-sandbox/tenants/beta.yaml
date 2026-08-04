@@ -4,11 +4,14 @@
 projectUuid: "bbbbbbbb-2222-3333-4444-555555555555"
 slug: beta
 allowedUsers: [bob@talu.local]
-sshUserCaPubKey: ""            # injected at reconcile time from cm pomerium/pomerium-user-ca
 
 defaults:
   # Persistent root disk cloned from a golden-image DataSource: new VMs always get the latest patched
   # image (the DataImportCron rolls the DataSource), and the disk persists so bootc self-update sticks.
+  #
+  # source/dataSource/dataSourceNamespace are OPERATOR-owned (x-talu-owner) — normally set once in
+  # ../tenant-defaults.yaml. Overriding them here is deliberate: this tenant demonstrates the
+  # persistent path against a site whose default is ephemeral. A tenant file always wins the merge.
   source: dataSource
   dataSource: centos-bootc     # a Talu-built bootc image (or "ubuntu" for the upstream base)
   dataSourceNamespace: golden-images

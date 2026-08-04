@@ -1,0 +1,30 @@
+# Operator-owned talu-tenant values for the rocky-phys site — everything marked x-talu-owner:
+# "operator" in components/tenancy/tenant-chart/values.schema.json.
+#
+# The tenancy role renders this into ConfigMap tenants/talu-tenant-defaults, and every tenant
+# HelmRelease merges it via valuesFrom BEFORE spec.values — so a tenant file states only what is
+# genuinely tenant-specific, and a site-wide change (a new golden image, a component image pin) is
+# one edit here instead of one per tenant.
+#
+# Merge order (later wins):  chart values.yaml  <  THIS FILE  <  pomerium-user-ca (targetPath)  <  the tenant file
+#
+# NOT here: sshUserCaPubKey. The User CA is injected live from ConfigMap pomerium-user-ca so a CA
+# rotation takes effect without editing this file; putting it here would make it stale by design.
+
+# How VMs address their root image. Real KVM here, so ephemeral containerDisks are fine as the
+# baseline; a tenant that needs persistent, auto-patching bootc disks overrides source/dataSource.
+defaults:
+  source: containerDisk
+  image: quay.io/containerdisks/ubuntu:24.04
+
+# Component image pins + in-cluster endpoints are operator-owned; the chart defaults are correct for
+# this site, so they are listed here only as the documented override point.
+# dashboards:
+#   persesImage: docker.io/persesdev/perses:v0.53.0
+#   proxyImage: quay.io/prometheuscommunity/prom-label-proxy:v0.11.1
+#   prometheusUrl: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+# logging:
+#   lokiUrl: http://loki.logging.svc.cluster.local:3100
+#   gatewayImage: docker.io/grafana/alloy:v1.17.1
+# caTrust:
+#   package: false

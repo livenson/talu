@@ -1,17 +1,16 @@
 # Tenant "acme" — a values-PR reconciled by Flux via the talu-tenant chart.
 # Creating a tenant or adding a VM is an edit to a file like this; nothing structural changes.
+#
+# CONSUMER-OWNED FIELDS ONLY (x-talu-owner: consumer in the chart schema). The operator half — image
+# coordinates, the Pomerium User CA, component pins — lives once per site in ../tenant-defaults.yaml
+# and is merged ahead of this file. See docs/architecture/adr-api-layer.md §4.
 projectUuid: "aaaaaaaa-1111-2222-3333-444444444444"
 slug: acme
 allowedUsers: [alice@talu.local]
 
-# The Pomerium User CA public key the VMs trust. Leave empty in Git and inject at reconcile time
-# (HelmRelease valuesFrom ConfigMap pomerium/pomerium-user-ca) so it's never duplicated/stale.
-sshUserCaPubKey: ""
-
-# Simplest tenant: ephemeral containerDisk VMs (the chart default — no golden-image catalog needed).
+# Simplest tenant: it inherits the site's ephemeral containerDisk image and states only its own sizing.
 # For persistent, auto-patching, bootc-self-updating disks + per-tenant dashboards, see beta.yaml.
 defaults:
-  image: quay.io/containerdisks/ubuntu:24.04   # source defaults to containerDisk
   memory: 1536Mi
   principal: talu
 
