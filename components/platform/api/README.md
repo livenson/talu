@@ -26,6 +26,27 @@ That is the price of aggregation (ADR §5). Mandatory before a production site t
   Full cluster function returns immediately, and no tenant state is lost — the `HelmRelease`s are the
   real state and Flux keeps reconciling them.
 
+## Known gap before it can serve
+
+Probed on the lab by running the binary against the cluster with `--kubeconfig` (see below). It gets
+as far as `unable to get openapi models: OpenAPIV3 config must not be nil` — **apiserver 0.34 requires
+an OpenAPI v3 config**, which needs generated definitions (`openapi-gen` over our types plus the
+apimachinery meta packages). That is the next piece of work; until it lands the server starts, wires
+delegated auth, and then exits.
+
+`watch` is also not implemented yet — clients poll. Everything else (get/list/create/update/delete)
+is wired, and a Tenant only ever addresses HelmReleases carrying `talu.io/managed-by-api=true`, so a
+hand-written or Git-managed release with the same name is invisible to this API and cannot be deleted
+through it.
+
+Running it outside a pod, which is how the defects below were found:
+
+```sh
+talu-apiserver --kubeconfig=$KUBECONFIG \
+  --authentication-kubeconfig=$KUBECONFIG --authorization-kubeconfig=$KUBECONFIG \
+  --secure-port=8443 --cert-dir=/tmp/apicerts --audit-log-path=-
+```
+
 ## Image
 
 `apiserver/Containerfile` builds a static binary into `scratch`. The image must live in a registry the
