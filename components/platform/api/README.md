@@ -34,6 +34,11 @@ an OpenAPI v3 config**, which needs generated definitions (`openapi-gen` over ou
 apimachinery meta packages). That is the next piece of work; until it lands the server starts, wires
 delegated auth, and then exits.
 
+`watch` is also not implemented yet — clients poll. Everything else (get/list/create/update/delete)
+is wired, and a Tenant only ever addresses HelmReleases carrying `talu.io/managed-by-api=true`, so a
+hand-written or Git-managed release with the same name is invisible to this API and cannot be deleted
+through it.
+
 Running it outside a pod, which is how the defects below were found:
 
 ```sh

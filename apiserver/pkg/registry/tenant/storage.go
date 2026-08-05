@@ -30,6 +30,10 @@ var helmReleaseGVR = schema.GroupVersionResource{
 	Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases",
 }
 
+// managedByAPILabel marks the HelmReleases this API owns. Releases written by hand or reconciled
+// from Git deliberately do NOT carry it, and are invisible here.
+const managedByAPILabel = "talu.io/managed-by-api"
+
 // Options a site sets once; they decide which chart a Tenant renders.
 type Options struct {
 	ChartName      string // OCIRepository name, e.g. talu-tenant
@@ -50,6 +54,7 @@ var (
 	_ rest.Getter               = &REST{}
 	_ rest.Lister               = &REST{}
 	_ rest.Creater              = &REST{}
+	_ rest.Updater              = &REST{}
 	_ rest.GracefulDeleter      = &REST{}
 	_ rest.SingularNameProvider = &REST{}
 )
@@ -206,11 +211,13 @@ func fromHelmRelease(u *unstructured.Unstructured) (*v1alpha1.Tenant, error) {
 	return t, nil
 }
 
-func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
-	ns, err := namespaceFrom(ctx)
-	if err != nil {
-		return nil, err
-	}
+// getOwned fetches the backing HelmRelease and refuses anything this API did not create.
+//
+// Without it Get would expose — and Delete, which reads through Get, would DESTROY — a hand-written
+// or Git-managed HelmRelease that merely shares a name. List already filtered on the label, so the
+// two disagreed. NotFound rather than Forbidden is deliberate: to this API the object genuinely does
+// not exist, and saying otherwise leaks the existence of releases the caller cannot address.
+func (r *REST) getOwned(ctx context.Context, ns, name string) (*unstructured.Unstructured, error) {
 	u, err := r.client.Resource(helmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -218,14 +225,98 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 		}
 		return nil, err
 	}
+	if u.GetLabels()[managedByAPILabel] != "true" {
+		return nil, errors.NewNotFound(v1alpha1.Resource("tenants"), name)
+	}
+	return u, nil
+}
+
+func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
+	ns, err := namespaceFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+	u, err := r.getOwned(ctx, ns, name)
+	if err != nil {
+		return nil, err
+	}
 	return fromHelmRelease(u)
+}
+
+// Update rewrites the backing HelmRelease's values in place. Without it a Tenant could be created and
+// deleted but never modified, which is a strange shape for a declaratively-managed API: `kubectl
+// apply` over an existing Tenant would 405.
+func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo,
+	createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc,
+	forceAllowCreate bool, opts *metav1.UpdateOptions) (runtime.Object, bool, error) {
+
+	ns, err := namespaceFrom(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	// No create-on-update: forceAllowCreate is honoured by storage that can generate names, and
+	// silently creating a tenant from a PUT to a missing one is not a favour to anybody.
+	existing, err := r.getOwned(ctx, ns, name)
+	if err != nil {
+		return nil, false, err
+	}
+	oldT, err := fromHelmRelease(existing)
+	if err != nil {
+		return nil, false, err
+	}
+	newObj, err := objInfo.UpdatedObject(ctx, oldT)
+	if err != nil {
+		return nil, false, err
+	}
+	newT, ok := newObj.(*v1alpha1.Tenant)
+	if !ok {
+		return nil, false, errors.NewBadRequest("not a Tenant")
+	}
+	if updateValidation != nil {
+		if err := updateValidation(ctx, newT, oldT); err != nil {
+			return nil, false, err
+		}
+	}
+	if newT.Spec.ProjectUUID == "" {
+		return nil, false, errors.NewBadRequest("spec.projectUuid is required")
+	}
+	// The join key is stamped on every rendered object and is what an orchestrator reconciles on;
+	// letting it change under a live tenant would silently re-parent everything it owns.
+	if oldT.Spec.ProjectUUID != "" && newT.Spec.ProjectUUID != oldT.Spec.ProjectUUID {
+		return nil, false, errors.NewBadRequest("spec.projectUuid is immutable")
+	}
+
+	desired := r.toHelmRelease(newT, ns)
+	updated := existing.DeepCopy()
+	updated.Object["spec"] = desired.Object["spec"]
+	labels := updated.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	for k, v := range desired.GetLabels() {
+		labels[k] = v
+	}
+	updated.SetLabels(labels)
+	// An explicit resourceVersion from the client becomes the HelmRelease's, so optimistic
+	// concurrency is enforced by the apiserver we write through rather than reimplemented here.
+	if newT.ResourceVersion != "" {
+		updated.SetResourceVersion(newT.ResourceVersion)
+	}
+
+	out, err := r.client.Resource(helmReleaseGVR).Namespace(ns).
+		Update(ctx, updated, metav1.UpdateOptions{DryRun: opts.DryRun})
+	if err != nil {
+		return nil, false, err
+	}
+	t, err := fromHelmRelease(out)
+	return t, false, err
 }
 
 func (r *REST) List(ctx context.Context, _ *metainternalversion.ListOptions) (runtime.Object, error) {
 	ns, _ := genericapirequest.NamespaceFrom(ctx)
 	l, err := r.client.Resource(helmReleaseGVR).Namespace(ns).List(ctx, metav1.ListOptions{
 		// Only releases this API owns — a hand-written HelmRelease is not a Tenant.
-		LabelSelector: "talu.io/managed-by-api=true",
+		LabelSelector: managedByAPILabel + "=true",
 	})
 	if err != nil {
 		return nil, err
