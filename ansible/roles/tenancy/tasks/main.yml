@@ -119,24 +119,49 @@
   changed_when: true
 
 # Layout since the split: tenants/<slug>/tenant.yaml + tenants/<slug>/vms/<name>.yaml.
-- name: Discover tenant definitions for this environment
+#
+# Discovery is delegated to the CONTROL NODE on purpose. `find` is a module, so it runs on the target
+# by default and would return gateway paths — but the values are read with lookup('file'), which is
+# always control-node-side, so those paths cannot be opened. Both sides must agree; globbing the repo
+# source is the side that has the files. (`fileglob` is not an option: it globs only the FINAL path
+# component, so tenants/*/tenant.yaml collapses to tenants/*.) Only the rendered HelmRelease is
+# written to the gateway.
+- name: Discover tenant definitions
   ansible.builtin.find:
     paths: "{{ tenants_dir }}"
     patterns: "tenant.yaml"
     recurse: true
+  delegate_to: localhost
+  run_once: true
   register: tenant_files
 
-- name: Discover VM definitions for this environment
+- name: Discover VM definitions
   ansible.builtin.find:
     paths: "{{ tenants_dir }}"
     patterns: "*.yaml"
     recurse: true
+  delegate_to: localhost
+  run_once: true
   register: all_yaml
+
+# Rebuilt from scratch each run, NOT just created. The role applies the whole directory, so a
+# rendered HelmRelease left behind by a previous run would be re-applied for ever — deleting a tenant
+# (or a VM) from the repo would silently resurrect it on the next run.
+#
+# NOTE this makes the run converge on what the repo says should EXIST; it still does not delete the
+# HelmRelease of a tenant removed from the repo. Removing a tenant from Git does not yet remove it
+# from the cluster — that needs a prune step keyed on the talu.io/tenant label.
+- name: Reset the HelmRelease render directory
+  ansible.builtin.file:
+    path: "/tmp/talu-hr"
+    state: "{{ item }}"
+    mode: "0755"
+  loop: [absent, directory]
 
 - name: Render a HelmRelease per tenant
   ansible.builtin.template:
     src: tenant-helmrelease.yaml.j2
-    dest: "/tmp/talu-hr-{{ item.path | dirname | basename }}.yaml"
+    dest: "/tmp/talu-hr/{{ item.path | dirname | basename }}.yaml"
     mode: "0644"
   vars:
     tenant_name: "{{ item.path | dirname | basename }}"
@@ -146,7 +171,7 @@
 - name: Render a HelmRelease per VM
   ansible.builtin.template:
     src: vm-helmrelease.yaml.j2
-    dest: "/tmp/talu-hr-{{ item.path | dirname | dirname | basename }}-{{ item.path | basename | splitext | first }}.yaml"
+    dest: "/tmp/talu-hr/{{ item.path | dirname | dirname | basename }}-{{ item.path | basename | splitext | first }}.yaml"
     mode: "0644"
   vars:
     tenant_name: "{{ item.path | dirname | dirname | basename }}"
@@ -156,6 +181,6 @@
   loop: "{{ all_yaml.files | selectattr('path', 'search', '/vms/') | list }}"
 
 - name: Apply the tenant + VM HelmReleases (Flux renders each into the tenant namespace)
-  ansible.builtin.shell: "kubectl apply -f /tmp/talu-hr-*.yaml"
+  ansible.builtin.command: "kubectl apply -f /tmp/talu-hr/"
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
