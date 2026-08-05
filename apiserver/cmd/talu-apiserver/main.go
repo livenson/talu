@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	openapinamer "k8s.io/apiserver/pkg/endpoints/openapi"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	"k8s.io/apiserver/pkg/util/compatibility"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/component-base/cli"
 
+	generatedopenapi "github.com/livenson/talu/apiserver/pkg/generated/openapi"
 	tenantstore "github.com/livenson/talu/apiserver/pkg/registry/tenant"
 	taluserver "github.com/livenson/talu/apiserver/pkg/server"
 )
@@ -72,6 +74,16 @@ func (o *options) config() (*taluserver.Config, error) {
 	if err := o.Audit.ApplyTo(&c.Config); err != nil {
 		return nil, err
 	}
+	// Not optional: apiserver 0.34 fails with "OpenAPIV3 config must not be nil". The definitions are
+	// generated (hack/update-codegen.sh) because the spec must also describe every type ours refer
+	// to — metav1.ObjectMeta and friends — and a $ref with no definition makes the spec build fail.
+	namer := openapinamer.NewDefinitionNamer(taluserver.Scheme)
+	c.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(generatedopenapi.GetOpenAPIDefinitions, namer)
+	c.OpenAPIConfig.Info.Title = "talu-apiserver"
+	c.OpenAPIConfig.Info.Version = "0.1.0"
+	c.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(generatedopenapi.GetOpenAPIDefinitions, namer)
+	c.OpenAPIV3Config.Info.Title = "talu-apiserver"
+	c.OpenAPIV3Config.Info.Version = "0.1.0"
 	// In-cluster credentials: this server talks to kube-apiserver as its own ServiceAccount, and RBAC
 	// on that SA is what bounds it — it can only touch HelmReleases.
 	rc, err := clientConfig(o.Kubeconfig)

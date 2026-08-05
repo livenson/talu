@@ -26,26 +26,41 @@ That is the price of aggregation (ADR §5). Mandatory before a production site t
   Full cluster function returns immediately, and no tenant state is lost — the `HelmRelease`s are the
   real state and Flux keeps reconciling them.
 
-## Known gap before it can serve
+## Status — the API serves (validated 2026-08-05)
 
-Probed on the lab by running the binary against the cluster with `--kubeconfig` (see below). It gets
-as far as `unable to get openapi models: OpenAPIV3 config must not be nil` — **apiserver 0.34 requires
-an OpenAPI v3 config**, which needs generated definitions (`openapi-gen` over our types plus the
-apimachinery meta packages). That is the next piece of work; until it lands the server starts, wires
-delegated auth, and then exits.
+Validated by running the binary against the phys cluster with `--kubeconfig` (no in-cluster image
+needed, see below):
 
-`watch` is also not implemented yet — clients poll. Everything else (get/list/create/update/delete)
-is wired, and a Tenant only ever addresses HelmReleases carrying `talu.io/managed-by-api=true`, so a
-hand-written or Git-managed release with the same name is invisible to this API and cannot be deleted
-through it.
+- **discovery** — `GET /apis/tenancy.talu.io/v1alpha1` returns the `tenants` resource;
+- **RBAC is real** — an unauthenticated request gets `403 forbidden: User "system:anonymous"`,
+  i.e. delegated authz is doing the work, not a bypass;
+- **ownership holds** — `list` returns **0** items against a cluster with four hand-written
+  `HelmRelease`s, because they lack `talu.io/managed-by-api`. The typed API cannot see, mutate or
+  delete a Git-managed tenant;
+- **the full loop closes** — creating a `Tenant` produced a labelled `HelmRelease`, Flux rendered the
+  chart, and the `apitest` namespace appeared carrying `talu.io/project-uuid`. Reading it back showed
+  `phase: Ready` with members and quota round-tripped;
+- **delete** removed the release and the namespace (allow for Flux's finalizer — the object sits in
+  `Terminating` while helm uninstalls, so an immediate check looks like a no-op).
 
-Running it outside a pod, which is how the defects below were found:
+Not yet proven: **in-cluster aggregation** (the `APIService`, serving certs and cainjector path) —
+that still needs the image. `watch` is unimplemented (clients poll), and `VirtualMachine` /
+`ManagedCluster` are not served yet.
+
+Running it outside a pod, which is how all of the above was checked:
 
 ```sh
 talu-apiserver --kubeconfig=$KUBECONFIG \
   --authentication-kubeconfig=$KUBECONFIG --authorization-kubeconfig=$KUBECONFIG \
   --secure-port=8443 --cert-dir=/tmp/apicerts --audit-log-path=-
 ```
+
+## Regenerating the OpenAPI definitions
+
+`apiserver/pkg/generated/openapi/` is **generated and committed**. Re-run
+`apiserver/hack/update-codegen.sh` after any change to `pkg/apis/**/types.go`: apiserver 0.34 refuses
+to start without an OpenAPI v3 config, and it is built from that map, so a stale map is a **boot
+failure**, not a documentation problem.
 
 ## Image
 
