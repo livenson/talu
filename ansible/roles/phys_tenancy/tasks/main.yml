@@ -7,6 +7,8 @@
     mode: "0644"
   loop:
     - { src: "{{ ten_src }}", dest: "{{ ten_dir }}" }
+    # The tenant files themselves are read on the control node (see the discovery tasks below); this
+    # copy is operator reference on the gateway only — nothing in the role consumes it.
     - { src: "{{ tenants_src }}", dest: "{{ tenants_dir }}" }
 
 # The operator half of the tenant contract (x-talu-owner: operator) — one file per site, not per
@@ -130,11 +132,19 @@
   run_once: true
   register: all_yaml
 
-- name: Ensure the HelmRelease render directory exists
+# Rebuilt from scratch each run, NOT just created. The role applies the whole directory, so a
+# rendered HelmRelease left behind by a previous run would be re-applied for ever — deleting a tenant
+# (or a VM) from the repo would silently resurrect it on the next run.
+#
+# NOTE this makes the run converge on what the repo says should EXIST; it still does not delete the
+# HelmRelease of a tenant removed from the repo. Removing a tenant from Git does not yet remove it
+# from the cluster — that needs a prune step keyed on the talu.io/tenant label.
+- name: Reset the HelmRelease render directory
   ansible.builtin.file:
     path: "{{ talos_gen_dir }}/tenant-hr"
-    state: directory
+    state: "{{ item }}"
     mode: "0755"
+  loop: [absent, directory]
 
 - name: Render a HelmRelease per tenant
   ansible.builtin.template:
