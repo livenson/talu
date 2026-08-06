@@ -9,6 +9,7 @@ package tenant
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -45,7 +47,6 @@ type Options struct {
 type REST struct {
 	client dynamic.Interface
 	opts   Options
-	rest.TableConvertor
 }
 
 var (
@@ -57,14 +58,12 @@ var (
 	_ rest.Updater              = &REST{}
 	_ rest.GracefulDeleter      = &REST{}
 	_ rest.SingularNameProvider = &REST{}
+	_ rest.Watcher              = &REST{}
+	_ rest.TableConvertor       = &REST{}
 )
 
 func NewREST(c dynamic.Interface, o Options) *REST {
-	return &REST{
-		client:         c,
-		opts:           o,
-		TableConvertor: rest.NewDefaultTableConvertor(v1alpha1.Resource("tenants")),
-	}
+	return &REST{client: c, opts: o}
 }
 
 func (r *REST) New() runtime.Object     { return &v1alpha1.Tenant{} }
@@ -182,6 +181,14 @@ func fromHelmRelease(u *unstructured.Unstructured) (*v1alpha1.Tenant, error) {
 	// Running) rides on the chart's healthCheckExprs and lands here unchanged once wired.
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	t.Status.Phase = "Pending"
+	// A tenant being torn down is not "Degraded" — but that is exactly what the HelmRelease's Ready
+	// condition reports while helm uninstalls, so check the deletion timestamp first and report the
+	// phase the ADR specifies.
+	if ts := u.GetDeletionTimestamp(); ts != nil {
+		t.DeletionTimestamp = ts
+		t.Status.Phase = "Deleting"
+		return t, nil
+	}
 	for _, c := range conds {
 		cm, ok := c.(map[string]interface{})
 		if !ok {
@@ -381,8 +388,71 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	return existing, true, nil
 }
 
-// Watch is not implemented yet: clients poll. Wiring it means translating a HelmRelease watch stream
-// through fromHelmRelease, which is mechanical but wants its own tests.
-func (r *REST) Watch(ctx context.Context, _ *metainternalversion.ListOptions) (watch.Interface, error) {
-	return nil, errors.NewMethodNotSupported(v1alpha1.Resource("tenants"), "watch")
+// Watch streams the backing HelmReleases, converted on the fly.
+//
+// Not optional in practice: `kubectl delete` waits for the object to disappear via a watch, so
+// without this every delete spams "watch is not supported on resources of kind ..." even though it
+// succeeds. The filter drops anything that fails to convert rather than killing the stream.
+func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
+	ns, _ := genericapirequest.NamespaceFrom(ctx)
+	opts := metav1.ListOptions{
+		// Same ownership filter as List: a hand-written HelmRelease is not a Tenant and must not
+		// appear in a watch stream either.
+		LabelSelector:       managedByAPILabel + "=true",
+		AllowWatchBookmarks: options.AllowWatchBookmarks,
+	}
+	if options.ResourceVersion != "" {
+		opts.ResourceVersion = options.ResourceVersion
+	}
+	if options.TimeoutSeconds != nil {
+		opts.TimeoutSeconds = options.TimeoutSeconds
+	}
+	w, err := r.client.Resource(helmReleaseGVR).Namespace(ns).Watch(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return watch.Filter(w, func(e watch.Event) (watch.Event, bool) {
+		u, ok := e.Object.(*unstructured.Unstructured)
+		if !ok {
+			// Status/error events pass through untouched.
+			return e, true
+		}
+		t, err := fromHelmRelease(u)
+		if err != nil {
+			return e, false
+		}
+		e.Object = t
+		return e, true
+	}), nil
+}
+
+// ConvertToTable gives `kubectl get tenants` real columns. The default convertor prints only
+// NAME/CREATED AT, which tells an operator nothing about whether the tenant actually came up.
+func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.Object) (*metav1.Table, error) {
+	t := &metav1.Table{ColumnDefinitions: []metav1.TableColumnDefinition{
+		{Name: "Name", Type: "string", Format: "name", Description: "Tenant name (its namespace)."},
+		{Name: "Project", Type: "string", Description: "talu.io/project-uuid — the manager join key."},
+		{Name: "Phase", Type: "string", Description: "Rolled up from the backing HelmRelease."},
+		{Name: "Members", Type: "integer", Description: "Number of members with access."},
+		{Name: "Age", Type: "string"},
+	}}
+	row := func(x *v1alpha1.Tenant) metav1.TableRow {
+		return metav1.TableRow{
+			Cells: []interface{}{
+				x.Name, x.Spec.ProjectUUID, x.Status.Phase, len(x.Spec.Members),
+				duration.HumanDuration(time.Since(x.CreationTimestamp.Time)),
+			},
+			Object: runtime.RawExtension{Object: x},
+		}
+	}
+	switch v := obj.(type) {
+	case *v1alpha1.Tenant:
+		t.Rows = append(t.Rows, row(v))
+	case *v1alpha1.TenantList:
+		t.ResourceVersion = v.ResourceVersion
+		for i := range v.Items {
+			t.Rows = append(t.Rows, row(&v.Items[i]))
+		}
+	}
+	return t, nil
 }

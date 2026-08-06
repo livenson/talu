@@ -40,14 +40,26 @@ Deployed in-cluster on rocky-phys and driven with **plain `kubectl`**, through t
 - **ownership holds**: `kubectl get tenants -A` reports `No resources found` on a cluster running four
   hand-written tenants, which is the point — the typed API cannot see, mutate or delete them.
 
-### Two gaps this surfaced
+### Watch and printer columns (added 2026-08-06)
 
-**`watch` is not cosmetic.** `kubectl delete` waits for the object to disappear via a watch, so it
-spams `watch is not supported on resources of kind "tenants.tenancy.talu.io"` — the delete succeeds,
-but ordinary kubectl UX is visibly degraded. This is a bigger deal than "clients poll" implied.
+Both gaps the first in-cluster run surfaced are closed:
 
-**Printer columns are the defaults** (`NAME`, `CREATED AT`), not the `PROJECT/VMS/PHASE/AGE` the ADR
-specifies — the storage uses `rest.NewDefaultTableConvertor`; custom columns need `ConvertToTable`.
+```
+$ kubectl get tenants -n tenants
+NAME    PROJECT                                PHASE   MEMBERS   AGE
+wtest   eeeeeeee-1111-2222-3333-444444444444   Ready   2         25s
+```
+
+`kubectl get tenants --watch` streams the real lifecycle — **`Pending → Provisioning → Ready →
+Deleting`** — and `kubectl delete` no longer spams `watch is not supported`.
+
+Two notes on the projection:
+
+- A tenant being torn down reports **`Deleting`**, not `Degraded`. The backing HelmRelease's `Ready`
+  condition goes `False` while helm uninstalls, so the deletion timestamp is checked first.
+- **The stream is chatty**: every HelmRelease status write becomes an event, and Flux writes status
+  often, so a client sees many more events than semantic changes. Correctness is unaffected (each
+  event carries the current projection); de-duplicating would need a per-connection cache.
 
 `VirtualMachine` and `ManagedCluster` are still not served.
 
