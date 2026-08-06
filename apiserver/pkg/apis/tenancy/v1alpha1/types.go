@@ -1,7 +1,3 @@
-// Package v1alpha1 defines the Talu tenant API served by the aggregated apiserver.
-//
-// These types are a VIEW over the Flux HelmRelease that renders the tenant — there is no second copy
-// of the truth in etcd. See docs/architecture/adr-api-layer.md §2.
 package v1alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

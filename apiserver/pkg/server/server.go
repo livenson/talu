@@ -10,6 +10,7 @@ package server
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -31,6 +32,11 @@ func init() {
 	Scheme.AddUnversionedTypes(metav1.Unversioned,
 		&metav1.Status{}, &metav1.APIVersions{}, &metav1.APIGroupList{},
 		&metav1.APIGroup{}, &metav1.APIResourceList{})
+	// Registers ListOptions/GetOptions/DeleteOptions under the meta "v1" group version. Without it
+	// the endpoint installer fails with: no kind "ListOptions" is registered for version "v1" —
+	// v1alpha1.AddToScheme registers the meta types under OUR group version, which is not the one
+	// the parameter codec decodes list/watch query parameters against.
+	metav1.AddToGroupVersion(Scheme, schema.GroupVersion{Version: "v1"})
 	utilruntime.Must(Scheme.SetVersionPriority(v1alpha1.SchemeGroupVersion))
 }
 
