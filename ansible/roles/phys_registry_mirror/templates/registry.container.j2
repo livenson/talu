@@ -1,7 +1,13 @@
 # ANSIBLE MANAGED — talu roles/phys_registry_mirror. Podman Quadlet.
-# Pull-through cache for {{ item.remote }} → served on :{{ item.port }}.
+{% if item.remote %}# Pull-through cache for {{ item.remote }} → served on :{{ item.port }}.
+{% else %}# LOCAL pushable registry (no upstream) → served on :{{ item.port }}.
+{% endif %}
 [Unit]
+{% if item.remote %}
 Description=Talu pull-through registry cache ({{ item.name }} → {{ item.remote }})
+{% else %}
+Description=Talu local pushable registry ({{ item.name }})
+{% endif %}
 After=network-online.target
 Wants=network-online.target
 
@@ -10,7 +16,9 @@ ContainerName=registry-{{ item.name }}
 Image={{ mirror_registry_image }}
 PublishPort={{ mirror_bind_ip }}:{{ item.port }}:5000
 Volume={{ mirror_data_root }}/{{ item.name }}:/var/lib/registry:Z
+{% if item.remote %}
 Environment=REGISTRY_PROXY_REMOTEURL={{ item.remote }}
+{% endif %}
 Environment=REGISTRY_STORAGE_DELETE_ENABLED=true
 Environment=REGISTRY_HTTP_ADDR=0.0.0.0:5000
 # Keep the cache from growing without bound: registry:2 has no TTL GC, so rely on disk headroom

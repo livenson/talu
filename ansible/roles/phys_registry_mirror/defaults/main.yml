@@ -27,6 +27,10 @@ mirror_upstreams:
   - { name: gcr,          port: 5004, remote: "https://gcr.io" }
   - { name: k8sgcr,       port: 5005, remote: "https://k8s.gcr.io" }
   - { name: talosfactory, port: 5006, remote: "https://factory.talos.dev" }
+  # A LOCAL, PUSHABLE registry — NOT a pull-through cache. Talu builds one image of its own
+  # (talu-apiserver) and the seven proxies above reject pushes with a bare 500, so it needs somewhere
+  # the Talos nodes can pull from. Empty `remote` selects plain (non-proxy) mode in the quadlet.
+  - { name: talu, port: 5010, remote: "" }
 
 # How the Talos registry host maps onto a cache port (for the generated machineconfig patch).
 mirror_talos_map:
@@ -37,3 +41,6 @@ mirror_talos_map:
   gcr.io: 5004
   k8s.gcr.io: 5005
   factory.talos.dev: 5006
+  # Not a real upstream: a private name the nodes resolve only through this mirror entry, so a
+  # Talu-built image is referenced as talu.registry/<image>:<tag>.
+  talu.registry: 5010
