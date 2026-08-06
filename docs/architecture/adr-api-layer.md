@@ -396,7 +396,7 @@ work and they survive any choice of serving code.
 |---|---|---|
 | **0** ✅ **done, validated on rocky-phys 2026-08-04** | Land §4's split: `x-talu-owner` on every property of both schemas; `environments/<site>/tenant-defaults.yaml` → ConfigMap `talu-tenant-defaults`, merged by every tenant HelmRelease; tenant files reduced to consumer-owned fields. Operator fields stay *accepted* — nothing is removed. | no |
 | **0b** ✅ **done, validated on rocky-phys 2026-08-04** | Split `talu-tenant` into `talu-tenant` + `talu-vm` (§10.1); `securityGroups` now selects on a `talu.io/sg.<name>` label the VM declares; added the `VirtualMachineClusterInstancetype` catalog in [`../../components/tenancy/sizes/`](../../components/tenancy/sizes/) behind `size:` (§10.2). Layout is now `tenants/<slug>/{tenant.yaml,vms/<name>.yaml}`, and the site defaults split into `tenant-defaults.yaml` + `vm-defaults.yaml` (both schemas are `additionalProperties:false`, so one shared ConfigMap is impossible). **Deferred:** moving `allowedUsers` off the ssh `Service` annotation — it needs a `route-sync` change, which owns the live Pomerium routes (lab-notes #40), so it is kept as its own risk-isolated step. | migration is mechanical, and no-downtime — see below |
-| **1** | Ship `talu-apiserver` behind a site flag, **off by default**. Both paths write the same `HelmRelease`s; the typed API is additive. | no |
+| **1** ✅ **done, validated on rocky-phys 2026-08-06** | `talu-apiserver` ships in [`../../components/platform/api/`](../../components/platform/api/), **off by default** (referenced by no overlay). Serves `Tenant` through the aggregation layer: `kubectl apply/get/patch/delete/explain` and `--watch` all work, with printer columns. Both paths write the same `HelmRelease`s, so the typed API is purely additive. | no |
 | **2** | Point `docs/integrations/` at the typed API as *the* contract; demote `HelmRelease` to "documented escape hatch, no compatibility promise". Ship the alert + break-glass runbook. | no |
 | **3** | Graduate `v1alpha1` → `v1beta1` once a real consumer (Waldur or the reference portal) has driven it end-to-end, with a conversion path. | versioned, so no |
 
@@ -576,3 +576,9 @@ auditability grounds — any `status.usage` is convenience only.
    Talu's own substrate (CAPI drives KaaS), so that choice stands on its own.
 4. **`v1alpha1` sequencing vs the physical lab.** The KaaS path is validated on `rocky-phys`; the
    typed `ManagedCluster` should be exercised there before it is documented as the contract.
+   Still open — `ManagedCluster` and `VirtualMachine` are **not served yet**; only `Tenant` is.
+5. **Watch is chatty.** Every HelmRelease status write becomes a watch event, and Flux writes status
+   often — a client sees many more events than semantic changes to its `Tenant`. Harmless for
+   correctness (each event carries the current projection) but wasteful for a busy orchestrator.
+   Suppressing events whose projected object is unchanged needs a per-connection cache; worth doing
+   only if a real consumer complains.
