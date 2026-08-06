@@ -3,7 +3,7 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // Tenant is the namespace half of a Talu tenant: quota, members, network baseline, dashboards.
-// Each VM is a separate VirtualMachine object (ADR §10.1).
+// Each VM is a separate TenantVM object (ADR §10.1).
 type Tenant struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -38,13 +38,13 @@ type TenantList struct {
 	Items           []Tenant `json:"items"`
 }
 
-// VirtualMachine is one tenant VM. It is its OWN object rather than a field of Tenant so that
+// TenantVM is one tenant VM. It is its OWN object rather than a field of Tenant so that
 // "may add a VM" is grantable without granting "may change the quota or the member list" — see
 // docs/architecture/adr-api-layer.md §10.1.
 //
 // It lives in the TENANT's namespace, while its backing HelmRelease lives in the management
 // namespace alongside the Tenant's; the storage layer maps between them.
-type VirtualMachine struct {
+type TenantVM struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
@@ -76,7 +76,7 @@ type VirtualMachineStatus struct {
 type VirtualMachineList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []VirtualMachine `json:"items"`
+	Items           []TenantVM `json:"items"`
 }
 
 // ManagedCluster is a tenant's own Kubernetes cluster on the same substrate (KaaS).

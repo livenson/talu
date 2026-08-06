@@ -23,7 +23,7 @@ func Resource(resource string) schema.GroupResource {
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&Tenant{}, &TenantList{},
-		&VirtualMachine{}, &VirtualMachineList{},
+		&TenantVM{}, &VirtualMachineList{},
 		&ManagedCluster{}, &ManagedClusterList{})
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

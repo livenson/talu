@@ -102,7 +102,7 @@ func (in *VirtualMachineStatus) DeepCopyInto(out *VirtualMachineStatus) {
 	}
 }
 
-func (in *VirtualMachine) DeepCopyInto(out *VirtualMachine) {
+func (in *TenantVM) DeepCopyInto(out *TenantVM) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
@@ -110,16 +110,16 @@ func (in *VirtualMachine) DeepCopyInto(out *VirtualMachine) {
 	in.Status.DeepCopyInto(&out.Status)
 }
 
-func (in *VirtualMachine) DeepCopy() *VirtualMachine {
+func (in *TenantVM) DeepCopy() *TenantVM {
 	if in == nil {
 		return nil
 	}
-	out := new(VirtualMachine)
+	out := new(TenantVM)
 	in.DeepCopyInto(out)
 	return out
 }
 
-func (in *VirtualMachine) DeepCopyObject() runtime.Object {
+func (in *TenantVM) DeepCopyObject() runtime.Object {
 	if c := in.DeepCopy(); c != nil {
 		return c
 	}
@@ -131,7 +131,7 @@ func (in *VirtualMachineList) DeepCopyInto(out *VirtualMachineList) {
 	out.TypeMeta = in.TypeMeta
 	in.ListMeta.DeepCopyInto(&out.ListMeta)
 	if in.Items != nil {
-		out.Items = make([]VirtualMachine, len(in.Items))
+		out.Items = make([]TenantVM, len(in.Items))
 		for i := range in.Items {
 			in.Items[i].DeepCopyInto(&out.Items[i])
 		}

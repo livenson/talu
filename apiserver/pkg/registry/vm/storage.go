@@ -1,6 +1,11 @@
-// Package vm serves VirtualMachine as a projection over the talu-vm HelmRelease.
+// Package vm serves TenantVM as a projection over the talu-vm HelmRelease.
 //
-// Namespace mapping is the wrinkle: a VirtualMachine lives in the TENANT's namespace (so a tenant
+// The kind is TenantVM, NOT VirtualMachine: kubevirt.io/VirtualMachine already registers the plural
+// "virtualmachines" AND the short names vm/vms on this very substrate, so a Talu kind by either name
+// would be shadowed by the thing it is built on — `kubectl get vms` would silently return KubeVirt's
+// objects. Same reasoning that made the KaaS kind ManagedCluster rather than Cluster.
+//
+// Namespace mapping is the wrinkle: a TenantVM lives in the TENANT's namespace (so a tenant
 // admin's RBAC scopes naturally), while its backing HelmRelease lives in the management namespace
 // next to the Tenant's, named "<tenant>-<vm>" — the same name the tenancy role generates, so the
 // typed API and the Git path produce identical objects.
@@ -52,15 +57,19 @@ var (
 	_ rest.Watcher              = &REST{}
 	_ rest.TableConvertor       = &REST{}
 	_ rest.SingularNameProvider = &REST{}
+	_ rest.ShortNamesProvider   = &REST{}
 )
 
 func NewREST(c dynamic.Interface, o Options) *REST { return &REST{client: c, opts: o} }
 
-func (r *REST) New() runtime.Object     { return &v1alpha1.VirtualMachine{} }
+func (r *REST) New() runtime.Object     { return &v1alpha1.TenantVM{} }
 func (r *REST) NewList() runtime.Object { return &v1alpha1.VirtualMachineList{} }
 func (r *REST) NamespaceScoped() bool   { return true }
-func (r *REST) GetSingularName() string { return "virtualmachine" }
-func (r *REST) Destroy()                {}
+func (r *REST) GetSingularName() string { return "tenantvm" }
+
+// ShortNames gives `kubectl get tvm`. Deliberately NOT vm/vms — KubeVirt owns those.
+func (r *REST) ShortNames() []string { return []string{"tvm"} }
+func (r *REST) Destroy()             {}
 
 // releaseName is how a tenant namespace + VM name become one HelmRelease name.
 func releaseName(tenant, name string) string { return tenant + "-" + name }
@@ -73,7 +82,7 @@ func tenantFrom(ctx context.Context) (string, error) {
 	return ns, nil
 }
 
-func (r *REST) toRelease(v *v1alpha1.VirtualMachine, tenant string) *unstructured.Unstructured {
+func (r *REST) toRelease(v *v1alpha1.TenantVM, tenant string) *unstructured.Unstructured {
 	values := map[string]interface{}{
 		"slug": tenant,
 		"name": v.Name,
@@ -120,14 +129,14 @@ func (r *REST) toRelease(v *v1alpha1.VirtualMachine, tenant string) *unstructure
 		})
 }
 
-func fromRelease(u *unstructured.Unstructured) (*v1alpha1.VirtualMachine, error) {
+func fromRelease(u *unstructured.Unstructured) (*v1alpha1.TenantVM, error) {
 	values, _, _ := unstructured.NestedMap(u.Object, "spec", "values")
 	name, _ := values["name"].(string)
 	tenant, _ := values["slug"].(string)
 	if name == "" || tenant == "" {
 		return nil, fmt.Errorf("release %s/%s is not a Talu VM", u.GetNamespace(), u.GetName())
 	}
-	v := &v1alpha1.VirtualMachine{}
+	v := &v1alpha1.TenantVM{}
 	v.Name = name
 	v.Namespace = tenant
 	v.UID = u.GetUID()
@@ -166,7 +175,7 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 		return nil, err
 	}
 	u, err := hr.GetOwned(ctx, r.client, r.opts.ReleaseNamespace, releaseName(tenant, name),
-		v1alpha1.Resource("virtualmachines"))
+		v1alpha1.Resource("tenantvms"))
 	if err != nil {
 		return nil, err
 	}
@@ -205,9 +214,9 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	if err != nil {
 		return nil, err
 	}
-	v, ok := obj.(*v1alpha1.VirtualMachine)
+	v, ok := obj.(*v1alpha1.TenantVM)
 	if !ok {
-		return nil, errors.NewBadRequest("not a VirtualMachine")
+		return nil, errors.NewBadRequest("not a TenantVM")
 	}
 	if createValidation != nil {
 		if err := createValidation(ctx, obj); err != nil {
@@ -241,7 +250,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		Create(ctx, r.toRelease(v, tenant), metav1.CreateOptions{DryRun: opts.DryRun})
 	if err != nil {
 		if errors.IsAlreadyExists(err) {
-			return nil, errors.NewAlreadyExists(v1alpha1.Resource("virtualmachines"), v.Name)
+			return nil, errors.NewAlreadyExists(v1alpha1.Resource("tenantvms"), v.Name)
 		}
 		return nil, err
 	}
@@ -257,7 +266,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, err
 	}
 	existing, err := hr.GetOwned(ctx, r.client, r.opts.ReleaseNamespace, releaseName(tenant, name),
-		v1alpha1.Resource("virtualmachines"))
+		v1alpha1.Resource("tenantvms"))
 	if err != nil {
 		return nil, false, err
 	}
@@ -269,9 +278,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if err != nil {
 		return nil, false, err
 	}
-	v, ok := newObj.(*v1alpha1.VirtualMachine)
+	v, ok := newObj.(*v1alpha1.TenantVM)
 	if !ok {
-		return nil, false, errors.NewBadRequest("not a VirtualMachine")
+		return nil, false, errors.NewBadRequest("not a TenantVM")
 	}
 	if updateValidation != nil {
 		if err := updateValidation(ctx, v, old); err != nil {
@@ -367,7 +376,7 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 		{Name: "Phase", Type: "string"},
 		{Name: "Age", Type: "string"},
 	}}
-	row := func(x *v1alpha1.VirtualMachine) metav1.TableRow {
+	row := func(x *v1alpha1.TenantVM) metav1.TableRow {
 		return metav1.TableRow{
 			Cells: []interface{}{x.Name, x.Spec.Size, x.Spec.Principal, x.Status.Phase,
 				duration.HumanDuration(time.Since(x.CreationTimestamp.Time))},
@@ -375,7 +384,7 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 		}
 	}
 	switch v := obj.(type) {
-	case *v1alpha1.VirtualMachine:
+	case *v1alpha1.TenantVM:
 		t.Rows = append(t.Rows, row(v))
 	case *v1alpha1.VirtualMachineList:
 		t.ResourceVersion = v.ResourceVersion

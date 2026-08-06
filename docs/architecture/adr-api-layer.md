@@ -4,7 +4,7 @@
 [the integration contract](flows.md#the-integration-contract).
 
 **Decision in one line:** expose Talu's tenant surface as **typed Kubernetes kinds
-(`tenancy.talu.io/v1alpha1` — `Tenant`, `VirtualMachine`, `ManagedCluster`) served by an aggregated
+(`tenancy.talu.io/v1alpha1` — `Tenant`, `TenantVM`, `ManagedCluster`) served by an aggregated
 API server that projects onto Flux `HelmRelease`s**, keeping the charts as the private implementation.
 
 ---
@@ -66,7 +66,7 @@ closes the gap it identified.
 ## 2 · Decision
 
 Introduce **`tenancy.talu.io/v1alpha1`** with three namespaced kinds — **`Tenant`**,
-**`VirtualMachine`** and **`ManagedCluster`** — served by an **aggregated API server** (`APIService` +
+**`TenantVM`** and **`ManagedCluster`** — served by an **aggregated API server** (`APIService` +
 `k8s.io/apiserver`-based binary) whose **backing storage is the `HelmRelease` it renders**. The
 charts stay exactly as they are and become **private implementation**.
 
@@ -79,7 +79,7 @@ graph LR
     FLUX["Flux helm-controller"]
     TNS["Tenant namespace<br/>VMs · quota · RBAC · CNPs"]
 
-    ORCH -->|"kubectl / client-go<br/>Tenant, VirtualMachine, ManagedCluster"| KAS
+    ORCH -->|"kubectl / client-go<br/>Tenant, TenantVM, ManagedCluster"| KAS
     KAS -->|APIService| TAPI
     TAPI <-->|"read/write<br/>(the only copy)"| HR
     HR --> FLUX --> TNS
@@ -154,13 +154,19 @@ status:
 
 Printer columns: `PROJECT` · `VMS` (running/total) · `PHASE` · `AGE`.
 
-### `VirtualMachine`
+### `TenantVM`
 
 One object per VM (§10.1), so "may add a VM" is grantable without granting "may change the quota".
 
+**Named `TenantVM`, not `VirtualMachine`** — `kubevirt.io/VirtualMachine` already registers the
+plural `virtualmachines` *and* the short names `vm`/`vms` on this very substrate, so a Talu kind by
+either name is shadowed by the thing it is built on: `kubectl get vms` silently returns KubeVirt's
+objects. This is the same reasoning that made the KaaS kind `ManagedCluster` rather than `Cluster`,
+applied to a neighbour that is not hypothetical. Short name: `tvm`.
+
 ```yaml
 apiVersion: tenancy.talu.io/v1alpha1
-kind: VirtualMachine
+kind: TenantVM
 metadata:
   name: app1
   namespace: acme               # the tenant's namespace
@@ -491,7 +497,7 @@ auditability grounds — any `status.usage` is convenience only.
 
 ## 10 · Open questions
 
-1. ~~**Fat `Tenant` vs `Tenant` + child `VirtualMachine`.**~~ **Settled (2026-08-04): split.**
+1. ~~**Fat `Tenant` vs `Tenant` + child VM object.**~~ **Settled (2026-08-04): split.**
    `Tenant` owns the namespace, quota, members, network baseline and security groups; each VM is its
    own namespaced **`VirtualMachine`** with an ownerReference to its `Tenant`, so deleting the Tenant
    still GCs everything.

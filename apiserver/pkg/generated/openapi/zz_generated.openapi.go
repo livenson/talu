@@ -22,7 +22,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantList":            schema_pkg_apis_tenancy_v1alpha1_TenantList(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantSpec":            schema_pkg_apis_tenancy_v1alpha1_TenantSpec(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantStatus":          schema_pkg_apis_tenancy_v1alpha1_TenantStatus(ref),
-		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachine":        schema_pkg_apis_tenancy_v1alpha1_VirtualMachine(ref),
+		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVM":              schema_pkg_apis_tenancy_v1alpha1_TenantVM(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachineList":    schema_pkg_apis_tenancy_v1alpha1_VirtualMachineList(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachineSpec":    schema_pkg_apis_tenancy_v1alpha1_VirtualMachineSpec(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachineStatus":  schema_pkg_apis_tenancy_v1alpha1_VirtualMachineStatus(ref),
@@ -320,7 +320,7 @@ func schema_pkg_apis_tenancy_v1alpha1_Tenant(ref common.ReferenceCallback) commo
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "Tenant is the namespace half of a Talu tenant: quota, members, network baseline, dashboards. Each VM is a separate VirtualMachine object (ADR §10.1).",
+				Description: "Tenant is the namespace half of a Talu tenant: quota, members, network baseline, dashboards. Each VM is a separate TenantVM object (ADR §10.1).",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -512,11 +512,11 @@ func schema_pkg_apis_tenancy_v1alpha1_TenantStatus(ref common.ReferenceCallback)
 	}
 }
 
-func schema_pkg_apis_tenancy_v1alpha1_VirtualMachine(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_pkg_apis_tenancy_v1alpha1_TenantVM(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "VirtualMachine is one tenant VM. It is its OWN object rather than a field of Tenant so that \"may add a VM\" is grantable without granting \"may change the quota or the member list\" — see docs/architecture/adr-api-layer.md §10.1.\n\nIt lives in the TENANT's namespace, while its backing HelmRelease lives in the management namespace alongside the Tenant's; the storage layer maps between them.",
+				Description: "TenantVM is one tenant VM. It is its OWN object rather than a field of Tenant so that \"may add a VM\" is grantable without granting \"may change the quota or the member list\" — see docs/architecture/adr-api-layer.md §10.1.\n\nIt lives in the TENANT's namespace, while its backing HelmRelease lives in the management namespace alongside the Tenant's; the storage layer maps between them.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -592,7 +592,7 @@ func schema_pkg_apis_tenancy_v1alpha1_VirtualMachineList(ref common.ReferenceCal
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachine"),
+										Ref:     ref("github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVM"),
 									},
 								},
 							},
@@ -603,7 +603,7 @@ func schema_pkg_apis_tenancy_v1alpha1_VirtualMachineList(ref common.ReferenceCal
 			},
 		},
 		Dependencies: []string{
-			"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachine", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+			"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVM", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
 	}
 }
 

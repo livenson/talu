@@ -63,18 +63,23 @@ Two notes on the projection:
 
 ### All three kinds are served (2026-08-06)
 
-`Tenant`, `VirtualMachine` and `ManagedCluster`. A `VirtualMachine` lives in the **tenant's**
+`Tenant`, `TenantVM` and `ManagedCluster`. A `TenantVM` lives in the **tenant's**
 namespace while its backing release sits in the management namespace as `<tenant>-<vm>` — the same
 name the tenancy role generates, so the typed API and the Git path produce identical objects. It
 inherits `projectUuid` and the member list from its Tenant and is refused outright in a namespace no
 Tenant owns.
 
-⚠ **`VirtualMachine` collides with `kubevirt.io/VirtualMachine`.** Both register the plural
-`virtualmachines`, and KubeVirt's wins the short name, so `kubectl get virtualmachines` returns
-**KubeVirt's** VMs. Ours needs the fully-qualified `kubectl get virtualmachines.tenancy.talu.io`.
-This is the same trap the ADR avoided by naming the KaaS kind `ManagedCluster` rather than `Cluster`
-— and KubeVirt is not a hypothetical neighbour, it is the substrate. **The kind name needs a
-decision before `v1beta1`**; renaming after that is not a compatible change.
+**Why `TenantVM` and not `VirtualMachine`:** `kubevirt.io/VirtualMachine` already registers the
+plural `virtualmachines` **and** the short names `vm`/`vms` on this very substrate, so a Talu kind by
+either name is shadowed by the thing it is built on — `kubectl get vms` silently returns *KubeVirt's*
+objects. `VM` would have been worse than `VirtualMachine`, not better: `vms` is the shortcut kubectl
+expands before it ever consults our resource. Same reasoning that made the KaaS kind `ManagedCluster`
+rather than `Cluster`. Short name: `tvm`.
+
+One operational note: a kind rename is **not instant for clients**. Our server serves the new name
+immediately, but kube-apiserver caches each `APIService`'s discovery document, so `kubectl` kept
+reporting `no matches for kind "TenantVM"` for a short while (it refreshed in ~10s here). Expect the
+same lag for any future kind change.
 
 **`ManagedCluster` is implemented but NOT exercised on the lab**: the `talu-cluster` chart is not
 published to the in-cluster registry, and the phys KaaS path renders CAPI objects from the

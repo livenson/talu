@@ -65,7 +65,7 @@ func (c Config) New() (*TaluServer, error) {
 
 	info.VersionedResourcesStorageMap["v1alpha1"] = map[string]rest.Storage{
 		"tenants":         tenantstore.NewREST(c.Dynamic, c.Tenant),
-		"virtualmachines": vmstore.NewREST(c.Dynamic, c.VM),
+		"tenantvms":       vmstore.NewREST(c.Dynamic, c.VM),
 		"managedclusters": clusterstore.NewREST(c.Dynamic, c.Cluster),
 	}
 
