@@ -97,8 +97,12 @@ spec:
           labelSelector: { matchLabels: { app: talu-apiserver } }
       containers:
         - name: apiserver
-          # REPLACE with a registry the NODES can pull from (see README).
-          image: ghcr.io/livenson/talu-apiserver:0.1.0
+          # talu.registry is not a real upstream — it is a private name the Talos nodes resolve
+          # ONLY through a machine.registries mirror entry pointing at the local pushable registry
+          # (phys_registry_mirror, :5010). The seven other mirrors are pull-through caches and reject
+          # pushes, so a Talu-built image needs this one. A site with its own registry just sets the
+          # image here instead.
+          image: talu.registry/talu-apiserver:0.1.0
           args:
             - --secure-port=6443
             - --tls-cert-file=/certs/tls.crt

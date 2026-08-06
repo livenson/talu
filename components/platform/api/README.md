@@ -26,34 +26,30 @@ That is the price of aggregation (ADR §5). Mandatory before a production site t
   Full cluster function returns immediately, and no tenant state is lost — the `HelmRelease`s are the
   real state and Flux keeps reconciling them.
 
-## Status — the API serves (validated 2026-08-05)
+## Status — served through aggregation, validated 2026-08-06
 
-Validated by running the binary against the phys cluster with `--kubeconfig` (no in-cluster image
-needed, see below):
+Deployed in-cluster on rocky-phys and driven with **plain `kubectl`**, through the aggregation layer:
 
-- **discovery** — `GET /apis/tenancy.talu.io/v1alpha1` returns the `tenants` resource;
-- **RBAC is real** — an unauthenticated request gets `403 forbidden: User "system:anonymous"`,
-  i.e. delegated authz is doing the work, not a bypass;
-- **ownership holds** — `list` returns **0** items against a cluster with four hand-written
-  `HelmRelease`s, because they lack `talu.io/managed-by-api`. The typed API cannot see, mutate or
-  delete a Git-managed tenant;
-- **the full loop closes** — creating a `Tenant` produced a labelled `HelmRelease`, Flux rendered the
-  chart, and the `apitest` namespace appeared carrying `talu.io/project-uuid`. Reading it back showed
-  `phase: Ready` with members and quota round-tripped;
-- **delete** removed the release and the namespace (allow for Flux's finalizer — the object sits in
-  `Terminating` while helm uninstalls, so an immediate check looks like a no-op).
+- `APIService v1alpha1.tenancy.talu.io` → **Available=True**, cainjector filled the `caBundle`;
+- `kubectl api-resources --api-group=tenancy.talu.io` lists `Tenant`, and **`kubectl explain
+  tenant.spec` works** — the generated OpenAPI paying off;
+- `kubectl apply -f tenant.yaml` → backing `HelmRelease` Ready → the tenant namespace rendered with
+  `talu.io/project-uuid`;
+- `kubectl patch tenant` propagated into the HelmRelease's values (the Update verb);
+- `kubectl delete tenant` removed the release and the namespace;
+- **ownership holds**: `kubectl get tenants -A` reports `No resources found` on a cluster running four
+  hand-written tenants, which is the point — the typed API cannot see, mutate or delete them.
 
-Not yet proven: **in-cluster aggregation** (the `APIService`, serving certs and cainjector path) —
-that still needs the image. `watch` is unimplemented (clients poll), and `VirtualMachine` /
-`ManagedCluster` are not served yet.
+### Two gaps this surfaced
 
-Running it outside a pod, which is how all of the above was checked:
+**`watch` is not cosmetic.** `kubectl delete` waits for the object to disappear via a watch, so it
+spams `watch is not supported on resources of kind "tenants.tenancy.talu.io"` — the delete succeeds,
+but ordinary kubectl UX is visibly degraded. This is a bigger deal than "clients poll" implied.
 
-```sh
-talu-apiserver --kubeconfig=$KUBECONFIG \
-  --authentication-kubeconfig=$KUBECONFIG --authorization-kubeconfig=$KUBECONFIG \
-  --secure-port=8443 --cert-dir=/tmp/apicerts --audit-log-path=-
-```
+**Printer columns are the defaults** (`NAME`, `CREATED AT`), not the `PROJECT/VMS/PHASE/AGE` the ADR
+specifies — the storage uses `rest.NewDefaultTableConvertor`; custom columns need `ConvertToTable`.
+
+`VirtualMachine` and `ManagedCluster` are still not served.
 
 ## Regenerating the OpenAPI definitions
 
@@ -65,6 +61,13 @@ failure**, not a documentation problem.
 ## Image
 
 `apiserver/Containerfile` builds a static binary into `scratch`. The image must live in a registry the
-**nodes** can pull from; the lab's per-upstream mirrors are pull-through caches and cannot be pushed
-to, so a site needs either a pushable registry trusted by Talos (`machine.registries`) or a public one.
-Set it in `deployment.yaml` (`image:`).
+**nodes** can pull from, and the seven per-upstream mirrors are pull-through caches that reject
+pushes with a bare `500`.
+
+The lab solves this with a **local pushable registry** (`phys_registry_mirror`, port 5010) plus one
+extra `machine.registries.mirrors` entry mapping the private name `talu.registry` to it — so the
+image is referenced as `talu.registry/talu-apiserver:0.1.0`. That Talos change applies **without a
+reboot** (`--mode=no-reboot`), which matters on a lab with no console or BMC; all four nodes stayed
+`Ready` through it.
+
+A site with its own registry just sets `image:` in `deployment.yaml` and skips all of this.
