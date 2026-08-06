@@ -1,0 +1,15 @@
+# Operator-owned talu-cluster (KaaS) values for the rocky-phys site — everything marked
+# x-talu-owner: "operator" in components/tenancy/cluster-chart/values.schema.json. Rendered into
+# ConfigMap tenants/talu-cluster-defaults and merged by every ManagedCluster HelmRelease BEFORE its
+# own values.
+#
+# debugPublicKey is the sharpest reason this file exists: the chart REQUIRES it, and it is an
+# operator break-glass key (CAPK skips its own keypair under Kamaji, so it is the only way into a
+# worker guest). A consumer must never be asked for a key that is not theirs.
+debugPublicKey: "REPLACE_ME"
+
+# Shared datastore. The production default is a DEDICATED per-tenant kamaji-etcd on local-path
+# (~50x lower fsync than shared RBD — see docs/development/kaas-test-results.md KT-24), but that
+# DataStore must be provisioned BEFORE the cluster reconciles. This lab currently has only the
+# shared one, so point at it explicitly rather than at a datastore that does not exist.
+dataStore: default

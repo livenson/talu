@@ -19,3 +19,16 @@ spec:
   insecure: true
   url: oci://registry.flux-system.svc:5000/charts/talu-vm
   ref: { tag: "0.1.0" }
+---
+# Flux source for the talu-cluster chart — a tenant's own Kubernetes cluster (KaaS), served by the
+# typed API as ManagedCluster.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata: { name: talu-cluster, namespace: flux-system }
+spec:
+  interval: 5m
+  insecure: true
+  url: oci://registry.flux-system.svc:5000/charts/talu-cluster
+  # NOT 0.1.0 like the other two: the cluster chart is independently versioned and is at 0.3.0.
+  # helm push tags by the chart's own version, so a mismatched ref here silently never resolves.
+  ref: { tag: "0.3.0" }

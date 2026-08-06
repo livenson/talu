@@ -7,6 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1"
+	"github.com/livenson/talu/apiserver/pkg/registry/hr"
 )
 
 func testREST() *REST {
@@ -54,8 +55,13 @@ func TestRenderCarriesOwnershipLabel(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "acme"},
 		Spec:       v1alpha1.TenantSpec{ProjectUUID: "uuid"},
 	}, "tenants")
-	if got := u.GetLabels()[managedByAPILabel]; got != "true" {
-		t.Fatalf("%s = %q, want \"true\"", managedByAPILabel, got)
+	if got := u.GetLabels()[hr.ManagedByAPILabel]; got != "true" {
+		t.Fatalf("%s = %q, want \"true\"", hr.ManagedByAPILabel, got)
+	}
+	// All three Talu kinds are HelmReleases carrying the ownership label in one namespace, so without
+	// the kind label a ManagedCluster was readable — and deletable — as a Tenant.
+	if got := u.GetLabels()[hr.KindLabel]; got != "tenant" {
+		t.Fatalf("%s = %q, want \"tenant\"", hr.KindLabel, got)
 	}
 	if got := u.GetLabels()["talu.io/project-uuid"]; got != "uuid" {
 		t.Errorf("join key not stamped: %q", got)

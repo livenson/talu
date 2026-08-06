@@ -21,5 +21,9 @@ tenant_defaults_file: "{{ talos_gen_dir }}/tenant-defaults.yaml"
 # ConfigMap would be rejected by whichever chart does not own the key (adr-api-layer.md §10.1).
 vm_defaults_src: "{{ playbook_dir }}/../environments/rocky-phys/vm-defaults.yaml"
 vm_defaults_file: "{{ talos_gen_dir }}/vm-defaults.yaml"
+# The KaaS half. debugPublicKey is REQUIRED by the chart and is an operator break-glass key, so it
+# can only come from here — never from a consumer (adr-api-layer.md §4).
+cluster_defaults_src: "{{ playbook_dir }}/../environments/rocky-phys/cluster-defaults.yaml"
+cluster_defaults_file: "{{ talos_gen_dir }}/cluster-defaults.yaml"
 
 tenant_release_namespace: tenants

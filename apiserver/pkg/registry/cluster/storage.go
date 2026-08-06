@@ -60,7 +60,7 @@ func (r *REST) Destroy()                {}
 
 // kindLabel separates ManagedCluster releases from Tenant releases: both live in the management
 // namespace, so the ownership label alone is not enough to tell them apart.
-const kindLabel = "talu.io/kaas"
+const kindName = "managedcluster"
 
 func nsFrom(ctx context.Context) (string, error) {
 	ns, ok := genericapirequest.NamespaceFrom(ctx)
@@ -117,7 +117,7 @@ func (r *REST) toRelease(c *v1alpha1.ManagedCluster, ns string) *unstructured.Un
 		}
 	}
 	return hr.Release(c.Name, ns, r.opts.ChartName, r.opts.ChartNamespace, r.opts.DefaultsCM,
-		r.opts.Interval, c.Spec.ProjectUUID, "", values, map[string]string{kindLabel: "true"})
+		r.opts.Interval, c.Spec.ProjectUUID, "", kindName, values, nil)
 }
 
 func fromRelease(u *unstructured.Unstructured) (*v1alpha1.ManagedCluster, error) {
@@ -167,16 +167,8 @@ func fromRelease(u *unstructured.Unstructured) (*v1alpha1.ManagedCluster, error)
 }
 
 func (r *REST) getOwnedCluster(ctx context.Context, ns, name string) (*unstructured.Unstructured, error) {
-	u, err := hr.GetOwned(ctx, r.client, ns, name, v1alpha1.Resource("managedclusters"))
-	if err != nil {
-		return nil, err
-	}
-	// A Tenant release and a ManagedCluster release both live here; the kind label keeps them apart,
-	// so `kubectl get managedcluster acme` cannot reach the Tenant named acme.
-	if u.GetLabels()[kindLabel] != "true" {
-		return nil, errors.NewNotFound(v1alpha1.Resource("managedclusters"), name)
-	}
-	return u, nil
+	// The kind label is what keeps `kubectl get managedcluster acme` from reaching the Tenant acme.
+	return hr.GetOwned(ctx, r.client, ns, name, v1alpha1.Resource("managedclusters"), kindName)
 }
 
 func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
@@ -191,9 +183,7 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 	return fromRelease(u)
 }
 
-func (r *REST) selector() string {
-	return hr.ManagedByAPILabel + "=true," + kindLabel + "=true"
-}
+func (r *REST) selector() string { return hr.Selector(kindName) }
 
 func (r *REST) List(ctx context.Context, _ *metainternalversion.ListOptions) (runtime.Object, error) {
 	ns, _ := genericapirequest.NamespaceFrom(ctx)

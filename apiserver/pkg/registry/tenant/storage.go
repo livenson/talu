@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1"
+	"github.com/livenson/talu/apiserver/pkg/registry/hr"
 )
 
 // helmReleaseGVR is the object we project onto. Using the dynamic client rather than Flux's Go types
@@ -34,7 +35,7 @@ var helmReleaseGVR = schema.GroupVersionResource{
 
 // managedByAPILabel marks the HelmReleases this API owns. Releases written by hand or reconciled
 // from Git deliberately do NOT carry it, and are invisible here.
-const managedByAPILabel = "talu.io/managed-by-api"
+const kindName = "tenant"
 
 // Options a site sets once; they decide which chart a Tenant renders.
 type Options struct {
@@ -125,10 +126,10 @@ func (r *REST) toHelmRelease(t *v1alpha1.Tenant, ns string) *unstructured.Unstru
 			"labels": map[string]interface{}{
 				"app.kubernetes.io/part-of": "talu",
 				"talu.io/tenant":            t.Name,
+				hr.KindLabel:                kindName,
+				hr.ManagedByAPILabel:        "true",
 				// The join key, so the backing objects are discoverable exactly as before.
 				"talu.io/project-uuid": t.Spec.ProjectUUID,
-				// Marks this release as owned by the typed API rather than hand-written.
-				"talu.io/managed-by-api": "true",
 			},
 		},
 		"spec": map[string]interface{}{
@@ -218,24 +219,12 @@ func fromHelmRelease(u *unstructured.Unstructured) (*v1alpha1.Tenant, error) {
 	return t, nil
 }
 
-// getOwned fetches the backing HelmRelease and refuses anything this API did not create.
-//
-// Without it Get would expose — and Delete, which reads through Get, would DESTROY — a hand-written
-// or Git-managed HelmRelease that merely shares a name. List already filtered on the label, so the
-// two disagreed. NotFound rather than Forbidden is deliberate: to this API the object genuinely does
-// not exist, and saying otherwise leaks the existence of releases the caller cannot address.
+// getOwned refuses anything this API did not create AS A TENANT. All three Talu kinds are
+// HelmReleases carrying the ownership label in this same namespace, so the kind label is what stops
+// `kubectl get tenant <a-managed-cluster>` from succeeding — and, since Delete reads through Get,
+// what stops it deleting one.
 func (r *REST) getOwned(ctx context.Context, ns, name string) (*unstructured.Unstructured, error) {
-	u, err := r.client.Resource(helmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil, errors.NewNotFound(v1alpha1.Resource("tenants"), name)
-		}
-		return nil, err
-	}
-	if u.GetLabels()[managedByAPILabel] != "true" {
-		return nil, errors.NewNotFound(v1alpha1.Resource("tenants"), name)
-	}
-	return u, nil
+	return hr.GetOwned(ctx, r.client, ns, name, v1alpha1.Resource("tenants"), kindName)
 }
 
 func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
@@ -323,7 +312,7 @@ func (r *REST) List(ctx context.Context, _ *metainternalversion.ListOptions) (ru
 	ns, _ := genericapirequest.NamespaceFrom(ctx)
 	l, err := r.client.Resource(helmReleaseGVR).Namespace(ns).List(ctx, metav1.ListOptions{
 		// Only releases this API owns — a hand-written HelmRelease is not a Tenant.
-		LabelSelector: managedByAPILabel + "=true",
+		LabelSelector: hr.Selector(kindName),
 	})
 	if err != nil {
 		return nil, err
@@ -398,7 +387,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	opts := metav1.ListOptions{
 		// Same ownership filter as List: a hand-written HelmRelease is not a Tenant and must not
 		// appear in a watch stream either.
-		LabelSelector:       managedByAPILabel + "=true",
+		LabelSelector:       hr.Selector(kindName),
 		AllowWatchBookmarks: options.AllowWatchBookmarks,
 	}
 	if options.ResourceVersion != "" {

@@ -25,13 +25,18 @@ const ManagedByAPILabel = "talu.io/managed-by-api"
 // TenantLabel scopes a release to its tenant, so VMs can be listed per tenant namespace.
 const TenantLabel = "talu.io/tenant"
 
+// KindLabel says WHICH Talu kind a release belongs to. All three kinds are HelmReleases carrying
+// ManagedByAPILabel in the same namespace, so ownership alone cannot tell them apart — without this
+// a ManagedCluster was readable (and therefore DELETABLE) as a Tenant.
+const KindLabel = "talu.io/kind"
+
 // GetOwned fetches a release and refuses anything this API did not create.
 //
 // NotFound rather than Forbidden is deliberate: to this API the object genuinely does not exist, and
 // saying otherwise leaks the existence of releases the caller cannot address. Without this check a
 // Get would expose — and a Delete reading through it would DESTROY — a Git-managed release that
 // merely shares a name.
-func GetOwned(ctx context.Context, c dynamic.Interface, ns, name string, gr schema.GroupResource) (*unstructured.Unstructured, error) {
+func GetOwned(ctx context.Context, c dynamic.Interface, ns, name string, gr schema.GroupResource, kind string) (*unstructured.Unstructured, error) {
 	u, err := c.Resource(GVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -39,7 +44,7 @@ func GetOwned(ctx context.Context, c dynamic.Interface, ns, name string, gr sche
 		}
 		return nil, err
 	}
-	if u.GetLabels()[ManagedByAPILabel] != "true" {
+	if u.GetLabels()[ManagedByAPILabel] != "true" || u.GetLabels()[KindLabel] != kind {
 		return nil, errors.NewNotFound(gr, name)
 	}
 	return u, nil
@@ -85,7 +90,7 @@ func Phase(u *unstructured.Unstructured) (string, []metav1.Condition) {
 }
 
 // Release builds the HelmRelease that backs an object of any Talu kind.
-func Release(name, ns, chart, chartNS, defaultsCM, interval, projectUUID, tenant string,
+func Release(name, ns, chart, chartNS, defaultsCM, interval, projectUUID, tenant, kind string,
 	values map[string]interface{}, extraLabels map[string]string,
 	extraValuesFrom ...map[string]interface{}) *unstructured.Unstructured {
 
@@ -93,6 +98,7 @@ func Release(name, ns, chart, chartNS, defaultsCM, interval, projectUUID, tenant
 		"app.kubernetes.io/part-of": "talu",
 		"talu.io/project-uuid":      projectUUID,
 		ManagedByAPILabel:           "true",
+		KindLabel:                   kind,
 	}
 	if tenant != "" {
 		labels[TenantLabel] = tenant
@@ -121,4 +127,9 @@ func Release(name, ns, chart, chartNS, defaultsCM, interval, projectUUID, tenant
 			"values":     values,
 		},
 	}}
+}
+
+// Selector matches exactly the releases of one Talu kind that this API owns.
+func Selector(kind string) string {
+	return ManagedByAPILabel + "=true," + KindLabel + "=" + kind
 }

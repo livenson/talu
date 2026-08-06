@@ -81,10 +81,20 @@ immediately, but kube-apiserver caches each `APIService`'s discovery document, s
 reporting `no matches for kind "TenantVM"` for a short while (it refreshed in ~10s here). Expect the
 same lag for any future kind change.
 
-**`ManagedCluster` is implemented but NOT exercised on the lab**: the `talu-cluster` chart is not
-published to the in-cluster registry, and the phys KaaS path renders CAPI objects from the
-`phys_kaas_tenant` role rather than that chart. Validating it means publishing the chart and
-provisioning a real tenant cluster — a heavier pass that deserves its own run.
+**`ManagedCluster` is exercised too** (2026-08-07): the `talu-cluster` chart is now published
+alongside the other two, and creating a `ManagedCluster` through the API rendered **real CAPI
+objects** — `Cluster`, `KamajiControlPlane` and `MachineDeployment` in a dedicated `kaas-<name>`
+namespace — with `memoryGiB: 4` mapped to the chart's `memory: "4Gi"`. Deleting it garbage-collected
+them.
+
+Two things that cost time and are worth knowing:
+
+- **The cluster chart is independently versioned** (0.3.0, while tenant/vm are at 0.1.0). `helm push`
+  tags by the chart's own version, so an `OCIRepository` ref pinned to the wrong tag silently never
+  resolves.
+- **Deleting the tenant namespace out from under a HelmRelease strands it**: helm's uninstall cannot
+  finish, so the release sits in `Terminating` on its finalizer. Delete the `ManagedCluster` and let
+  Flux GC the namespace, rather than removing the namespace yourself.
 
 ## Regenerating the OpenAPI definitions
 

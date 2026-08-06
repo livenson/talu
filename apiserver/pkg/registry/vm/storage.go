@@ -72,6 +72,8 @@ func (r *REST) ShortNames() []string { return []string{"tvm"} }
 func (r *REST) Destroy()             {}
 
 // releaseName is how a tenant namespace + VM name become one HelmRelease name.
+const kindName = "tenantvm"
+
 func releaseName(tenant, name string) string { return tenant + "-" + name }
 
 func tenantFrom(ctx context.Context) (string, error) {
@@ -118,7 +120,7 @@ func (r *REST) toRelease(v *v1alpha1.TenantVM, tenant string) *unstructured.Unst
 
 	return hr.Release(releaseName(tenant, v.Name), r.opts.ReleaseNamespace,
 		r.opts.ChartName, r.opts.ChartNamespace, r.opts.DefaultsCM, r.opts.Interval,
-		v.Annotations["talu.io/project-uuid"], tenant, values,
+		v.Annotations["talu.io/project-uuid"], tenant, kindName, values,
 		map[string]string{"talu.io/vm": v.Name},
 		// The talu-vm chart REQUIRES a non-empty sshUserCaPubKey (lab-notes: tenancy hard-depends on
 		// the SSH CA). The tenancy role injects it live from this ConfigMap so a rotation needs no
@@ -175,7 +177,7 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 		return nil, err
 	}
 	u, err := hr.GetOwned(ctx, r.client, r.opts.ReleaseNamespace, releaseName(tenant, name),
-		v1alpha1.Resource("tenantvms"))
+		v1alpha1.Resource("tenantvms"), kindName)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +185,7 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 }
 
 func (r *REST) listReleases(ctx context.Context, tenant string) (*unstructured.UnstructuredList, error) {
-	sel := hr.ManagedByAPILabel + "=true," + hr.TenantLabel + "=" + tenant + ",talu.io/vm"
+	sel := hr.Selector(kindName) + "," + hr.TenantLabel + "=" + tenant
 	return r.client.Resource(hr.GVR).Namespace(r.opts.ReleaseNamespace).
 		List(ctx, metav1.ListOptions{LabelSelector: sel})
 }
@@ -225,7 +227,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	}
 	// The VM inherits its tenant's join key. Reading it from the Tenant's own release keeps a single
 	// source of truth: a VM cannot claim to belong to a project its tenant does not.
-	tu, err := hr.GetOwned(ctx, r.client, r.opts.ReleaseNamespace, tenant, v1alpha1.Resource("tenants"))
+	tu, err := hr.GetOwned(ctx, r.client, r.opts.ReleaseNamespace, tenant, v1alpha1.Resource("tenants"), "tenant")
 	if err != nil {
 		return nil, errors.NewBadRequest(fmt.Sprintf("no Tenant %q owns this namespace: %v", tenant, err))
 	}
@@ -266,7 +268,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, err
 	}
 	existing, err := hr.GetOwned(ctx, r.client, r.opts.ReleaseNamespace, releaseName(tenant, name),
-		v1alpha1.Resource("tenantvms"))
+		v1alpha1.Resource("tenantvms"), kindName)
 	if err != nil {
 		return nil, false, err
 	}
@@ -342,7 +344,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	if err != nil {
 		return nil, err
 	}
-	sel := hr.ManagedByAPILabel + "=true," + hr.TenantLabel + "=" + tenant + ",talu.io/vm"
+	sel := hr.Selector(kindName) + "," + hr.TenantLabel + "=" + tenant
 	o := metav1.ListOptions{LabelSelector: sel, AllowWatchBookmarks: options.AllowWatchBookmarks}
 	if options.ResourceVersion != "" {
 		o.ResourceVersion = options.ResourceVersion
