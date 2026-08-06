@@ -61,7 +61,25 @@ Two notes on the projection:
   often, so a client sees many more events than semantic changes. Correctness is unaffected (each
   event carries the current projection); de-duplicating would need a per-connection cache.
 
-`VirtualMachine` and `ManagedCluster` are still not served.
+### All three kinds are served (2026-08-06)
+
+`Tenant`, `VirtualMachine` and `ManagedCluster`. A `VirtualMachine` lives in the **tenant's**
+namespace while its backing release sits in the management namespace as `<tenant>-<vm>` — the same
+name the tenancy role generates, so the typed API and the Git path produce identical objects. It
+inherits `projectUuid` and the member list from its Tenant and is refused outright in a namespace no
+Tenant owns.
+
+⚠ **`VirtualMachine` collides with `kubevirt.io/VirtualMachine`.** Both register the plural
+`virtualmachines`, and KubeVirt's wins the short name, so `kubectl get virtualmachines` returns
+**KubeVirt's** VMs. Ours needs the fully-qualified `kubectl get virtualmachines.tenancy.talu.io`.
+This is the same trap the ADR avoided by naming the KaaS kind `ManagedCluster` rather than `Cluster`
+— and KubeVirt is not a hypothetical neighbour, it is the substrate. **The kind name needs a
+decision before `v1beta1`**; renaming after that is not a compatible change.
+
+**`ManagedCluster` is implemented but NOT exercised on the lab**: the `talu-cluster` chart is not
+published to the in-cluster registry, and the phys KaaS path renders CAPI objects from the
+`phys_kaas_tenant` role rather than that chart. Validating it means publishing the chart and
+provisioning a real tenant cluster — a heavier pass that deserves its own run.
 
 ## Regenerating the OpenAPI definitions
 

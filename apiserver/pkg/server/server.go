@@ -18,7 +18,9 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1"
+	clusterstore "github.com/livenson/talu/apiserver/pkg/registry/cluster"
 	tenantstore "github.com/livenson/talu/apiserver/pkg/registry/tenant"
+	vmstore "github.com/livenson/talu/apiserver/pkg/registry/vm"
 )
 
 var (
@@ -44,6 +46,8 @@ type Config struct {
 	Generic *genericapiserver.RecommendedConfig
 	Dynamic dynamic.Interface
 	Tenant  tenantstore.Options
+	VM      vmstore.Options
+	Cluster clusterstore.Options
 }
 
 type TaluServer struct {
@@ -60,7 +64,9 @@ func (c Config) New() (*TaluServer, error) {
 		v1alpha1.GroupName, Scheme, runtime.NewParameterCodec(Scheme), Codecs)
 
 	info.VersionedResourcesStorageMap["v1alpha1"] = map[string]rest.Storage{
-		"tenants": tenantstore.NewREST(c.Dynamic, c.Tenant),
+		"tenants":         tenantstore.NewREST(c.Dynamic, c.Tenant),
+		"virtualmachines": vmstore.NewREST(c.Dynamic, c.VM),
+		"managedclusters": clusterstore.NewREST(c.Dynamic, c.Cluster),
 	}
 
 	if err := gs.InstallAPIGroup(&info); err != nil {

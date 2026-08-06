@@ -83,3 +83,140 @@ func (in *TenantList) DeepCopyObject() runtime.Object {
 	}
 	return nil
 }
+
+func (in *VirtualMachineSpec) DeepCopyInto(out *VirtualMachineSpec) {
+	*out = *in
+	if in.SecurityGroups != nil {
+		out.SecurityGroups = make([]string, len(in.SecurityGroups))
+		copy(out.SecurityGroups, in.SecurityGroups)
+	}
+}
+
+func (in *VirtualMachineStatus) DeepCopyInto(out *VirtualMachineStatus) {
+	*out = *in
+	if in.Conditions != nil {
+		out.Conditions = make([]metav1.Condition, len(in.Conditions))
+		for i := range in.Conditions {
+			in.Conditions[i].DeepCopyInto(&out.Conditions[i])
+		}
+	}
+}
+
+func (in *VirtualMachine) DeepCopyInto(out *VirtualMachine) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Spec.DeepCopyInto(&out.Spec)
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *VirtualMachine) DeepCopy() *VirtualMachine {
+	if in == nil {
+		return nil
+	}
+	out := new(VirtualMachine)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *VirtualMachine) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *VirtualMachineList) DeepCopyInto(out *VirtualMachineList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		out.Items = make([]VirtualMachine, len(in.Items))
+		for i := range in.Items {
+			in.Items[i].DeepCopyInto(&out.Items[i])
+		}
+	}
+}
+
+func (in *VirtualMachineList) DeepCopy() *VirtualMachineList {
+	if in == nil {
+		return nil
+	}
+	out := new(VirtualMachineList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *VirtualMachineList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *ManagedClusterSpec) DeepCopyInto(out *ManagedClusterSpec) {
+	*out = *in
+	out.Workers = in.Workers
+}
+
+func (in *ManagedClusterStatus) DeepCopyInto(out *ManagedClusterStatus) {
+	*out = *in
+	if in.Conditions != nil {
+		out.Conditions = make([]metav1.Condition, len(in.Conditions))
+		for i := range in.Conditions {
+			in.Conditions[i].DeepCopyInto(&out.Conditions[i])
+		}
+	}
+}
+
+func (in *ManagedCluster) DeepCopyInto(out *ManagedCluster) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Spec.DeepCopyInto(&out.Spec)
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *ManagedCluster) DeepCopy() *ManagedCluster {
+	if in == nil {
+		return nil
+	}
+	out := new(ManagedCluster)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ManagedCluster) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *ManagedClusterList) DeepCopyInto(out *ManagedClusterList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		out.Items = make([]ManagedCluster, len(in.Items))
+		for i := range in.Items {
+			in.Items[i].DeepCopyInto(&out.Items[i])
+		}
+	}
+}
+
+func (in *ManagedClusterList) DeepCopy() *ManagedClusterList {
+	if in == nil {
+		return nil
+	}
+	out := new(ManagedClusterList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ManagedClusterList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
