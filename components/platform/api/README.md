@@ -96,6 +96,26 @@ Two things that cost time and are worth knowing:
   finish, so the release sits in `Terminating` on its finalizer. Delete the `ManagedCluster` and let
   Flux GC the namespace, rather than removing the namespace yourself.
 
+## Monitoring
+
+`components/platform/monitoring/ksm-crs.yaml` exposes the typed kinds through kube-state-metrics'
+CustomResourceState, the same mechanism already used for the CAPI/Kamaji inventory:
+`talu_api_tenant_info` / `_phase`, `talu_api_vm_info` / `_phase` (where `size` is the only place vCPU
+intent is expressed), and `talu_api_managedcluster_info` / `_workers_desired`.
+
+These deliberately overlap what Flux reports about the backing HelmReleases. The point is not new
+facts, it is **vocabulary**: an orchestrator can join usage to the objects *it* wrote (`project_uuid`,
+`phase`, `size`) rather than to chart internals.
+
+Two consequences worth knowing:
+
+- **These series depend on the aggregated API.** While the `APIService` is down they vanish. Usage
+  and billing are unaffected — `talu:tenant_*` comes from KubeVirt and core KSM, not this layer —
+  which keeps the ADR's separation of verb 3 from the API intact.
+- **Applying the CRS needs a kube-prometheus-stack helm upgrade** (it is a values layer), i.e.
+  `phys-stack.yml --tags monitoring`. The `TaluTenantDegraded` / `TaluTenantVMDegraded` alerts are
+  applied and live, but they stay inert until that lands, since the series they read do not exist yet.
+
 ## Regenerating the OpenAPI definitions
 
 `apiserver/pkg/generated/openapi/` is **generated and committed**. Re-run

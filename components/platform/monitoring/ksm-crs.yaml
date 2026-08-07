@@ -38,6 +38,13 @@ kube-state-metrics:
       - apiGroups: ["kamaji.clastix.io"]
         resources: ["tenantcontrolplanes"]
         verbs: ["list", "watch"]
+      # The typed Talu API (docs/architecture/adr-api-layer.md). Served by an AGGREGATED apiserver,
+      # not CRDs — KSM does not care, it list/watches a GVR either way, but note the consequence:
+      # these series disappear while that APIService is down. Usage/billing is unaffected, because
+      # talu:tenant_* comes from KubeVirt + core KSM, not from this layer.
+      - apiGroups: ["tenancy.talu.io"]
+        resources: ["tenants", "tenantvms", "managedclusters"]
+        verbs: ["list", "watch"]
   customResourceState:
     enabled: true
     config:
@@ -200,3 +207,82 @@ kube-state-metrics:
                 each:
                   type: Gauge
                   gauge: { path: [status, readyReplicas] }
+          # --- the typed Talu API: inventory in the CONSUMER's vocabulary -----------------------
+          # These deliberately overlap what Flux already reports about the backing HelmReleases. The
+          # point is not new facts, it is the vocabulary: an orchestrator can join usage to the
+          # objects IT wrote (project_uuid, phase, size) instead of to chart internals.
+          - groupVersionKind:
+              group: tenancy.talu.io
+              version: v1alpha1
+              kind: Tenant
+            metricNamePrefix: talu_api_tenant
+            labelsFromPath:
+              tenant: [metadata, name]
+              namespace: [metadata, namespace]
+              project_uuid: [spec, projectUuid]
+            metrics:
+              - name: info
+                help: "A Tenant served by the typed API. Value is always 1; the labels carry the facts."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      phase: [status, phase]
+              - name: phase
+                help: "Tenant phase rolled up from the backing HelmRelease."
+                each:
+                  type: StateSet
+                  stateSet:
+                    labelName: phase
+                    path: [status, phase]
+                    list: [Pending, Provisioning, Ready, Degraded, Deleting]
+          - groupVersionKind:
+              group: tenancy.talu.io
+              version: v1alpha1
+              kind: TenantVM
+            metricNamePrefix: talu_api_vm
+            labelsFromPath:
+              vm: [metadata, name]
+              namespace: [metadata, namespace]
+            metrics:
+              - name: info
+                help: "A tenant VM served by the typed API. `size` is the only place vCPU intent is expressed."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      size: [spec, size]
+                      principal: [spec, principal]
+                      phase: [status, phase]
+              - name: phase
+                help: "TenantVM phase."
+                each:
+                  type: StateSet
+                  stateSet:
+                    labelName: phase
+                    path: [status, phase]
+                    list: [Pending, Provisioning, Ready, Degraded, Deleting]
+          - groupVersionKind:
+              group: tenancy.talu.io
+              version: v1alpha1
+              kind: ManagedCluster
+            metricNamePrefix: talu_api_managedcluster
+            labelsFromPath:
+              cluster: [metadata, name]
+              namespace: [metadata, namespace]
+              project_uuid: [spec, projectUuid]
+            metrics:
+              - name: info
+                help: "A managed tenant cluster as the consumer DECLARED it (talu_kaas_cluster_info reports what CAPI actually built)."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      version: [spec, kubernetesVersion]
+                      phase: [status, phase]
+              - name: workers_desired
+                help: "Worker replicas the consumer asked for."
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [spec, workers, replicas]

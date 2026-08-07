@@ -10,6 +10,29 @@ spec:
   groups:
     - name: talu.api.alerts
       rules:
+        # Until now NOTHING alerted on a tenant failing to reconcile — only on the API being down.
+        # A tenant can sit Degraded indefinitely (bad values, missing chart, quota rejection) while
+        # every other signal stays green, because the platform itself is healthy.
+        - alert: TaluTenantDegraded
+          expr: talu_api_tenant_phase{phase="Degraded"} == 1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Tenant {{ $labels.namespace }}/{{ $labels.tenant }} has been Degraded for 10m"
+            description: >-
+              The Tenant's backing HelmRelease is not Ready. Look at it directly —
+              `kubectl -n {{ $labels.namespace }} describe helmrelease {{ $labels.tenant }}` — the
+              controller events carry the real error (bad values, unresolvable chart, quota).
+        - alert: TaluTenantVMDegraded
+          expr: talu_api_vm_phase{phase="Degraded"} == 1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "TenantVM {{ $labels.namespace }}/{{ $labels.vm }} has been Degraded for 15m"
+            description: >-
+              Longer window than the Tenant alert on purpose: a VM release legitimately churns while
+              CDI imports a disk. Check `kubectl -n tenants describe helmrelease
+              {{ $labels.namespace }}-{{ $labels.vm }}`.
         - alert: TaluAPIServiceUnavailable
           expr: aggregator_unavailable_apiservice{name="v1alpha1.tenancy.talu.io"} == 1
           for: 2m
