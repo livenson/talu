@@ -53,6 +53,17 @@
   ansible.builtin.command: "{{ mon_k }} wait --for condition=established crd/perses.perses.dev crd/persesdashboards.perses.dev --timeout=120s"
   changed_when: false
 
+# A CRS change only rewrites the kube-state-metrics ConfigMap; helm does NOT roll the Deployment,
+# so KSM keeps serving the config it parsed at startup and the new metrics silently never appear.
+# (Same class as the Cilium cilium-config trap in docs/development/lab-notes.md.)
+- name: Restart kube-state-metrics so it re-reads the CustomResourceState config
+  ansible.builtin.command: "{{ mon_k }} -n monitoring rollout restart deploy/kube-prometheus-stack-kube-state-metrics"
+  changed_when: true
+
+- name: Wait for kube-state-metrics to come back
+  ansible.builtin.command: "{{ mon_k }} -n monitoring rollout status deploy/kube-prometheus-stack-kube-state-metrics --timeout=150s"
+  changed_when: false
+
 - name: Apply ServiceMonitors + recording/alert rules
   ansible.builtin.command: "{{ mon_k }} apply -f {{ mon_dir }}/{{ item }}"
   loop: "{{ mon_rules }}"

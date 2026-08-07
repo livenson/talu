@@ -38,12 +38,10 @@ kube-state-metrics:
       - apiGroups: ["kamaji.clastix.io"]
         resources: ["tenantcontrolplanes"]
         verbs: ["list", "watch"]
-      # The typed Talu API (docs/architecture/adr-api-layer.md). Served by an AGGREGATED apiserver,
-      # not CRDs — KSM does not care, it list/watches a GVR either way, but note the consequence:
-      # these series disappear while that APIService is down. Usage/billing is unaffected, because
-      # talu:tenant_* comes from KubeVirt + core KSM, not from this layer.
-      - apiGroups: ["tenancy.talu.io"]
-        resources: ["tenants", "tenantvms", "managedclusters"]
+      # The Talu tenancy layer is read through its backing HelmReleases — see the long note by the
+      # HelmRelease resource below for why not through tenancy.talu.io directly.
+      - apiGroups: ["helm.toolkit.fluxcd.io"]
+        resources: ["helmreleases"]
         verbs: ["list", "watch"]
   customResourceState:
     enabled: true
@@ -207,82 +205,43 @@ kube-state-metrics:
                 each:
                   type: Gauge
                   gauge: { path: [status, readyReplicas] }
-          # --- the typed Talu API: inventory in the CONSUMER's vocabulary -----------------------
-          # These deliberately overlap what Flux already reports about the backing HelmReleases. The
-          # point is not new facts, it is the vocabulary: an orchestrator can join usage to the
-          # objects IT wrote (project_uuid, phase, size) instead of to chart internals.
+          # --- the typed Talu API, via the HelmRelease that backs every one of its objects ------
+          # NOT via tenancy.talu.io directly: kube-state-metrics' CustomResourceState is CRD-DRIVEN
+          # ("watches the installed CRDs for this purpose", and it needs list/watch on
+          # customresourcedefinitions). Our kinds are served by an AGGREGATED apiserver and have no
+          # CRD object, so CRS silently drops them — no error, no metrics. Upstream explicitly
+          # discourages CRS for objects without a CRD.
+          #
+          # HelmRelease IS a CRD, and the API server already stamps everything needed onto it, so the
+          # consumer vocabulary is recoverable from labels. This is also STRICTLY BETTER than reading
+          # the typed objects would have been: these series survive an APIService outage, so the
+          # "a tenant is not reconciling" alert cannot be blinded by the layer it monitors. It also
+          # covers GIT-MANAGED tenants, which carry talu.io/tenant but never talu.io/kind.
           - groupVersionKind:
-              group: tenancy.talu.io
-              version: v1alpha1
-              kind: Tenant
-            metricNamePrefix: talu_api_tenant
+              group: helm.toolkit.fluxcd.io
+              version: v2
+              kind: HelmRelease
+            metricNamePrefix: talu_api
             labelsFromPath:
-              tenant: [metadata, name]
+              name: [metadata, name]
               namespace: [metadata, namespace]
-              project_uuid: [spec, projectUuid]
+              kind: [metadata, labels, "talu.io/kind"]
+              tenant: [metadata, labels, "talu.io/tenant"]
+              vm: [metadata, labels, "talu.io/vm"]
+              project_uuid: [metadata, labels, "talu.io/project-uuid"]
             metrics:
               - name: info
-                help: "A Tenant served by the typed API. Value is always 1; the labels carry the facts."
+                help: "A Talu tenancy object, seen through the HelmRelease that renders it. kind/vm are empty for Git-managed tenants."
                 each:
                   type: Info
                   info:
                     labelsFromPath:
-                      phase: [status, phase]
-              - name: phase
-                help: "Tenant phase rolled up from the backing HelmRelease."
+                      ready: [status, conditions, "[type=Ready]", status]
+              - name: ready
+                help: "Ready condition of the backing HelmRelease: True once the chart applied cleanly."
                 each:
                   type: StateSet
                   stateSet:
-                    labelName: phase
-                    path: [status, phase]
-                    list: [Pending, Provisioning, Ready, Degraded, Deleting]
-          - groupVersionKind:
-              group: tenancy.talu.io
-              version: v1alpha1
-              kind: TenantVM
-            metricNamePrefix: talu_api_vm
-            labelsFromPath:
-              vm: [metadata, name]
-              namespace: [metadata, namespace]
-            metrics:
-              - name: info
-                help: "A tenant VM served by the typed API. `size` is the only place vCPU intent is expressed."
-                each:
-                  type: Info
-                  info:
-                    labelsFromPath:
-                      size: [spec, size]
-                      principal: [spec, principal]
-                      phase: [status, phase]
-              - name: phase
-                help: "TenantVM phase."
-                each:
-                  type: StateSet
-                  stateSet:
-                    labelName: phase
-                    path: [status, phase]
-                    list: [Pending, Provisioning, Ready, Degraded, Deleting]
-          - groupVersionKind:
-              group: tenancy.talu.io
-              version: v1alpha1
-              kind: ManagedCluster
-            metricNamePrefix: talu_api_managedcluster
-            labelsFromPath:
-              cluster: [metadata, name]
-              namespace: [metadata, namespace]
-              project_uuid: [spec, projectUuid]
-            metrics:
-              - name: info
-                help: "A managed tenant cluster as the consumer DECLARED it (talu_kaas_cluster_info reports what CAPI actually built)."
-                each:
-                  type: Info
-                  info:
-                    labelsFromPath:
-                      version: [spec, kubernetesVersion]
-                      phase: [status, phase]
-              - name: workers_desired
-                help: "Worker replicas the consumer asked for."
-                each:
-                  type: Gauge
-                  gauge:
-                    path: [spec, workers, replicas]
+                    labelName: status
+                    path: [status, conditions, "[type=Ready]", status]
+                    list: ["True", "False", "Unknown"]

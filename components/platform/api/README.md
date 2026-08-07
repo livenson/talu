@@ -98,23 +98,30 @@ Two things that cost time and are worth knowing:
 
 ## Monitoring
 
-`components/platform/monitoring/ksm-crs.yaml` exposes the typed kinds through kube-state-metrics'
-CustomResourceState, the same mechanism already used for the CAPI/Kamaji inventory:
-`talu_api_tenant_info` / `_phase`, `talu_api_vm_info` / `_phase` (where `size` is the only place vCPU
-intent is expressed), and `talu_api_managedcluster_info` / `_workers_desired`.
+`talu_api_info` and `talu_api_ready` come from kube-state-metrics, read from the **backing
+HelmRelease** — not from `tenancy.talu.io`.
 
-These deliberately overlap what Flux reports about the backing HelmReleases. The point is not new
-facts, it is **vocabulary**: an orchestrator can join usage to the objects *it* wrote (`project_uuid`,
-`phase`, `size`) rather than to chart internals.
+**Why not the typed kinds directly:** KSM's CustomResourceState is **CRD-driven**. Upstream states it
+"watches the installed CRDs for this purpose", requires `list`/`watch` on
+`customresourcedefinitions`, and explicitly *discourages* CRS for objects without a CRD. Our kinds are
+served by an aggregated apiserver and have no CRD object, so CRS **silently drops them** — no error,
+no metrics, which is what made this expensive to diagnose. No amount of RBAC or config fixes it.
 
-Two consequences worth knowing:
+`HelmRelease` is a CRD, and the API server already stamps `talu.io/kind`, `talu.io/tenant`,
+`talu.io/vm` and `talu.io/project-uuid` onto it, so the consumer vocabulary is recoverable from
+labels. Two things make this **better** than reading the typed objects would have been:
 
-- **These series depend on the aggregated API.** While the `APIService` is down they vanish. Usage
-  and billing are unaffected — `talu:tenant_*` comes from KubeVirt and core KSM, not this layer —
-  which keeps the ADR's separation of verb 3 from the API intact.
-- **Applying the CRS needs a kube-prometheus-stack helm upgrade** (it is a values layer), i.e.
-  `phys-stack.yml --tags monitoring`. The `TaluTenantDegraded` / `TaluTenantVMDegraded` alerts are
-  applied and live, but they stay inert until that lands, since the series they read do not exist yet.
+- the series **survive an `APIService` outage**, so "a tenant is not reconciling" cannot be blinded by
+  the layer it monitors;
+- they cover **Git-managed tenants** as well, which carry `talu.io/tenant` but never `talu.io/kind`.
+
+`TaluTenantDegraded` / `TaluTenantVMDegraded` alert on `talu_api_ready{status="False"}`, split by
+whether the `vm` label is set.
+
+⚠ **A CRS change needs kube-state-metrics restarted.** Helm rewrites the ConfigMap but does not roll
+the Deployment, so KSM keeps serving the config it parsed at startup and new metrics silently never
+appear — same class as the Cilium `cilium-config` trap in lab-notes. `phys_monitoring` now does the
+rollout restart.
 
 ## Regenerating the OpenAPI definitions
 
