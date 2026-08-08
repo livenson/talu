@@ -22,3 +22,13 @@ pomerium_idp_secret: pomerium-idp
 pomerium_storage_secret: pomerium-storage
 # STAGING until every route class is verified; production is a one-line change afterwards (§3b).
 pomerium_acme_cluster_issuer: letsencrypt-staging
+
+# The Ingress Controller image, served from the PUSHABLE local registry rather than a pull-through
+# cache. registry:2 in proxy mode still resolves tag->manifest upstream, so a warm cache does not
+# protect a cutover from a flaky WAN (lab-notes #42). Mirror it before changing this:
+#   sudo podman pull --tls-verify=false 10.8.1.101:5000/pomerium/ingress-controller:<tag>
+#   sudo podman tag  ... 10.8.1.101:5010/pomerium-ingress-controller:<tag> && podman push --tls-verify=false ...
+pomerium_ic_image: "talu.registry/pomerium-ingress-controller:v0.33.1"
+# Deploy the controller. Off by default so a site that has not staged the prerequisites (§7.8) cannot
+# replace its access plane by running the role.
+pomerium_ingress_enabled: false

@@ -9,9 +9,15 @@
     dest: "{{ talos_gen_dir }}/harden-sslip.py"
     mode: "0755"
 
-- name: Answer *.{{ lab_domain }} locally in CoreDNS (A -> floating IP, AAAA -> NODATA)
+# Answer with the INGRESS LB IP, not the public floating IP. Both resolve the name, but the floating
+# IP sends in-cluster traffic out through the provider's inbound forward and back — the flaky path
+# behind the Let's Encrypt lockout (adr-pomerium-ingress.md §3b). Pointing at the LB keeps the
+# Pomerium/Dex back-channel, cert-manager's HTTP-01 self-check and tenant OIDC discovery inside the
+# cluster. Override coredns_access_domain_ip if a site genuinely needs the public address.
+- name: Answer *.{{ lab_domain }} locally in CoreDNS (A -> ingress LB, AAAA -> NODATA)
   ansible.builtin.command: >
-    python3 {{ talos_gen_dir }}/harden-sslip.py {{ lab_domain }} {{ lab_floating_ip }}
+    python3 {{ talos_gen_dir }}/harden-sslip.py {{ lab_domain }}
+    {{ coredns_access_domain_ip | default(talos_ingress_lb_ip) }}
   environment: { KUBECONFIG: "{{ talos_gen_dir }}/kubeconfig" }
   register: cdns_patch
   changed_when: "'patched' in cdns_patch.stdout"

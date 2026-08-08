@@ -15,6 +15,7 @@ usage: harden-sslip.py <lab_domain> <floating_ip>
   e.g. harden-sslip.py 92-220-16-211.sslip.io 92.220.16.211
 """
 import json
+import re
 import subprocess
 import sys
 
@@ -28,6 +29,33 @@ def kc(*args, capture=False):
 
 cf = kc("get", "cm", "coredns", "-o", "jsonpath={.data.Corefile}", capture=True)
 if domain in cf:
+    # Idempotent by VALUE, not merely by presence. The earlier version returned "already hardened"
+    # whenever the domain appeared at all, so the answer IP could never be CHANGED — which matters,
+    # because pointing this at the in-cluster ingress LB instead of the public floating IP is what
+    # keeps the Pomerium/Dex back-channel (and cert-manager's HTTP-01 self-check) off the flaky
+    # inbound forward entirely.
+    pat = re.compile(
+        r'(template IN A ' + re.escape(domain) + r' \{\s*\n\s*answer "\{\{ \.Name \}\} 60 IN A )'
+        r'([0-9.]+)(")'
+    )
+    m = pat.search(cf)
+    if m and m.group(2) == ip:
+        print("already hardened")
+        sys.exit(0)
+    if m:
+        cf_new = pat.sub(lambda mm: mm.group(1) + ip + mm.group(3), cf)
+        import os
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".corefile", delete=False) as fh:
+            fh.write(cf_new)
+            tmp = fh.name
+        rendered = subprocess.check_output(
+            ["kubectl", "-n", "kube-system", "create", "cm", "coredns",
+             "--from-file=Corefile=" + tmp, "--dry-run=client", "-o", "yaml"])
+        subprocess.run(["kubectl", "apply", "-f", "-"], input=rendered, check=True)
+        os.unlink(tmp)
+        print(f"patched: answer for {domain} -> {ip}")
+        sys.exit(0)
     print("already hardened")
     sys.exit(0)
 

@@ -1,0 +1,329 @@
+# ANSIBLE MANAGED — Pomerium running as the INGRESS CONTROLLER (adr-pomerium-ingress.md §3b/§7.7).
+#
+# This supersedes pomerium.yaml.j2, which is kept ONLY as the rollback until the new path is fully
+# proven (§6). Do not apply both.
+#
+# Shape notes that are easy to get wrong and expensive to discover during a cutover:
+#   * The Deployment is `pomerium-ic`, NOT `pomerium`. Keeping the old name would have meant the swap
+#     could not run alongside the old plane for validation — and it is also the name route-sync used
+#     to `rollout restart`, which is the §"hostile after the swap" hazard.
+#   * The LB IP lives on the `pomerium-proxy` Service, not `pomerium`. Getting this wrong moves the
+#     public IP, which on a lab with no console is the one unrecoverable mistake (§4).
+#   * --ssh-addr defaults to EMPTY, so Native SSH silently does not start unless it is passed (§7.1).
+#     The stock manifest has no SSH port at all.
+#   * The image comes from the PUSHABLE talu.registry, not a pull-through cache: registry:2 in proxy
+#     mode still resolves tag->manifest upstream, so a warm cache does not protect a cutover from a
+#     flaky WAN (lab-notes #42).
+#   * Routes are NOT here. They are Ingress objects owned by their components, and global settings
+#     live in the `Pomerium` CRD instance named `global` (pomerium-crd.yaml.j2).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/name: pomerium
+  name: pomerium-controller
+  namespace: pomerium
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/name: pomerium
+  name: pomerium-controller
+  namespace: pomerium
+rules:
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: pomerium
+  name: pomerium-controller
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - services
+  - endpoints
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ''
+  resources:
+  - secrets
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+  - patch
+- apiGroups:
+  - ''
+  resources:
+  - services/status
+  - secrets/status
+  - endpoints/status
+  verbs:
+  - get
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  - ingressclasses
+  verbs:
+  - get
+  - list
+  - watch
+  - patch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ingress.pomerium.io
+  resources:
+  - pomerium
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ingress.pomerium.io
+  resources:
+  - pomerium/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - ''
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: pomerium
+  name: pomerium-controller
+  namespace: pomerium
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pomerium-controller
+subjects:
+- kind: ServiceAccount
+  name: pomerium-controller
+  namespace: pomerium
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: pomerium
+  name: pomerium-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pomerium-controller
+subjects:
+- kind: ServiceAccount
+  name: pomerium-controller
+  namespace: pomerium
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: pomerium
+  name: pomerium-metrics
+  namespace: pomerium
+spec:
+  ports:
+  - name: metrics
+    port: 9090
+    protocol: TCP
+    targetPort: metrics
+  selector:
+    app.kubernetes.io/name: pomerium-ic
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: proxy
+    app.kubernetes.io/name: pomerium
+  name: pomerium-proxy
+  namespace: pomerium
+  annotations:
+    lbipam.cilium.io/ips: '{{ talos_ingress_lb_ip }}'
+spec:
+  ports:
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: https
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: http
+  - name: ssh
+    port: 2222
+    protocol: TCP
+    targetPort: ssh
+  selector:
+    app.kubernetes.io/name: pomerium-ic
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: proxy
+    app.kubernetes.io/name: pomerium
+  name: pomerium-ic
+  namespace: pomerium
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pomerium-ic
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: proxy-ic
+        app.kubernetes.io/name: pomerium-ic
+    spec:
+      containers:
+      - args:
+        - all-in-one
+        - --pomerium-config=global
+        - --update-status-from-service=$(POMERIUM_NAMESPACE)/pomerium-proxy
+        - --metrics-bind-address=$(POD_IP):9090
+        - --health-probe-bind-address=$(POD_IP):28080
+        - --ssh-addr=:2222
+        env:
+        - name: TMPDIR
+          value: /tmp
+        - name: XDG_CACHE_HOME
+          value: /tmp
+        - name: GOLANG_PROTOBUF_REGISTRATION_CONFLICT
+          value: warn
+        - name: POMERIUM_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        image: '{{ pomerium_ic_image }}'
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 10
+          httpGet:
+            path: /healthz
+            port: 28080
+          initialDelaySeconds: 15
+          periodSeconds: 60
+        name: pomerium
+        ports:
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+        - containerPort: 8443
+          name: quic
+          protocol: UDP
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
+        - containerPort: 2222
+          name: ssh
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /readyz
+            port: 28080
+          initialDelaySeconds: 15
+          periodSeconds: 60
+        resources:
+          limits:
+            cpu: 5000m
+            memory: 1Gi
+          requests:
+            cpu: 300m
+            memory: 200Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 65532
+          runAsNonRoot: true
+          runAsUser: 65532
+        startupProbe:
+          failureThreshold: 40
+          httpGet:
+            path: /startupz
+            port: 28080
+          periodSeconds: 15
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+      nodeSelector:
+        kubernetes.io/os: linux
+      securityContext:
+        runAsNonRoot: true
+      serviceAccountName: pomerium-controller
+      terminationGracePeriodSeconds: 10
+      volumes:
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  labels:
+    app.kubernetes.io/name: pomerium
+  name: pomerium
+spec:
+  controller: pomerium.io/ingress-controller
