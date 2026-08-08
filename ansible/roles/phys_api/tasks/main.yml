@@ -1,0 +1,50 @@
+---
+# Applies components/platform/api reproducibly. Before this role the Deployment, APIService, RBAC,
+# ServiceMonitor and PrometheusRule were all applied BY HAND — so a rebuilt lab would have had none
+# of them, and a stale PrometheusRule silently monitored a metric that no longer existed (found by
+# proving TaluTenantDegraded actually fires; "rules load, health=ok" was not the same thing).
+- name: Copy the api component to the gateway
+  ansible.builtin.copy:
+    src: "{{ api_src }}/"
+    dest: "{{ api_dir }}/"
+    mode: "0644"
+
+- name: Apply the typed API (Deployment, Service, RBAC, certs, APIService, alerts, ServiceMonitor)
+  ansible.builtin.command: "{{ api_k }} apply -k {{ api_dir }}"
+  changed_when: true
+
+- name: Pin the image
+  ansible.builtin.command: >
+    {{ api_k }} -n talu-system set image deploy/talu-apiserver apiserver={{ api_image }}
+  changed_when: true
+
+- name: Wait for the apiserver to roll out
+  ansible.builtin.command: "{{ api_k }} -n talu-system rollout status deploy/talu-apiserver --timeout=180s"
+  changed_when: false
+
+# The aggregation layer is the part that can fail in ways the Deployment cannot show: a bad caBundle,
+# a cert SAN mismatch or an unreachable Service all leave the pods Running and the API unusable.
+- name: Wait for the APIService to become Available
+  ansible.builtin.shell: |
+    for i in $(seq 1 30); do
+      s=$({{ api_k }} get apiservice v1alpha1.tenancy.talu.io -o jsonpath='{.status.conditions[?(@.type=="Available")].status}')
+      [ "$s" = "True" ] && exit 0
+      sleep 5
+    done
+    echo "APIService never became Available"; exit 1
+  changed_when: false
+
+- name: Status
+  ansible.builtin.command: "{{ api_k }} get apiservice v1alpha1.tenancy.talu.io --no-headers"
+  register: api_status
+  changed_when: false
+
+- name: Kinds served
+  ansible.builtin.command: "{{ api_k }} api-resources --api-group=tenancy.talu.io --no-headers"
+  register: api_kinds
+  changed_when: false
+  failed_when: false
+
+- name: Show
+  ansible.builtin.debug:
+    msg: "{{ api_status.stdout_lines + api_kinds.stdout_lines }}"

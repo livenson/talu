@@ -5,6 +5,12 @@ alternatives and the failure modes this must be operated with:
 [`docs/architecture/adr-api-layer.md`](../../../docs/architecture/adr-api-layer.md). Source:
 [`apiserver/`](../../../apiserver/).
 
+**Applied by the opt-in `phys_api` ansible role** (`phys-stack.yml --tags api`; tagged `never`, so a
+normal run never touches it). Before that role existed, everything here was applied by hand — which
+meant a rebuilt lab would have had none of it, and a stale `PrometheusRule` silently monitored a
+metric that no longer existed. That was only caught by proving an alert actually fires; "rules load,
+`health=ok`" was not the same thing.
+
 **Nothing here is referenced by any environment overlay.** This is Phase 1 of the ADR — additive and
 opt-in: both the typed API and hand-written `HelmRelease`s write the same objects, so a site adopts it
 by applying this directory and removes it by deleting the `APIService`.
