@@ -11,3 +11,10 @@ guestSecrets: |
   DB_PASSWORD=citest
 logging:
   agent: true
+
+# Render the ssh Ingress in CI. Left off, the Ingress template is never exercised — which is how it
+# shipped with an HTTP-shaped `path: / , pathType: Prefix` that Pomerium rejects for an ssh_upstream
+# route (adr-pomerium-ingress.md §7.2). Off in values.yaml is the runtime default; CI must still
+# render the path.
+ingress:
+  enabled: true
