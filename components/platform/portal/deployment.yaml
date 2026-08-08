@@ -1,7 +1,12 @@
 # Talu route portal — an OPTIONAL, read-only landing page that lists every route Pomerium exposes.
-# Runs in the `pomerium` namespace so it can mount the live `pomerium-config` ConfigMap (the route
-# renderer writes it) read-only — the page is generated from that on every request, so it never drifts.
-# No cluster API access, no writable filesystem, no runtime dependencies (stdlib-only parser).
+#
+# Two route sources, because the cluster is mid-migration (docs/architecture/adr-pomerium-ingress.md):
+# TALU_ROUTE_SOURCE=config (default) mounts the live `pomerium-config` ConfigMap; =ingress lists
+# Pomerium-class Ingress objects instead. Flip it in the SAME change that sets ingress.enabled and
+# suspends route-sync — after the swap `pomerium-config` is orphaned but still present, so a portal
+# left on `config` would render a stale route list forever while looking healthy.
+# Still no writable filesystem and no runtime dependencies (stdlib only); `ingress` mode adds
+# read-only list access to Ingresses (rbac.yaml), which `config` mode does not use.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,6 +23,7 @@ spec:
         app: talu-portal
         app.kubernetes.io/part-of: talu
     spec:
+      serviceAccountName: talu-portal
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -29,6 +35,12 @@ spec:
           env:
             - { name: PORT, value: "8080" }
             - { name: POMERIUM_CONFIG, value: /config/config.yaml }
+            # config | ingress — see the header. Change with the swap, not before.
+            - { name: TALU_ROUTE_SOURCE, value: "config" }
+            - { name: TALU_INGRESS_CLASS, value: "pomerium" }
+            # Site domain, from the same talu-platform ConfigMap both route writers read (lab-notes
+            # #40). In ingress mode there is no config blob left to recover it from.
+            - { name: TALU_DOMAIN_FILE, value: /platform/domain }
           ports:
             - { name: http, containerPort: 8080 }
           readinessProbe:
@@ -47,9 +59,13 @@ spec:
           volumeMounts:
             - { name: app, mountPath: /app, readOnly: true }
             - { name: pomerium-config, mountPath: /config, readOnly: true }
+            - { name: platform, mountPath: /platform, readOnly: true }
       volumes:
         - name: app
           configMap: { name: talu-portal-app }
         # the routes source of truth; optional so the pod still starts before the config is first written
         - name: pomerium-config
           configMap: { name: pomerium-config, optional: true }
+        # optional: the portal still starts (and says so) before the domain is published
+        - name: platform
+          configMap: { name: talu-platform, optional: true }
