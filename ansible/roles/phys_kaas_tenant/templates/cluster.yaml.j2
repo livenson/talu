@@ -71,6 +71,25 @@ spec:
     preferredAddressTypes: [InternalIP]
   network:
     serviceType: LoadBalancer   # LB-IPAM assigns the endpoint from the talu-ingress pool
+{% if kaas_oidc_enabled | default(false) %}
+  # Tenant users authenticate DIRECTLY against Dex (adr-pomerium-ingress.md §9) instead of reaching
+  # the apiserver as one shared `pomerium` ServiceAccount with Pomerium impersonating them. Per-user
+  # RBAC and audit inside the tenant stop depending on an impersonation grant and a long-lived legacy
+  # token replicated into a ConfigMap.
+  #
+  # Set at the CAPI level, NOT on the TenantControlPlane: the TCP is owned by (and reconciled from)
+  # this KamajiControlPlane, so args written directly onto the TCP would be reverted.
+  #
+  # --oidc-username-claim=email is deliberate: Kubernetes prefixes usernames with "<issuer>#" for any
+  # other claim, and the tenant admin binding below is a plain `User: <email>`. Changing the claim
+  # without changing the binding silently authenticates users into having no permissions.
+  apiServer:
+    extraArgs:
+      - --oidc-issuer-url={{ kaas_oidc_issuer_url }}
+      - --oidc-client-id={{ kaas_oidc_client_id | default('kubernetes') }}
+      - --oidc-username-claim=email
+      - --oidc-groups-claim=groups
+{% endif %}
   version: {{ kaas_k8s_version }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1

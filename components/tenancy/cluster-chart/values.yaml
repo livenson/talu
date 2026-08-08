@@ -25,6 +25,17 @@ serviceCidr: 10.95.0.0/16
 
 controlPlane:
   replicas: 2          # spread across nodes → survives a management-node loss
+  # Tenant users authenticate DIRECTLY against the site IdP instead of reaching the apiserver as one
+  # shared service account with the proxy impersonating them (docs/architecture/adr-pomerium-ingress.md
+  # §9). Off by default: enabling it adds --oidc-* args, which RESTARTS the tenant control plane, and
+  # the issuer must be reachable from the apiserver pods when they start.
+  # usernameClaim is fixed to `email` on purpose — Kubernetes prefixes usernames with "<issuer>#" for
+  # any other claim, which would silently stop matching the tenant's `User:` RoleBindings.
+  oidc:
+    enabled: false
+    issuerUrl: ""      # REQUIRED when enabled, e.g. https://id.<domain>/dex
+    clientId: kubernetes
+    groupsClaim: groups
 
 workers:
   replicas: 2          # ignored when autoscaling.enabled (the autoscaler owns the count)

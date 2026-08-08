@@ -596,3 +596,34 @@ ClusterRole, and `patch-pomerium-route.py` — one of the four writers of `pomer
   into this decision.
 - **A tenant apiserver restart** is required to add the flags, and the OIDC issuer must be reachable
   at apiserver start or authentication fails for everyone on that tenant.
+
+### 9.1 · Blocker found on the lab: no node can pull an image
+
+Attempting the first half of §9 on `rocky-phys` surfaced something that gates the **entire cutover**,
+not just this decision: **the cluster nodes cannot pull container images from any public registry.**
+
+| registry | result from a node |
+|---|---|
+| `ghcr.io` | `dial tcp 140.82.121.34:443: i/o timeout` |
+| `docker.io` | pull fails (verified twice, different images) |
+| `registry.k8s.io` | `lookup europe-north1-docker.pkg.dev … server misbehaving` |
+
+Everything currently running does so from images cached on the node that happens to host it. The
+symptom is invisible until something is rescheduled — which is exactly what a migration does.
+
+**This is a hard prerequisite for step 4.** The swap replaces the Pomerium Deployment with
+`pomerium/ingress-controller:v0.33.1`, which is cached **nowhere**. Attempted today, the new pod goes
+`ImagePullBackOff` and the access plane is down — with rollback only possible onto the one node that
+still has `pomerium/pomerium:v0.33.0` cached. That is precisely the unrecoverable-remotely scenario
+§4 warns about, arrived at by a route nobody had modelled.
+
+The fix is already this repo's documented pattern and needs no new machinery: the **gateway can reach
+docker.io** (verified — `registry-1.docker.io` answers `401`, the expected anonymous-auth challenge),
+and a local pushable registry already exists on `:5010`, mapped into Talos as `talu.registry`, holding
+`talu-apiserver`. So the ingress-controller image must be mirrored there and the swap must reference
+the mirrored name — **before** step 4, not during it.
+
+Encountered en route: enabling OIDC restarts the tenant control plane, and a tenant apiserver
+rescheduled onto a node without `registry.k8s.io/kube-apiserver:v1.34.1` cached would fail the same
+way. So the tenant-side half of §9 is deliberately **not** applied until the mirror exists — proving
+half a decision by degrading a live tenant control plane is not a trade worth making.
