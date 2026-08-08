@@ -260,4 +260,3 @@
       bearer_token_format: "default"
   when: kaas_oidc_enabled | default(false)
   tags: [pomerium-routes]
-
