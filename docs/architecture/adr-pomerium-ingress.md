@@ -109,6 +109,24 @@ still serving, because nothing reconciles them until the controller exists. Roll
 the old Pomerium from `phys_identity`, so its `config.yaml` template must be **kept** until the new
 path is proven — deleting it in the same change would remove the way back.
 
+### The domain becomes a render-time input, everywhere
+
+`route-sync` resolved the site domain at **run** time from the `talu-platform` ConfigMap (lab-notes
+#40: that ConfigMap is the single source both writers read). An `Ingress` host must be **concrete at
+render time**, so every route that carries a hostname now needs the domain supplied where it is
+rendered. This is a real loss of late binding, not a detail, and it lands differently per component:
+
+- **Helm charts** (`talu-tenant`, `talu-vm`) take it as a value — done, with a `required` guard,
+  because an empty domain renders `host: <slug>-dashboard.` and 404s in a way that looks like a
+  Pomerium fault rather than a values fault.
+- **Kustomize components** (monitoring, Cilium, identity) have no equivalent, so the base-route
+  Ingresses need a decision: a kustomize `replacements` block sourced from the `talu-platform`
+  ConfigMap, or the owning ansible role templating the host as it already templates other values.
+  **Resolve this before writing those manifests** — it determines whether the base routes live in
+  `components/` at all, or have to be role-rendered like the current `config.yaml`.
+
+Getting it wrong reintroduces exactly what this ADR removes: a hostname that only one writer knows.
+
 ## 4 · Costs and risks — this is an access-plane migration
 
 The access plane is the highest-blast-radius component in Talu and the lab has **no console and no
