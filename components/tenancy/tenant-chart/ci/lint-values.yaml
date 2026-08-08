@@ -17,3 +17,9 @@ securityGroups:
     allVMs: true
     egress:
       - toCIDR: ["0.0.0.0/0"]
+
+# Render the dashboard Ingress in CI — see vm-chart/ci/lint-values.yaml. `domain` is required once
+# enabled (the host must be concrete at render time), so CI supplies a placeholder.
+ingress:
+  enabled: true
+  domain: ci.invalid

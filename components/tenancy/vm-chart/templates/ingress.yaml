@@ -28,8 +28,11 @@ spec:
     - host: {{ .Values.name }}
       http:
         paths:
-          - path: /
-            pathType: Prefix
+          # An ssh_upstream route is not path-addressed: setRoutePath() rejects anything but
+          # ImplementationSpecific with NO path ("ssh services must have ImplementationSpecific path
+          # type" / "must not specify path"). A `/` + Prefix here — the HTTP default — fails the whole
+          # Ingress, and with it every ssh route. See adr-pomerium-ingress.md §7.2.
+          - pathType: ImplementationSpecific
             backend:
               service:
                 name: {{ .Values.name }}-ssh
