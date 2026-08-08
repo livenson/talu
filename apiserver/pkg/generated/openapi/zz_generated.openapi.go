@@ -23,6 +23,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantSpec":            schema_pkg_apis_tenancy_v1alpha1_TenantSpec(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantStatus":          schema_pkg_apis_tenancy_v1alpha1_TenantStatus(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVM":              schema_pkg_apis_tenancy_v1alpha1_TenantVM(ref),
+		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMCounts":        schema_pkg_apis_tenancy_v1alpha1_TenantVMCounts(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMList":          schema_pkg_apis_tenancy_v1alpha1_TenantVMList(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMSpec":          schema_pkg_apis_tenancy_v1alpha1_TenantVMSpec(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMStatus":        schema_pkg_apis_tenancy_v1alpha1_TenantVMStatus(ref),
@@ -485,9 +486,16 @@ func schema_pkg_apis_tenancy_v1alpha1_TenantStatus(ref common.ReferenceCallback)
 				Properties: map[string]spec.Schema{
 					"phase": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Phase is a coarse rollup: Pending | Provisioning | Ready | Degraded.",
+							Description: "Phase is a coarse rollup: Pending | Provisioning | Ready | Degraded | Deleting.",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"vms": {
+						SchemaProps: spec.SchemaProps{
+							Description: "VMs counts this tenant's VirtualMachineInstances. \"HelmRelease Ready\" only means the chart applied — it says nothing about whether the VMs actually came up, which is the question an orchestrator is really asking (problem 5 in the ADR).",
+							Default:     map[string]interface{}{},
+							Ref:         ref("github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMCounts"),
 						},
 					},
 					"conditions": {
@@ -508,7 +516,7 @@ func schema_pkg_apis_tenancy_v1alpha1_TenantStatus(ref common.ReferenceCallback)
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
+			"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMCounts", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
 	}
 }
 
@@ -556,6 +564,33 @@ func schema_pkg_apis_tenancy_v1alpha1_TenantVM(ref common.ReferenceCallback) com
 		},
 		Dependencies: []string{
 			"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMSpec", "github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+	}
+}
+
+func schema_pkg_apis_tenancy_v1alpha1_TenantVMCounts(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"running": {
+						SchemaProps: spec.SchemaProps{
+							Default: 0,
+							Type:    []string{"integer"},
+							Format:  "int32",
+						},
+					},
+					"total": {
+						SchemaProps: spec.SchemaProps{
+							Default: 0,
+							Type:    []string{"integer"},
+							Format:  "int32",
+						},
+					},
+				},
+				Required: []string{"running", "total"},
+			},
+		},
 	}
 }
 

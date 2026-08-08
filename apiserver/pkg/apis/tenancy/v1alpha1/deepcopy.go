@@ -24,6 +24,7 @@ func (in *TenantSpec) DeepCopyInto(out *TenantSpec) {
 
 func (in *TenantStatus) DeepCopyInto(out *TenantStatus) {
 	*out = *in
+	out.VMs = in.VMs
 	if in.Conditions != nil {
 		out.Conditions = make([]metav1.Condition, len(in.Conditions))
 		for i := range in.Conditions {
