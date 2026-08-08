@@ -2,7 +2,11 @@
 # portal — the read-only apex landing page (lists every Pomerium route + allow-list). Stdlib HTTP
 # server (portal.py on python:3.12-slim), mounts pomerium-config read-only, deployed into the pomerium
 # namespace. Public read (allow_public_unauthenticated_access); exposed as the apex `https://<domain>`
-# Pomerium route (defined in phys_identity). Self-registers via talu.io/landing-expose=true.
+# Pomerium route, which this role now OWNS as an Ingress at the bottom of this file
+# (adr-pomerium-ingress.md §3b) rather than it being defined in phys_identity.
+# The talu.io/landing-expose=true self-registration and the phys_identity base entry are the
+# route-sync path, still in place until the swap; they are what produced the DUPLICATE apex route in
+# the live blob (§7.4). Both go at step 6.
 - name: Copy the portal component to the gateway
   ansible.builtin.copy:
     src: "{{ portal_src }}/"
@@ -21,3 +25,19 @@
 - name: Status
   ansible.builtin.debug:
     msg: "portal: apex landing at https://{{ lab_domain }}/ (public route directory)"
+
+# ── Pomerium route as an Ingress (adr-pomerium-ingress.md §3b) ────────────────────────────────────
+# The public apex landing page. Replaces BOTH the base apex route and the duplicate one
+# route-sync appended from the talu.io/landing-expose Service (§7.4) — one object, not two.
+# Inert until the Ingress Controller is serving; the route-sync path is unchanged meanwhile.
+- name: Pomerium route — public apex (Ingress)
+  ansible.builtin.include_role:
+    name: phys_pomerium_route
+  vars:
+    pr_name: pomerium-route-apex
+    pr_namespace: pomerium
+    pr_host: "{{ lab_domain }}"
+    pr_service: talu-portal
+    pr_port: 80
+    pr_public: true
+  tags: [pomerium-routes]

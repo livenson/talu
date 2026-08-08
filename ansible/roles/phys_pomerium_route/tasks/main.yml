@@ -1,0 +1,17 @@
+---
+- name: "Route dir for {{ pr_name }}"
+  ansible.builtin.file:
+    path: "{{ pr_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: "Render the Pomerium route Ingress for {{ pr_name }}"
+  ansible.builtin.template:
+    src: route.yaml.j2
+    dest: "{{ pr_dir }}/{{ pr_namespace }}-{{ pr_name }}.yaml"
+    mode: "0644"
+
+- name: "Apply the Pomerium route Ingress for {{ pr_name }}"
+  ansible.builtin.command: "{{ pr_k }} apply -f {{ pr_dir }}/{{ pr_namespace }}-{{ pr_name }}.yaml"
+  register: pr_apply
+  changed_when: "'created' in pr_apply.stdout or 'configured' in pr_apply.stdout"
