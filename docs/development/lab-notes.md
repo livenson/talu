@@ -641,3 +641,19 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     `-H 'Accept: application/vnd.oci.image.manifest.v1+json'`, or just trust Flux, which sends it.
     Also note `find -maxdepth 8` cuts off exactly at the registry's `_manifests/tags` level, so a
     truncated tree looks like missing link files — use an unbounded `find` before concluding anything.
+
+42. **A COLD pull-through cache entry looks exactly like "this cluster has no egress".** The physical
+    lab pulls every image through per-upstream `registry:2` proxies on the gateway
+    (`phys_registry_mirror`, :5000 docker.io · :5001 ghcr.io · :5002 quay.io · :5003 registry.k8s.io ·
+    … · :5010 the pushable `talu.registry`), wired in via `machine.registries.mirrors`. When a blob is
+    **not yet cached**, the first fetch crosses the flaky WAN; if it times out, containerd falls back
+    to the **upstream registry directly**, which fails too — so the event log shows
+    `dial tcp <ghcr-ip>:443: i/o timeout` or `lookup europe-north1-docker.pkg.dev … server misbehaving`
+    and reads as *no egress at all*. It is not: the gateway reaches every registry, the caches proxy
+    fine, and the nodes reach the caches in <1s. **Diagnose before concluding** — `curl` the cache
+    (`http://10.8.1.101:500X/v2/`) from a pod, and check `/v2/_catalog` for the repo. Retrying once the
+    cache is warm succeeds; `ghcr.io/dexidp/dex:v2.45.1` failed on `talos-cp2`, then pulled on that
+    same node minutes later. **Operational rule: pre-warm any new image before the change that needs
+    it** — `sudo podman pull --tls-verify=false 10.8.1.101:5000/<repo>:<tag>` — because otherwise the
+    riskiest fetch happens at the worst moment. Done for
+    `pomerium/ingress-controller:v0.33.1` ahead of the Pomerium Ingress cutover.
