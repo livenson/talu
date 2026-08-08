@@ -405,7 +405,7 @@ tenant `kubectl` access. The candidates, none free:
 1. **Tenant apiserver OIDC** — configure the tenant control planes to trust Dex directly, so users
    authenticate as themselves and the shared service account disappears entirely. Architecturally the
    cleanest (it removes a shared credential rather than relocating it), but it changes the kubectl UX
-   to an OIDC-capable kubeconfig.
+   to an OIDC-capable kubeconfig. **← CHOSEN; see §9.**
 2. **Federate the token** — make tenant apiservers trust the management cluster's service-account
    issuer, so a *local* ServiceAccount satisfies the Secret type. Preserves impersonation; a larger
    change to tenant control-plane configuration than the cutover itself.
@@ -465,3 +465,65 @@ From the v0.33.1 bundled manifest:
 4. Resolve the KaaS tenant-token blocker (§7.5) — it has no configuration-only answer, and the swap
    drops tenant kubectl access until it is settled.
 5. Then swap, with the Service/port/LB-IP changes of §7.7 in the same action.
+
+---
+
+## 9 · Decided: tenant clusters authenticate users directly, via OIDC
+
+§7.5 established that the KaaS `k8s-<tenant>` routes cannot be ported to Ingress mode as they stand,
+because Pomerium's `kubernetes_service_account_token_secret` requires a Secret type Kubernetes binds
+to a *local* ServiceAccount, and the token in question is minted inside the **tenant** cluster. Of the
+four candidates recorded there, **option 1 is chosen: configure tenant apiservers to trust Dex
+directly.**
+
+**The shared service account disappears rather than moving.** Today every tenant user reaches the
+tenant apiserver as one `pomerium` ServiceAccount, with Pomerium impersonating them
+(ClusterRole `pomerium-impersonation`, `impersonate` on `users` and `groups`). Under OIDC each user
+authenticates *as themselves*, so per-user RBAC and audit inside tenant clusters stop depending on an
+impersonation grant and a long-lived, non-expiring legacy token replicated into a ConfigMap. That is
+better than what the migration was trying to preserve, not merely equivalent — which is why this was
+preferred over federating the token (option 2) or patching upstream (option 3).
+
+### Verified feasible before deciding
+
+- **Kamaji can pass the flags.** `TenantControlPlane.spec.controlPlane.deployment.extraArgs.apiServer`
+  is a `[]string`. tenant-a currently has no `--oidc-*` flags.
+- **A pod can reach the issuer.** Probed from inside the cluster: `id.<domain>` resolves to the
+  floating IP via the CoreDNS template, the discovery document fetched in **4.5 s**, and **TLS
+  verified against system roots** — so no `--oidc-ca-file` is needed. The advertised issuer is exactly
+  `https://id.<domain>/dex`, which is what `--oidc-issuer-url` must match.
+- **The route can be a transparent proxy.** `bearer_token_format` is a per-route annotation, and
+  `default` means *"pass bearer tokens to upstream applications without interpreting them"* — the
+  `idp_*` modes consume them instead. So kubectl's own token reaches the apiserver untouched.
+
+### Shape
+
+- **Dex** gains a public `kubernetes` static client for the kubectl OIDC flow.
+- **Tenant apiserver** gets `--oidc-issuer-url=https://id.<domain>/dex`,
+  `--oidc-client-id=kubernetes`, `--oidc-username-claim=email`, `--oidc-groups-claim=groups`.
+- **The route** becomes an ordinary Ingress in `kaas-capi` naming the `tenant-a` Service:
+  `secure_upstream`, `tls_custom_ca_secret`, `allow_spdy`, `allow_websockets`, `timeout: 120s`,
+  plus `bearer_token_format: default` and `allow_public_unauthenticated_access`.
+- **Tenant RBAC** binds the user's email to a role, replacing the impersonation grant.
+
+Removed once proven: the tenant-side `pomerium` ServiceAccount and its `pomerium-impersonation`
+ClusterRole, and `patch-pomerium-route.py` — one of the four writers of `pomerium-config` (§7.6).
+
+### Costs, stated rather than buried
+
+- **Pomerium stops gating this route.** `allow_public_unauthenticated_access` means the IAP no longer
+  stands in front of the tenant apiserver; the apiserver authenticates every request itself and
+  returns 401 otherwise. This is the normal way a kube-apiserver is exposed, and per-user identity is
+  a net gain — but it is honestly one fewer layer, and should be recorded as such rather than
+  presented as a pure improvement.
+- **The kubectl UX changes.** Users need an OIDC-capable kubeconfig (an `oidc-login`/kubelogin exec
+  credential plugin) instead of today's flow. Headlamp is unaffected: `cluster-sync` merges the
+  client-certificate admin kubeconfigs and does not use this path.
+- **OIDC discovery hairpins through the public floating IP.** CoreDNS answers `*.<domain>` with the
+  floating IP, so the apiserver's back-channel to Dex leaves and re-enters via the same provider
+  forward whose flakiness caused the Let's Encrypt lockout (§3b). It works today — measured above —
+  but it is a dependency worth removing by answering that name with the **internal** ingress LB IP
+  instead, so the back-channel never leaves the cluster. Not yet tested, and deliberately not bundled
+  into this decision.
+- **A tenant apiserver restart** is required to add the flags, and the OIDC issuer must be reachable
+  at apiserver start or authentication fails for everyone on that tenant.
