@@ -657,3 +657,15 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     it** — `sudo podman pull --tls-verify=false 10.8.1.101:5000/<repo>:<tag>` — because otherwise the
     riskiest fetch happens at the worst moment. Done for
     `pomerium/ingress-controller:v0.33.1` ahead of the Pomerium Ingress cutover.
+
+    **Refinement found while installing CloudNativePG:** pre-warming is a *mitigation*, not a cure.
+    `registry:2` in proxy mode caches **blobs**, but still resolves a **tag → manifest** against the
+    upstream on each pull. So an image whose layers are already cached can still fail at tag
+    resolution when the WAN is down, and containerd then falls back to the upstream directly and
+    reports `dial tcp <ghcr-ip>:443: i/o timeout` — which again reads as "no egress", even for an
+    image you just warmed. Observed exactly this: `cloudnative-pg:1.30.0` warmed successfully through
+    the cache, and a node still failed to pull it minutes later. Retries converge (that is the
+    premise the mirror role is built on), so deleting the stuck pod cleared it. For anything where a
+    retry loop is not acceptable — the access-plane swap, for one — reference the image by **digest**
+    (no tag resolution) or push it into the **pushable** `talu.registry` on :5010, which is
+    authoritative rather than a proxy.

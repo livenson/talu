@@ -22,6 +22,10 @@
     - { role: phys_ingress,    tags: [ingress, lb] }
     # Harden in-cluster resolution of the access domain before the OIDC access plane needs it.
     - { role: phys_coredns,    tags: [coredns, dns, access] }
+    # The Pomerium session database must exist before the access plane is asked to use it
+    # (adr-pomerium-ingress.md §8) — Postgres, not the in-memory default that logs every user out on
+    # each restart.
+    - { role: phys_postgres,   tags: [postgres, database, access] }
     - { role: phys_identity,   tags: [identity, access] }
     - { role: phys_portal,     tags: [portal, ui] }
     - { role: phys_pkg_repo,   tags: [pkg-repo, packages] }
