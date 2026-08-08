@@ -5,3 +5,4 @@ kind: Kustomization
 resources:
   - deployment.yaml
   - alerts.yaml
+  - servicemonitor.yaml

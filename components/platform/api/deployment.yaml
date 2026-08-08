@@ -73,7 +73,12 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: talu-apiserver, namespace: talu-system }
+metadata:
+  name: talu-apiserver
+  namespace: talu-system
+  # The ServiceMonitor selects SERVICE labels, not pod labels — without this it matches nothing and
+  # the scrape silently never happens.
+  labels: { app: talu-apiserver }
 spec:
   selector: { app: talu-apiserver }
   ports: [{ name: https, port: 443, targetPort: 6443 }]
