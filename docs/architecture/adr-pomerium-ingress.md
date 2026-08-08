@@ -468,6 +468,75 @@ From the v0.33.1 bundled manifest:
 
 ---
 
+## 8 · Decided: session storage is PostgreSQL, provisioned by CloudNativePG
+
+§7.7 flagged `spec.storage` as an **unchosen default** rather than a transcription: the bundled
+controller manifest carries no storage configuration, and Pomerium's own default is in-memory, which
+its documentation calls *"not recommended for production"*. Left alone it would have been adopted by
+silence — the same way the chart registry ran without persistence for 8 days.
+
+**Decision: PostgreSQL, one cluster per Kubernetes cluster, provisioned by
+[CloudNativePG](https://cloudnative-pg.io), 3 instances on `ceph-block`.**
+
+### Why not the two cheaper options
+
+- **In-memory** loses every session on every Pomerium restart. That is not a rare event in this
+  design: the controller rolls the Deployment on configuration change, and the migration itself will
+  restart it repeatedly. "Everyone is logged out again" would be indistinguishable from the access
+  plane being broken, which is precisely the confusion this ADR exists to reduce.
+- **`storage.file`** trades that for a worse constraint. It needs an RWO PVC, which pins Pomerium to
+  one replica on one node with `strategy: Recreate` — exactly the shape being removed with the
+  autocert PVC (§7.7) — and it does not survive the loss of that node. It also sits awkwardly with
+  the bundled pod's `readOnlyRootFilesystem: true`.
+
+### Why this is not a new architectural bet
+
+[`disaster-recovery.md`](disaster-recovery.md) §3.4 already specifies **"Databroker: Postgres per
+cluster"** — with the explicit caveat that the docs say *don't* share one database across instances —
+and §3.5 concludes that the production IdP decision "dictates the Postgres-replication build that the
+whole access plane depends on". So Postgres under the access plane is a direction already chosen;
+this step executes it rather than opening it. Choosing in-memory now would mean building the DR story
+against a datastore the DR document does not assume.
+
+CloudNativePG is the operator because it is CNCF, Kubernetes-native, helm-installable like every
+other platform component here, and backs up to S3 — and Garage is already running for Velero, so the
+backup target exists. Three instances because this is the access plane's session store: if it is
+down, logins fail cluster-wide, and the rest of this control plane is already run three ways
+(3 control-plane nodes, 3-way Ceph).
+
+### The join is not plug-and-play
+
+Verified against both sides rather than assumed:
+
+- Pomerium's storage Secret must contain a key named exactly **`connection`** —
+  `StorageSecrets.Validate()` fails with *"storage secret %s should have %q key"* on anything else.
+- CloudNativePG generates `<cluster>-app`, of type `basic-auth`, with keys `username`, `password`,
+  `host`, `port`, `dbname`, `uri`, `jdbc-uri`, `fqdn-uri`, `pgpass` — a ready-to-use DSN, but under
+  `uri`, not `connection`.
+
+So a derived Secret is needed, the same pattern as the ssh-auth and bootstrap Secrets (§7.1): read
+CNPG's generated value, write it under the key Pomerium demands, and re-derive idempotently. The
+same caveat applies — if CNPG rotates the application password, the derived Secret must be
+re-derived, so it is written to be safe to re-run rather than created once.
+
+`storage.postgres` also takes optional `tlsSecret` and `caSecret`. CNPG issues its own server
+certificates, so wiring the CA is possible later; it is not a prerequisite for the swap and is left
+out of the first cut deliberately rather than silently.
+
+### What this costs, stated plainly
+
+It adds a **hard dependency and a new failure domain** to the access plane: Pomerium with no reachable
+database does not serve sessions. That is a real regression against in-memory, which has no
+dependencies at all — the trade is that in-memory fails *constantly and by design*, while Postgres
+fails rarely and recoverably. Three instances, `ceph-block` replication and S3 backups are what make
+that trade defensible; a single instance would not, which is why it was rejected.
+
+It is also a new component to operate, patch and back up. That cost is accepted here because the DR
+plan already requires Postgres under this plane, so the alternative is not "no Postgres" but
+"Postgres later, after building a DR story around something else".
+
+---
+
 ## 9 · Decided: tenant clusters authenticate users directly, via OIDC
 
 §7.5 established that the KaaS `k8s-<tenant>` routes cannot be ported to Ingress mode as they stand,
