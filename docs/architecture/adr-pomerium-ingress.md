@@ -119,11 +119,23 @@ rendered. This is a real loss of late binding, not a detail, and it lands differ
 - **Helm charts** (`talu-tenant`, `talu-vm`) take it as a value — done, with a `required` guard,
   because an empty domain renders `host: <slug>-dashboard.` and 404s in a way that looks like a
   Pomerium fault rather than a values fault.
-- **Kustomize components** (monitoring, Cilium, identity) have no equivalent, so the base-route
-  Ingresses need a decision: a kustomize `replacements` block sourced from the `talu-platform`
-  ConfigMap, or the owning ansible role templating the host as it already templates other values.
-  **Resolve this before writing those manifests** — it determines whether the base routes live in
-  `components/` at all, or have to be role-rendered like the current `config.yaml`.
+- **Kustomize components** (monitoring, Cilium, identity) have no equivalent. **Decided: the owning
+  ansible role templates the host**, as `phys_identity` already templates `lab_domain` today.
+
+  Two alternatives were considered and rejected:
+  - *kustomize `replacements` from the `talu-platform` ConfigMap* — replacements source from other
+    manifests **inside the same build**, not from a live cluster object, so this cannot read a
+    ConfigMap that only exists at runtime.
+  - *an `environments/<site>/` overlay patching the host* — idiomatic for this repo in general, but
+    the physical lab does not deploy through its environment overlay: `phys-stack.yml` applies each
+    component with `kubectl apply -k <component>` on the gateway, so an overlay-level patch would
+    never be evaluated. (`environments/rocky-phys/kustomization.yaml` exists only so `make kbuild`
+    has something to build.)
+
+  Role-templating costs nothing the ADR cares about: the routes are still **objects** — garbage
+  collected with their workload, one route per failure domain, one writer. "Rendered by Ansible" is
+  not the defect being removed; **"reconstructed by a job from labels, into a blob two things write"**
+  is.
 
 Getting it wrong reintroduces exactly what this ADR removes: a hostname that only one writer knows.
 
