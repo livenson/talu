@@ -64,6 +64,75 @@
   when: pom_ssh_ca.rc != 0
   changed_when: true
 
+# ── Ingress-controller prerequisite: the same SSH material as four ssh-auth Secrets ───────────────
+# The Pomerium CRD takes SSH material as SECRET REFERENCES (spec.ssh.userCaKeySecret,
+# spec.ssh.hostKeySecrets[]), not the file paths the current config.yaml uses, and the controller
+# REQUIRES each to be of type kubernetes.io/ssh-auth with the key `ssh-privatekey`:
+# SSHSecrets.Validate() rejects any other type and applySSH() errors on a missing key
+# (adr-pomerium-ingress.md §7.1). pomerium-ssh is ONE Opaque Secret with five keys, so it cannot be
+# referenced as-is — hence four derived Secrets, one per key.
+#
+# DERIVED, never regenerated. Every tenant VM already trusts the CA's public half via cloud-init
+# TrustedUserCAKeys, so a freshly generated CA would lock every existing VM out of SSH. The next task
+# proves the derived CA is still the one the VMs trust rather than assuming it.
+#
+# pomerium-ssh itself is deliberately left in place: the running Pomerium mounts it at /ssh, and it is
+# the rollback. Nothing reads these four until the controller exists, so this is inert.
+- name: Derive the ssh-auth Secrets the Pomerium CRD requires (from pomerium-ssh, never regenerated)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+    changed=0
+    emit() {   # <key in pomerium-ssh> <new Secret name>
+      {{ id_k }} -n pomerium get secret pomerium-ssh -o "jsonpath={.data.$1}" | base64 -d > "$T/k"
+      [ -s "$T/k" ] || { echo "FATAL: pomerium-ssh has no key '$1'" >&2; exit 1; }
+      want=$(base64 < "$T/k" | tr -d '\n')
+      cur=$({{ id_k }} -n pomerium get secret "$2" -o jsonpath='{.data.ssh-privatekey}' 2>/dev/null || true)
+      if [ "$cur" = "$want" ]; then echo "ok   $2 (unchanged)"; return; fi
+      {{ id_k }} -n pomerium create secret generic "$2" \
+        --type=kubernetes.io/ssh-auth --from-file=ssh-privatekey="$T/k" \
+        --dry-run=client -o yaml | {{ id_k }} apply -f - >/dev/null
+      echo "set  $2"
+      changed=1
+    }
+    emit user_ca      pomerium-ssh-user-ca
+    emit host_ed25519 pomerium-ssh-host-ed25519
+    emit host_rsa     pomerium-ssh-host-rsa
+    emit host_ecdsa   pomerium-ssh-host-ecdsa
+    echo "CHANGED=$changed"
+  args: { executable: /bin/bash }
+  register: pom_ssh_auth
+  changed_when: "'CHANGED=1' in pom_ssh_auth.stdout"
+  tags: [ssh-secrets]
+
+# Prove the end behaviour, don't infer it: the whole risk in the task above is a CA that is not the
+# one tenant VMs trust. Compare the public key derived from the new Secret against pomerium-user-ca —
+# the ConfigMap the tenant chart bakes into every VM's cloud-init. If these ever differ, every VM's
+# SSH breaks at the swap, so fail the play here rather than discover it after the cutover.
+- name: Verify the derived User CA is the key tenant VMs actually trust
+  ansible.builtin.shell: |
+    set -euo pipefail
+    T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+    {{ id_k }} -n pomerium get secret pomerium-ssh-user-ca \
+      -o jsonpath='{.data.ssh-privatekey}' | base64 -d > "$T/ca"
+    chmod 600 "$T/ca"
+    derived=$(ssh-keygen -y -f "$T/ca" | awk '{print $1" "$2}')
+    trusted=$({{ id_k }} -n pomerium get cm pomerium-user-ca \
+      -o "jsonpath={.data.user_ca\.pub}" | awk '{print $1" "$2}')
+    if [ "$derived" != "$trusted" ]; then
+      echo "FATAL: derived User CA is NOT the CA tenant VMs trust — every VM would lose SSH" >&2
+      exit 1
+    fi
+    for s in pomerium-ssh-host-ed25519 pomerium-ssh-host-rsa pomerium-ssh-host-ecdsa; do
+      t=$({{ id_k }} -n pomerium get secret "$s" -o jsonpath='{.type}')
+      [ "$t" = "kubernetes.io/ssh-auth" ] || { echo "FATAL: $s is type '$t'" >&2; exit 1; }
+    done
+    echo "User CA matches pomerium-user-ca; 3 host key Secrets are kubernetes.io/ssh-auth"
+  args: { executable: /bin/bash }
+  register: pom_ssh_auth_verify
+  changed_when: false
+  tags: [ssh-secrets]
+
 # The external domain is a per-environment VALUE (it tracks the floating IP). Both Pomerium's route
 # renderer (route-sync) and any other consumer read it from the talu-platform ConfigMap — the single
 # source of truth (gotcha #40), so a reinstall with a new IP updates one place. Without it route-sync's
