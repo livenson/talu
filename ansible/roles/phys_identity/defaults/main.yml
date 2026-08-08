@@ -13,3 +13,12 @@ acme_email: ""
 # The ingressClass the HTTP-01 solver publishes its challenge on. Must match the IngressClass the
 # Pomerium controller serves; the CRD reference names this as the way to solve HTTP-01 for Pomerium.
 acme_solver_ingress_class: pomerium
+
+# ── The Pomerium Ingress Controller's global config object (adr-pomerium-ingress.md §3b/§7.1) ────
+pomerium_namespace: pomerium
+pomerium_ingress_class: pomerium
+pomerium_bootstrap_secret: pomerium-bootstrap
+pomerium_idp_secret: pomerium-idp
+pomerium_storage_secret: pomerium-storage
+# STAGING until every route class is verified; production is a one-line change afterwards (§3b).
+pomerium_acme_cluster_issuer: letsencrypt-staging

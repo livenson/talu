@@ -1,0 +1,65 @@
+# ANSIBLE MANAGED — the `Pomerium` CRD instance, i.e. Pomerium's GLOBAL configuration under the
+# Ingress Controller (docs/architecture/adr-pomerium-ingress.md §3b/§7.1).
+#
+# Routes are deliberately absent: they CANNOT live here. The CRD is global settings only, and every
+# route is an Ingress owned by the component that owns its workload (§3b). If you came here looking
+# for where a route is defined, it is an Ingress with ingressClassName: {{ pomerium_ingress_class }}.
+#
+# The name MUST be `global`: the controller is started with --pomerium-config=global and reads no
+# other object (§7.7).
+#
+# Every secret reference below is NAMESPACE-QUALIFIED — util.ParseNamespacedName requires it, and a
+# bare name is an error. (Ingress ANNOTATIONS are the opposite: they take a bare name resolved in the
+# Ingress's own namespace. The asymmetry is real and easy to get wrong.)
+apiVersion: ingress.pomerium.io/v1
+kind: Pomerium
+metadata:
+  name: global
+  labels: {app.kubernetes.io/part-of: talu}
+spec:
+  # Pomerium serves this hostname itself; it gets NO Ingress. It is also the one hostname
+  # certificateAutoProvision does not cover (§7.3), so its certificate is supplied explicitly — see
+  # the `certificates` note below.
+  authenticate:
+    url: https://authenticate.{{ lab_domain }}
+
+  # shared_secret / cookie_secret / signing_key. Derived from the values the running Pomerium already
+  # uses, so sessions and inter-service auth stay continuous across the swap (§7.1).
+  secrets: {{ pomerium_namespace }}/{{ pomerium_bootstrap_secret }}
+
+  identityProvider:
+    provider: oidc
+    url: https://id.{{ lab_domain }}/dex
+    # client_id + client_secret; the CRD accepts only a Secret reference, which also lifts the Dex
+    # client secret out of the plaintext ConfigMap it lives in today.
+    secret: {{ pomerium_namespace }}/{{ pomerium_idp_secret }}
+    scopes: [openid, profile, email]
+
+  # cert-manager issues a certificate for every https route hostname that has none — Ingress-derived
+  # routes included (§7.3, verified against internal/certificate/convert.go). ssh:// routes are
+  # excluded by a scheme filter, so no ACME order is attempted for a bare VM name.
+  # STAGING while the cutover is iterated: lab-notes records an hour-long production rate-limit
+  # lockout caused by retrying against prod over the flaky inbound forward (§3b).
+  certificateAutoProvision:
+    clusterIssuer: {{ pomerium_acme_cluster_issuer }}
+
+  # Sessions in PostgreSQL, not the in-memory default that logs every user out on each restart (§8).
+  # The Secret carries the DSN under the key `connection`, derived from CloudNativePG's `uri`.
+  storage:
+    postgres:
+      secret: {{ pomerium_namespace }}/{{ pomerium_storage_secret }}
+
+  # Pomerium IS the SSH CA. These are SECRET REFERENCES, each of type kubernetes.io/ssh-auth keyed
+  # ssh-privatekey — the user CA is the same key every tenant VM already trusts via cloud-init
+  # TrustedUserCAKeys, carried across unchanged (§7.1).
+  ssh:
+    userCaKeySecret: {{ pomerium_namespace }}/pomerium-ssh-user-ca
+    hostKeySecrets:
+      - {{ pomerium_namespace }}/pomerium-ssh-host-ed25519
+      - {{ pomerium_namespace }}/pomerium-ssh-host-rsa
+      - {{ pomerium_namespace }}/pomerium-ssh-host-ecdsa
+
+# NOTE deliberately NOT set here: `certificates`. authenticate.<domain> needs an explicit TLS Secret
+# (§7.3), but a Secret listed here that does not exist is SILENTLY SKIPPED — a log line, no status
+# condition. Wiring it before the Secret exists would therefore hide the problem rather than surface
+# it, so it is added in the swap step alongside the Certificate that produces it.

@@ -410,3 +410,47 @@
     pr_public: true
     pr_preserve_host: true
   tags: [pomerium-routes]
+
+# ── The Pomerium CRD instance (global configuration for the Ingress Controller) ──────────────────
+# INERT until a controller runs: nothing reconciles this object while no Pomerium Ingress Controller
+# is watching, so it can be applied and reviewed against the live cluster before the swap (§6 step 3).
+# It is applied unconditionally for exactly that reason — reviewing it in git is not the same as
+# seeing it accepted by the apiserver.
+- name: Render the Pomerium CRD instance (global)
+  ansible.builtin.template:
+    src: pomerium-crd.yaml.j2
+    dest: "{{ talos_gen_dir }}/pomerium-crd.yaml"
+    mode: "0644"
+  tags: [pomerium-crd]
+
+- name: Apply the Pomerium CRD instance
+  ansible.builtin.command: "{{ id_k }} apply -f {{ talos_gen_dir }}/pomerium-crd.yaml"
+  register: pom_crd
+  changed_when: "'created' in pom_crd.stdout or 'configured' in pom_crd.stdout"
+  tags: [pomerium-crd]
+
+# Every reference in that object is a Secret the swap will need. A missing one fails at controller
+# start — i.e. with the access plane already replaced — and `certificates` entries are skipped
+# SILENTLY, so check presence here instead of discovering it during the cutover.
+- name: Verify every Secret the Pomerium CRD references actually exists
+  ansible.builtin.shell: |
+    set -euo pipefail
+    miss=0
+    for s in {{ pomerium_bootstrap_secret }} {{ pomerium_idp_secret }} {{ pomerium_storage_secret }} \
+             pomerium-ssh-user-ca pomerium-ssh-host-ed25519 pomerium-ssh-host-rsa pomerium-ssh-host-ecdsa; do
+      if {{ id_k }} -n {{ pomerium_namespace }} get secret "$s" >/dev/null 2>&1; then
+        printf '  ok      %s\n' "$s"
+      else
+        printf '  MISSING %s\n' "$s"; miss=1
+      fi
+    done
+    if {{ id_k }} get clusterissuer {{ pomerium_acme_cluster_issuer }} >/dev/null 2>&1; then
+      printf '  ok      clusterissuer/%s\n' "{{ pomerium_acme_cluster_issuer }}"
+    else
+      printf '  MISSING clusterissuer/%s\n' "{{ pomerium_acme_cluster_issuer }}"; miss=1
+    fi
+    [ "$miss" -eq 0 ] || { echo "FATAL: the Pomerium CRD references objects that do not exist" >&2; exit 1; }
+  args: { executable: /bin/bash }
+  register: pom_crd_refs
+  changed_when: false
+  tags: [pomerium-crd]
