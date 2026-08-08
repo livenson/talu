@@ -40,9 +40,31 @@ spec:
   template:
     metadata: { labels: { app: registry } }
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      # local-path is hostPath-backed, and hostPath does NOT honour fsGroup — the kubelet will not
+      # chown it. Without this the non-root registry gets EACCES on its own data directory, so the
+      # ownership fix has to be done explicitly, by the one container allowed to be root.
+      initContainers:
+        - name: chown-data
+          image: registry:2
+          command: ["chown", "-R", "65532:65532", "/var/lib/registry"]
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/registry }
       containers:
         - name: registry
           image: registry:2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
           ports: [{ containerPort: 5000 }]
           volumeMounts:
             - { name: data, mountPath: /var/lib/registry }
@@ -71,6 +93,11 @@ spec:
 # inside the cluster. (A NodePort would also be reachable from the host — the host routes to the
 # talos-docker node's eth0 over the podman bridge and Cilium's eBPF NodePort forwards it; add one if
 # you need host/off-cluster pushes.)
+#
+# PodSecurity: flux-system warns at `restricted`, and registry:2 defaults to running as root. It runs
+# as 65532 here instead, which needs the initContainer above because the volume is hostPath-backed.
+# readOnlyRootFilesystem is deliberately NOT set: registry:2 writes outside its data directory and
+# hardening that is not worth breaking the chart source every tenant HelmRelease resolves against.
 #
 # NOTE when pushing from a lab gateway: a host registry mirror may already bind :5000 there, so
 # `kubectl port-forward svc/registry 5000:5000` can silently serve the MIRROR instead (and a
