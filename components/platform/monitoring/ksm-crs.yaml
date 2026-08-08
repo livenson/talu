@@ -38,6 +38,11 @@ kube-state-metrics:
       - apiGroups: ["kamaji.clastix.io"]
         resources: ["tenantcontrolplanes"]
         verbs: ["list", "watch"]
+      # The Talu tenancy layer is read through its backing HelmReleases — see the long note by the
+      # HelmRelease resource below for why not through tenancy.talu.io directly.
+      - apiGroups: ["helm.toolkit.fluxcd.io"]
+        resources: ["helmreleases"]
+        verbs: ["list", "watch"]
   customResourceState:
     enabled: true
     config:
@@ -200,3 +205,43 @@ kube-state-metrics:
                 each:
                   type: Gauge
                   gauge: { path: [status, readyReplicas] }
+          # --- the typed Talu API, via the HelmRelease that backs every one of its objects ------
+          # NOT via tenancy.talu.io directly: kube-state-metrics' CustomResourceState is CRD-DRIVEN
+          # ("watches the installed CRDs for this purpose", and it needs list/watch on
+          # customresourcedefinitions). Our kinds are served by an AGGREGATED apiserver and have no
+          # CRD object, so CRS silently drops them — no error, no metrics. Upstream explicitly
+          # discourages CRS for objects without a CRD.
+          #
+          # HelmRelease IS a CRD, and the API server already stamps everything needed onto it, so the
+          # consumer vocabulary is recoverable from labels. This is also STRICTLY BETTER than reading
+          # the typed objects would have been: these series survive an APIService outage, so the
+          # "a tenant is not reconciling" alert cannot be blinded by the layer it monitors. It also
+          # covers GIT-MANAGED tenants, which carry talu.io/tenant but never talu.io/kind.
+          - groupVersionKind:
+              group: helm.toolkit.fluxcd.io
+              version: v2
+              kind: HelmRelease
+            metricNamePrefix: talu_api
+            labelsFromPath:
+              name: [metadata, name]
+              namespace: [metadata, namespace]
+              kind: [metadata, labels, "talu.io/kind"]
+              tenant: [metadata, labels, "talu.io/tenant"]
+              vm: [metadata, labels, "talu.io/vm"]
+              project_uuid: [metadata, labels, "talu.io/project-uuid"]
+            metrics:
+              - name: info
+                help: "A Talu tenancy object, seen through the HelmRelease that renders it. kind/vm are empty for Git-managed tenants."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      ready: [status, conditions, "[type=Ready]", status]
+              - name: ready
+                help: "Ready condition of the backing HelmRelease: True once the chart applied cleanly."
+                each:
+                  type: StateSet
+                  stateSet:
+                    labelName: status
+                    path: [status, conditions, "[type=Ready]", status]
+                    list: ["True", "False", "Unknown"]

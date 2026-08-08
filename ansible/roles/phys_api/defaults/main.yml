@@ -1,0 +1,12 @@
+---
+# The typed Talu API (docs/architecture/adr-api-layer.md) — OPT-IN, like phys_kaas_tenant.
+#
+# Tagged `never` in phys-stack.yml on purpose: enabling this changes a CLUSTER-WIDE failure domain.
+# An unavailable APIService makes discovery fail and stalls namespace deletion everywhere, so a site
+# turns it on deliberately, having read components/platform/api/README.md and its break-glass.
+api_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+api_src: "{{ playbook_dir }}/../components/platform/api"
+api_dir: "{{ talos_gen_dir }}/components/platform/api"
+# The image must already exist in a registry the NODES can pull from. The role does not build it —
+# see the README; on this lab that is the local pushable registry (phys_registry_mirror, :5010).
+api_image: "talu.registry/talu-apiserver:0.4.0"

@@ -20,7 +20,9 @@ import (
 	"k8s.io/component-base/cli"
 
 	generatedopenapi "github.com/livenson/talu/apiserver/pkg/generated/openapi"
+	clusterstore "github.com/livenson/talu/apiserver/pkg/registry/cluster"
 	tenantstore "github.com/livenson/talu/apiserver/pkg/registry/tenant"
+	vmstore "github.com/livenson/talu/apiserver/pkg/registry/vm"
 	taluserver "github.com/livenson/talu/apiserver/pkg/server"
 )
 
@@ -30,8 +32,10 @@ type options struct {
 	Authorization  *genericoptions.DelegatingAuthorizationOptions
 	// Audit matters here: this API mediates tenant creation, so "who created/deleted which tenant"
 	// must be answerable. components/platform/api/deployment.yaml passes --audit-log-path.
-	Audit  *genericoptions.AuditOptions
-	Tenant tenantstore.Options
+	Audit   *genericoptions.AuditOptions
+	Tenant  tenantstore.Options
+	VM      vmstore.Options
+	Cluster clusterstore.Options
 	// Kubeconfig is empty in production — the server runs in-cluster and uses its ServiceAccount.
 	// Set it to drive the server from outside the cluster (development, or probing the API before
 	// committing to an in-cluster image).
@@ -49,6 +53,15 @@ func newOptions() *options {
 		Tenant: tenantstore.Options{
 			ChartName: "talu-tenant", ChartNamespace: "flux-system",
 			DefaultsCM: "talu-tenant-defaults", Interval: "5m",
+		},
+		VM: vmstore.Options{
+			ChartName: "talu-vm", ChartNamespace: "flux-system",
+			DefaultsCM: "talu-vm-defaults", Interval: "5m", ReleaseNamespace: "tenants",
+			CASecretName: "pomerium-user-ca",
+		},
+		Cluster: clusterstore.Options{
+			ChartName: "talu-cluster", ChartNamespace: "flux-system",
+			DefaultsCM: "talu-cluster-defaults", Interval: "5m",
 		},
 	}
 }
@@ -102,7 +115,7 @@ func (o *options) config() (*taluserver.Config, error) {
 		return nil, err
 	}
 	c.SharedInformerFactory = informers.NewSharedInformerFactory(kc, 10*time.Minute)
-	return &taluserver.Config{Generic: c, Dynamic: dc, Tenant: o.Tenant}, nil
+	return &taluserver.Config{Generic: c, Dynamic: dc, Tenant: o.Tenant, VM: o.VM, Cluster: o.Cluster}, nil
 }
 
 func main() {
@@ -131,6 +144,9 @@ func main() {
 	fs.StringVar(&o.Tenant.ChartNamespace, "tenant-chart-namespace", o.Tenant.ChartNamespace, "Namespace of that OCIRepository.")
 	fs.StringVar(&o.Tenant.DefaultsCM, "tenant-defaults-configmap", o.Tenant.DefaultsCM, "ConfigMap holding the site's operator-owned tenant values.")
 	fs.StringVar(&o.Tenant.Interval, "helmrelease-interval", o.Tenant.Interval, "spec.interval on generated HelmReleases.")
+	fs.StringVar(&o.VM.ChartName, "vm-chart", o.VM.ChartName, "OCIRepository name of the talu-vm chart.")
+	fs.StringVar(&o.VM.ReleaseNamespace, "release-namespace", o.VM.ReleaseNamespace, "Namespace holding the generated HelmReleases (VMs map their tenant namespace onto it).")
+	fs.StringVar(&o.Cluster.ChartName, "cluster-chart", o.Cluster.ChartName, "OCIRepository name of the talu-cluster chart.")
 	fs.StringVar(&o.Kubeconfig, "kubeconfig", o.Kubeconfig, "Path to a kubeconfig for reaching the management API. Empty (the default) uses the in-cluster ServiceAccount.")
 
 	os.Exit(cli.Run(cmd))

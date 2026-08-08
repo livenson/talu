@@ -10,6 +10,33 @@ spec:
   groups:
     - name: talu.api.alerts
       rules:
+        # Read from the BACKING HelmRelease, not from tenancy.talu.io: KSM's CustomResourceState is
+        # CRD-driven and cannot see aggregated-API kinds at all. That turns out to be the better
+        # source anyway — these fire even while the APIService is down, and they cover Git-managed
+        # tenants (vm="" matches both API- and role-created tenant releases).
+        #
+        # Until now NOTHING alerted on a tenant failing to reconcile — only on the API being down.
+        # A tenant can sit Degraded indefinitely (bad values, missing chart, quota rejection) while
+        # every other signal stays green, because the platform itself is healthy.
+        - alert: TaluTenantDegraded
+          expr: talu_api_ready{namespace="tenants", vm="", status="False"} == 1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Tenant {{ $labels.name }} has not reconciled for 10m"
+            description: >-
+              The Tenant's backing HelmRelease is not Ready. Look at it directly —
+              `kubectl -n tenants describe helmrelease {{ $labels.name }}` — the
+              controller events carry the real error (bad values, unresolvable chart, quota).
+        - alert: TaluTenantVMDegraded
+          expr: talu_api_ready{namespace="tenants", vm!="", status="False"} == 1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "TenantVM {{ $labels.tenant }}/{{ $labels.vm }} has not reconciled for 15m"
+            description: >-
+              Longer window than the Tenant alert on purpose: a VM release legitimately churns while
+              CDI imports a disk. Check `kubectl -n tenants describe helmrelease {{ $labels.name }}`.
         - alert: TaluAPIServiceUnavailable
           expr: aggregator_unavailable_apiservice{name="v1alpha1.tenancy.talu.io"} == 1
           for: 2m

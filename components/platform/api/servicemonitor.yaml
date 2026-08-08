@@ -1,0 +1,50 @@
+# API-layer RED metrics, scraped straight off talu-apiserver's own /metrics.
+#
+# This is the pattern Crossplane recommends for its controllers: the component already knows its own
+# request rates, latencies and errors, so exporting them costs no extra watches and no extra
+# component. k8s.io/apiserver serves them for free — apiserver_request_total,
+# apiserver_request_duration_seconds, etc., labelled by verb/resource — so this needs no Go code.
+#
+# It COMPLEMENTS the HelmRelease-backed talu_api_* series rather than replacing them: those answer
+# "is this tenant reconciling" and survive an APIService outage; this answers "is the API itself slow
+# or erroring", which only the server can know. Availability is already covered separately by
+# aggregator_unavailable_apiservice (see alerts.yaml).
+# The server delegates authz to kube-apiserver, so scraping /metrics needs a real grant — Prometheus
+# is not special to it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: talu-apiserver-metrics-reader }
+rules:
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: talu-apiserver-metrics-reader }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: talu-apiserver-metrics-reader }
+subjects:
+  # Prometheus scrapes as its own ServiceAccount.
+  - kind: ServiceAccount
+    name: kube-prometheus-stack-prometheus
+    namespace: monitoring
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: talu-apiserver
+  namespace: talu-system
+  labels: { app.kubernetes.io/part-of: talu }
+spec:
+  selector:
+    matchLabels: { app: talu-apiserver }
+  endpoints:
+    - port: https
+      scheme: https
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        # The serving cert is issued by this component's own cert-manager CA, which exists only so
+        # kube-apiserver can verify it (cainjector puts it in the APIService caBundle). Teaching
+        # Prometheus that CA would mean mounting the secret into it for no security gain on a
+        # cluster-internal scrape, so verification is skipped here deliberately.
+        insecureSkipVerify: true
+      interval: 30s
