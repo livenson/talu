@@ -63,6 +63,30 @@ What changes:
 - **One writer.** The blob-merge conflict and #40 disappear by construction.
 - **Per-route blast radius.** A malformed `Ingress` breaks that route only.
 
+## 3b · Decided: the controller SUPERSEDES the current deployment
+
+Does the controller *manage* the existing Pomerium, or *replace* it? **It replaces it.**
+
+The rationale is the defect this ADR exists to fix. `route-sync`'s problem is not that it is a
+CronJob — it is that **two things own the same logic** and the last writer wins (lab-notes #40).
+Running the controller beside an Ansible-templated `config.yaml` would reproduce exactly that defect
+behind a better-looking mechanism, and briefly make it three writers instead of two.
+
+So there is one owner of Pomerium's configuration at every point in time:
+
+- `phys_identity` stops templating `pomerium-config`; Pomerium is deployed as the
+  **ingress-controller** image, which ships its own Deployment, Namespace and IngressClass.
+- Base routes (`perses`, `hubble`, `alertmanager`, `id`) and global settings move into the
+  **`Pomerium` CRD** — that CRD *is* the configuration, not a second source merged into one.
+- Per-workload routes are `Ingress` objects owned by the charts that create the workloads.
+
+**This changes the staging plan.** "Install alongside" is not available when the thing supersedes:
+the cutover is a single moment, not a gradual overlap. What can still be staged is everything
+*before* it — the Ingress objects and the `Pomerium` CRD can be created while the old Pomerium is
+still serving, because nothing reconciles them until the controller exists. Rollback is redeploying
+the old Pomerium from `phys_identity`, so its `config.yaml` template must be **kept** until the new
+path is proven — deleting it in the same change would remove the way back.
+
 ## 4 · Costs and risks — this is an access-plane migration
 
 The access plane is the highest-blast-radius component in Talu and the lab has **no console and no
@@ -93,13 +117,23 @@ renders, from values it already holds. Doing the annotation inversion first is e
 Deliberately incremental, with a rollback at every step. `route-sync` stays installed and suspendable
 throughout (`kubectl -n pomerium patch cronjob route-sync -p '{"spec":{"suspend":true}}'`).
 
-1. ~~Confirm v0.33 supports the Ingress controller and `ssh_upstream`.~~ **Done (2026-08-08)** — see
-   §4: SSH support predates v0.33 by a year, so no upgrade is a prerequisite.
-2. Install the controller and its CRDs **alongside** the existing config. Nothing routes through it.
-3. Migrate **one dashboard route** — lowest value at risk — and verify end to end.
-4. Migrate the per-VM `ssh://` routes; `talu-vm` grows an `Ingress`.
-5. Move the base routes into the `Pomerium` CRD.
-6. Delete `route-sync`, its RBAC, and the `talu.io/*-expose` label contract.
+Revised for §3b. Everything up to the swap is inert and reversible; the swap is the only step that
+can break access, so everything it needs exists and has been reviewed before it happens.
 
-Do **not** collapse steps 3–5: each is independently reversible, and the failure mode being avoided
-(404 on every host, no console) is exactly what a big-bang cutover produces.
+1. ~~Confirm v0.33 supports the Ingress controller and `ssh_upstream`.~~ **Done** — SSH support
+   predates v0.33 by a year (§4), so no Pomerium upgrade is a prerequisite.
+2. ~~Install the CRDs.~~ **Done** — applied on `rocky-phys` from the v0.33.1 manifest, **CRDs only**,
+   no controller. Verified non-destructive: 3 `ssh://` routes still live, Pomerium `Running`. The
+   manifest splits cleanly, which is what makes the rest stageable.
+3. **Prepare, inert.** `talu-vm` renders the ssh `Ingress` (done, `ingress.enabled: false`);
+   `talu-tenant` renders the dashboard `Ingress`; author the `Pomerium` CRD carrying base routes and
+   global settings. None of it reconciles while no controller runs, so all of it can be applied and
+   reviewed against the live cluster first.
+4. **Swap.** Replace the Pomerium Deployment with the ingress-controller image and set
+   `ingress.enabled: true`. Suspend `route-sync` in the same step — do **not** delete it yet.
+   Rollback: redeploy the old Pomerium from `phys_identity`, unsuspend.
+5. **Verify every route CLASS** before touching anything else: an ssh route, a tenant dashboard, each
+   base route, the public apex. A 404 on one class is recoverable at that moment and much less so
+   later.
+6. **Then** delete `route-sync`, its RBAC, the `talu.io/*-expose` label contract, and
+   `phys_identity`'s `config.yaml` template — in that order, once nothing depends on them.
