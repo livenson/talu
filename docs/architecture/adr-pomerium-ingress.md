@@ -127,6 +127,29 @@ rendered. This is a real loss of late binding, not a detail, and it lands differ
 
 Getting it wrong reintroduces exactly what this ADR removes: a hostname that only one writer knows.
 
+### `route-sync` is not merely redundant after the swap — it is hostile
+
+Worth stating precisely, because the obvious assumption ("it writes a ConfigMap nobody reads, so it
+is harmless") is wrong. Its last step is:
+
+```sh
+kubectl -n pomerium create cm pomerium-config ... | kubectl apply -f -
+kubectl -n pomerium rollout restart deploy/pomerium
+```
+
+It restarts Pomerium **whenever its render differs from the live ConfigMap**. After the swap the new
+Pomerium takes its configuration from the `Pomerium` CRD and `Ingress` objects, so `pomerium-config`
+is orphaned — route-sync's comparison then differs on every cycle, and it **restarts the new Pomerium
+every 2 minutes**. The Deployment keeps its name, so it is the *new* access plane being rolled, on a
+loop, looking exactly like a failed migration.
+
+Hence: suspend it in the same action as the swap, not afterwards.
+
+**And on keeping it as a rollback aid:** that argument is weaker than it looks. Rollback is
+`kubectl apply -k components/tenancy/flux` plus unsuspend — **git is the rollback**, not the running
+CronJob. Leaving it installed-but-suspended is simply cheaper under pressure than reinstating it
+mid-incident; it is not a dependency. Deleting it at step 6 loses nothing.
+
 ## 4 · Costs and risks — this is an access-plane migration
 
 The access plane is the highest-blast-radius component in Talu and the lab has **no console and no
@@ -170,8 +193,9 @@ can break access, so everything it needs exists and has been reviewed before it 
    global settings. None of it reconciles while no controller runs, so all of it can be applied and
    reviewed against the live cluster first.
 4. **Swap.** Replace the Pomerium Deployment with the ingress-controller image and set
-   `ingress.enabled: true`. Suspend `route-sync` in the same step — do **not** delete it yet.
-   Rollback: redeploy the old Pomerium from `phys_identity`, unsuspend.
+   `ingress.enabled: true`. **Suspend `route-sync` ATOMICALLY with the swap** — see the hazard below;
+   this is not housekeeping that can follow later. Do not delete it yet.
+   Rollback: redeploy the old Pomerium from `phys_identity`, unsuspend `route-sync`.
 5. **Verify every route CLASS** before touching anything else: an ssh route, a tenant dashboard, each
    base route, the public apex. A 404 on one class is recoverable at that moment and much less so
    later.
