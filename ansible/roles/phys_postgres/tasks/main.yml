@@ -1,0 +1,103 @@
+---
+- name: Work dir
+  ansible.builtin.file: { path: "{{ pg_dir }}", state: directory, mode: "0755" }
+
+- name: cnpg helm repo
+  ansible.builtin.command: "{{ pg_helm }} repo add cnpg https://cloudnative-pg.github.io/charts"
+  changed_when: false
+  failed_when: false
+
+# lab-notes #42: pull through the mirror, and pull BEFORE anything depends on it — a cold cache entry
+# fails the first fetch and looks exactly like having no egress.
+- name: Pull the CloudNativePG chart (retry through flaky egress)
+  ansible.builtin.command: "{{ pg_helm }} pull cnpg/cloudnative-pg --version {{ cnpg_chart_version }} -d {{ pg_dir }}"
+  args: { creates: "{{ pg_dir }}/cloudnative-pg-{{ cnpg_chart_version }}.tgz" }
+  register: pg_pull
+  retries: 15
+  delay: 5
+  until: pg_pull is not failed
+
+- name: Install CloudNativePG
+  ansible.builtin.command: >-
+    {{ pg_helm }} upgrade --install cnpg {{ pg_dir }}/cloudnative-pg-{{ cnpg_chart_version }}.tgz
+    --namespace {{ cnpg_namespace }} --create-namespace --wait --timeout 8m
+  environment: { KUBECONFIG: "{{ pg_kubeconfig }}" }
+  register: pg_install
+  changed_when: "'has been' in pg_install.stdout"
+
+- name: Wait for the CNPG Cluster CRD
+  ansible.builtin.command: "{{ pg_k }} wait --for condition=established crd/clusters.postgresql.cnpg.io --timeout=120s"
+  changed_when: false
+
+- name: Pomerium session database (CNPG Cluster)
+  ansible.builtin.shell: |
+    cat <<'EOF' | {{ pg_k }} apply -f -
+    apiVersion: postgresql.cnpg.io/v1
+    kind: Cluster
+    metadata:
+      name: {{ pom_db_name }}
+      namespace: {{ pom_db_namespace }}
+      labels: {app.kubernetes.io/part-of: talu}
+    spec:
+      instances: {{ pom_db_instances }}
+      imageName: {{ pom_db_image }}
+      storage:
+        size: {{ pom_db_storage }}
+        storageClass: {{ pom_db_storageclass }}
+      bootstrap:
+        initdb:
+          database: pomerium
+          owner: pomerium
+    EOF
+  args: { executable: /bin/bash }
+  register: pg_cluster
+  changed_when: "'created' in pg_cluster.stdout or 'configured' in pg_cluster.stdout"
+
+# FULLY QUALIFIED on purpose: `cluster` is ambiguous once Cluster API is installed — plain
+# `cluster/<name>` resolves to clusters.cluster.x-k8s.io and fails with a confusing NotFound for a
+# database that is in fact being created.
+- name: Wait for the database to be ready
+  ansible.builtin.command: >-
+    {{ pg_k }} -n {{ pom_db_namespace }} wait --for=condition=Ready
+    cluster.postgresql.cnpg.io/{{ pom_db_name }} --timeout=900s
+  changed_when: false
+
+# CNPG generates <cluster>-app (type basic-auth) with the DSN under `uri`; Pomerium's storage Secret
+# must have a key named exactly `connection` (StorageSecrets.Validate rejects anything else). Derive,
+# idempotently — a rotated app password must propagate rather than silently leave the access plane
+# pointing at a stale DSN.
+- name: Derive the Pomerium storage Secret (CNPG `uri` -> Pomerium `connection`)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    URI=$({{ pg_k }} -n {{ pom_db_namespace }} get secret {{ pom_db_name }}-app \
+      -o jsonpath='{.data.uri}' | base64 -d)
+    [ -n "$URI" ] || { echo "FATAL: {{ pom_db_name }}-app has no uri key" >&2; exit 1; }
+    WANT=$(printf '%s' "$URI" | base64 | tr -d '\n')
+    CUR=$({{ pg_k }} -n {{ pom_db_namespace }} get secret {{ pom_db_secret }} \
+      -o jsonpath='{.data.connection}' 2>/dev/null || true)
+    if [ "$CUR" = "$WANT" ]; then echo "ok   {{ pom_db_secret }} (unchanged)"; echo "CHANGED=0"; exit 0; fi
+    printf '%s' "$URI" | {{ pg_k }} -n {{ pom_db_namespace }} create secret generic {{ pom_db_secret }} \
+      --from-file=connection=/dev/stdin --dry-run=client -o yaml | {{ pg_k }} apply -f - >/dev/null
+    echo "set  {{ pom_db_secret }}"
+    echo "CHANGED=1"
+  args: { executable: /bin/bash }
+  register: pg_secret
+  changed_when: "'CHANGED=1' in pg_secret.stdout"
+  no_log: true
+
+# Prove the derived Secret is usable rather than merely present: the shape Pomerium demands, and a
+# DSN the database actually accepts. A wrong DSN here fails at Pomerium startup, i.e. during the swap.
+- name: Verify the storage Secret is valid and the database accepts it
+  ansible.builtin.shell: |
+    set -euo pipefail
+    KEY=$({{ pg_k }} -n {{ pom_db_namespace }} get secret {{ pom_db_secret }} \
+      -o jsonpath='{.data.connection}' 2>/dev/null || true)
+    [ -n "$KEY" ] || { echo "FATAL: {{ pom_db_secret }} has no 'connection' key" >&2; exit 1; }
+    PRIMARY=$({{ pg_k }} -n {{ pom_db_namespace }} get pods \
+      -l cnpg.io/cluster={{ pom_db_name }},role=primary -o jsonpath='{.items[0].metadata.name}')
+    [ -n "$PRIMARY" ] || { echo "FATAL: no primary pod for {{ pom_db_name }}" >&2; exit 1; }
+    {{ pg_k }} -n {{ pom_db_namespace }} exec "$PRIMARY" -- psql -tAc "select 1" >/dev/null
+    echo "storage Secret carries 'connection'; database primary $PRIMARY answers queries"
+  args: { executable: /bin/bash }
+  register: pg_verify
+  changed_when: false

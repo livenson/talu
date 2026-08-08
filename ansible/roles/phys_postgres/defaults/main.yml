@@ -1,0 +1,34 @@
+---
+# CloudNativePG + the Pomerium session database (docs/architecture/adr-pomerium-ingress.md §8).
+#
+# Pomerium's databroker keeps sessions here instead of in memory, so a Pomerium restart stops logging
+# everyone out. disaster-recovery.md §3.4 already specifies "Postgres per cluster", so this executes
+# an existing direction rather than opening a new one.
+pg_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+pg_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
+pg_helm: /usr/local/bin/helm
+pg_dir: "{{ talos_gen_dir }}/postgres"
+
+# chart 0.29.0 ships operator 1.30.0 — the latest stable line (2026-06-29). CNPG supports
+# several minors at once, so check the chart index rather than assuming the newest chart is
+# the newest operator: the mapping is not 1:1.
+cnpg_chart_version: "0.29.0"
+cnpg_namespace: cnpg-system
+
+# The Pomerium database. Three instances because this is the access plane's session store: if it is
+# down, logins fail cluster-wide, and the rest of this control plane is already run three ways.
+pom_db_name: pomerium-db
+pom_db_namespace: pomerium
+pom_db_instances: 3
+# PostgreSQL major, pinned EXPLICITLY rather than inherited from the operator default. The default
+# tracks whatever the installed operator shipped with — operator 1.27 defaulted to PG 17.5 while 17.10
+# and 18.4 were current — so leaving it implicit silently ties the database version to the operator
+# upgrade cadence. CNPG publishes the supported set in its ClusterImageCatalog.
+pom_db_image: "ghcr.io/cloudnative-pg/postgresql:18.4"
+pom_db_storage: 10Gi
+pom_db_storageclass: ceph-block
+# The Secret the Pomerium CRD's storage.postgres.secret points at. CNPG generates <cluster>-app with
+# the DSN under `uri`; Pomerium requires a key named exactly `connection`, so one is derived from the
+# other (§8). Re-derived on every run, because CNPG rotating the app password would otherwise leave
+# this stale and the access plane unable to reach its database.
+pom_db_secret: pomerium-storage

@@ -226,3 +226,37 @@
 - name: Show
   ansible.builtin.debug:
     msg: "{{ kt_accept.stdout_lines }}"
+
+# ── The tenant kubectl route as an Ingress (adr-pomerium-ingress.md §7.5/§9) ──────────────────────
+# Replaces the entry patch-pomerium-route.py writes into the shared config blob. The upstream is the
+# Service Kamaji already creates for this tenant control plane, so no new objects are needed — the
+# "bare IP" in the old route was only that Service's LoadBalancer address (§7.5).
+#
+# Pomerium does NOT gate this route: under §9 the tenant apiserver authenticates every request itself
+# via OIDC and 401s otherwise, so the proxy's job here is TLS + hostname + routing.
+# `bearer_token_format: default` is what makes that work — it passes the client's bearer token to the
+# upstream uninterpreted, where the idp_* modes would consume it and the apiserver would see nothing.
+#
+# Gated on kaas_oidc_enabled: without OIDC the apiserver has no way to authenticate a user, so a
+# public route would be an open apiserver. The two must move together.
+- name: Pomerium route — k8s-{{ kaas_tenant_name }} (Ingress)
+  ansible.builtin.include_role:
+    name: phys_pomerium_route
+  vars:
+    pr_name: "pomerium-route-k8s-{{ kaas_tenant_name }}"
+    pr_namespace: "{{ kaas_namespace }}"
+    pr_host: "k8s-{{ kaas_tenant_name }}.{{ lab_domain }}"
+    pr_service: "{{ kaas_tenant_name }}"
+    pr_port: 6443
+    pr_route_class: tenant-cluster
+    pr_public: true          # the apiserver authenticates; see above
+    pr_websockets: true
+    pr_extra_annotations:
+      secure_upstream: "true"
+      # bare name, resolved in this Ingress's namespace; must carry key ca.crt
+      tls_custom_ca_secret: "{{ kaas_tenant_name }}-ca"
+      allow_spdy: "true"      # kubectl exec/port-forward
+      timeout: "120s"         # long-running watches
+      bearer_token_format: "default"
+  when: kaas_oidc_enabled | default(false)
+  tags: [pomerium-routes]

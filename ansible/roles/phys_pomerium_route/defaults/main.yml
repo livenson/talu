@@ -35,3 +35,13 @@ pr_preserve_host: false
 # route hostname that has none, Ingress-derived routes included (§7.3, verified against
 # internal/certificate/convert.go). The one exception, authenticate.<domain>, is not a route and is
 # handled separately at the swap.
+
+# Extra Pomerium annotations, verbatim (key -> value, without the ingress.pomerium.io/ prefix).
+# The named flags above cover the base routes; this carries the rest — secure_upstream,
+# tls_custom_ca_secret, allow_spdy, timeout, bearer_token_format — without turning every route
+# setting into its own variable.
+# NOTE tls_custom_ca_secret and friends take a BARE secret name resolved in the Ingress's OWN
+# namespace, unlike the Pomerium CRD's fields, which want <namespace>/<name>.
+pr_extra_annotations: {}
+# Marks what kind of route this is, for the step-6 sweep.
+pr_route_class: base
