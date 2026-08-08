@@ -71,3 +71,14 @@ securityGroups: {}
 # Scoped RBAC: bind allowedUsers to a namespace-admin Role (needs apiserver OIDC to actually log in).
 rbac:
   enabled: true
+
+# Pomerium route as an Ingress object instead of a line in the shared config blob that the route-sync
+# CronJob renders (docs/architecture/adr-pomerium-ingress.md). OFF until the Ingress Controller
+# supersedes the current Pomerium deployment; with it off nothing changes.
+#
+# `domain` has no default on purpose: route-sync read it from the talu-platform ConfigMap, but an
+# Ingress host must be concrete at render time, so the site supplies it (tenant-defaults.yaml).
+ingress:
+  enabled: false
+  className: pomerium
+  domain: ""

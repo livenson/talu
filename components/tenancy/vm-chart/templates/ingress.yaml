@@ -1,0 +1,37 @@
+{{- if .Values.ingress.enabled }}
+{{- $root := . -}}
+# The VM's Pomerium route, as an OBJECT rather than a line rendered into a shared config blob by a
+# CronJob (docs/architecture/adr-pomerium-ingress.md). Pomerium's Ingress Controller serves native
+# SSH upstreams, so the ssh:// route the route-sync CronJob used to discover from a labelled Service
+# is expressed here, owned by the chart that creates the VM, and garbage-collected with it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.name }}-ssh
+  namespace: {{ .Values.slug }}
+  labels:
+    talu.io/vm: {{ .Values.name | quote }}
+    {{- include "talu-vm.labels" $root | nindent 4 }}
+  annotations:
+    # Native SSH: Pomerium proxies the connection itself and issues the short-lived cert.
+    ingress.pomerium.io/ssh_upstream: "true"
+    # Policy travels WITH the route. This is what makes adr-api-layer.md §10.1's allowedUsers
+    # inversion unnecessary: there is no annotation for a CronJob to scrape back out.
+    ingress.pomerium.io/policy: |
+      allow:
+        and:
+          - email:
+              in: [{{ join ", " .Values.allowedUsers }}]
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.name }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.name }}-ssh
+                port: { number: 22 }
+{{- end }}

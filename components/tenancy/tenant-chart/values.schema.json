@@ -142,6 +142,26 @@
         }
       },
       "additionalProperties": false
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "OPERATOR. Render the tenant dashboard's Pomerium route as an Ingress (adr-pomerium-ingress.md) instead of relying on the route-sync CronJob. Off until the Ingress Controller supersedes the current Pomerium deployment.",
+      "x-talu-owner": "operator",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "className": {
+          "type": "string",
+          "default": "pomerium"
+        },
+        "domain": {
+          "type": "string",
+          "description": "Site domain for the route host. No default: an Ingress host must be concrete at render time, whereas route-sync resolved it at run time from the talu-platform ConfigMap."
+        }
+      }
     }
   },
   "additionalProperties": false

@@ -1,0 +1,35 @@
+{{- if and .Values.ingress.enabled .Values.dashboards.enabled }}
+{{- $root := . -}}
+{{- $domain := required "ingress.domain is required when ingress.enabled (the route host must be concrete; route-sync got it from the talu-platform ConfigMap)" .Values.ingress.domain -}}
+# The tenant dashboard's Pomerium route, as an object owned by the chart that creates the dashboard
+# (docs/architecture/adr-pomerium-ingress.md) rather than a line the route-sync CronJob discovers
+# from a talu.io/dashboard-expose Service.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.slug }}-dashboard
+  namespace: {{ .Values.slug }}
+  labels:
+    {{- include "talu-tenant.labels" $root | nindent 4 }}
+  annotations:
+    # Policy travels WITH the route, from the members the chart already holds — nothing to scrape
+    # back out of an annotation later.
+    ingress.pomerium.io/policy: |
+      allow:
+        and:
+          - email:
+              in: [{{ join ", " .Values.allowedUsers }}]
+    ingress.pomerium.io/allow_websockets: "true"
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.slug }}-dashboard.{{ $domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.slug }}-dashboard
+                port: { number: 8080 }
+{{- end }}
