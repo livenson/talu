@@ -596,3 +596,33 @@ ClusterRole, and `patch-pomerium-route.py` — one of the four writers of `pomer
   into this decision.
 - **A tenant apiserver restart** is required to add the flags, and the OIDC issuer must be reachable
   at apiserver start or authentication fails for everyone on that tenant.
+
+### 9.1 · Image pulls on the lab: a cold-cache trap, and a swap prerequisite now closed
+
+Attempting §9 on `rocky-phys` produced `ImagePullBackOff` on three different registries and an initial
+diagnosis of *"the nodes cannot pull images at all"*. **That was wrong, and it is recorded here
+because the wrong version is the more tempting conclusion.**
+
+What is actually true:
+
+- The lab **has a working pull-through mirror** — one `registry:2` proxy per upstream on the gateway
+  (`phys_registry_mirror`, ports 5000–5006 plus the pushable 5010), with the Talos machineconfig
+  pointing every node at it. The gateway reaches all four registries; the caches proxy real manifests;
+  the nodes reach the caches in well under a second.
+- The failure mode is a **cold cache entry**. The first fetch of an uncached blob crosses the flaky
+  WAN; when that times out, containerd falls back to the upstream registry *directly*, which fails the
+  same way, and the pod lands in `ImagePullBackOff`. Retrying after the cache warms succeeds.
+- Proven both directions: `ghcr.io/dexidp/dex:v2.45.1` failed to pull on `talos-cp2`, then pulled
+  successfully on that same node once the cache held it — and Dex now runs there.
+
+So the real hazard for step 4 was narrower than "cannot pull", and worse in one specific way: an image
+that is in **no** cache gets its first, most failure-prone fetch attempted at the exact moment the
+access plane is being replaced. `pomerium/ingress-controller:v0.33.1` was in no cache.
+
+**Closed:** the image has been pulled through the mirror and is now cached
+(`pomerium/ingress-controller` present in the docker.io cache catalog; manifest serves `200`). The
+general rule it implies is worth keeping: **pre-warm any new image into the mirror before the change
+that depends on it**, rather than discovering the WAN's mood during a cutover.
+
+The same applies to the tenant-side half of §9, which restarts the tenant apiserver: those images are
+already cached (they are running), and a rescheduled pod now pulls through a warm mirror.

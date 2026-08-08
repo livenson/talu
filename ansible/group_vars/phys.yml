@@ -93,4 +93,13 @@ dex_user_email: "alice@talu.local"
 dex_user_name: "alice"
 dex_user_bcrypt: "$2a$10$Yq.nLkSyi65yz/8AdmXpW.FEgnh6qXPfmuJDKLDDz67UoJJJKlpea"
 dex_version: "v2.45.1"
+
+# Managed (KaaS) tenant clusters authenticate their users DIRECTLY against Dex rather than reaching
+# the apiserver as one shared `pomerium` ServiceAccount with Pomerium impersonating them
+# (docs/architecture/adr-pomerium-ingress.md §9). Enabled here because it is validated end to end on
+# this lab: a real authorization-code + PKCE login yields an id_token the tenant apiserver accepts,
+# resolving the user to the raw email and applying per-user RBAC.
+# NOTE this restarts the tenant control plane when first applied, and lab-notes #42 applies — warm the
+# apiserver images into the mirror first, or the rolling update stalls on a cold pull.
+kaas_oidc_enabled: true
 pomerium_idp_client_secret: "pomerium-secret-phys"

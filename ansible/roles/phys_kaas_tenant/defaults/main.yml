@@ -39,3 +39,12 @@ kaas_datastore: "{{ (kaas_tenant_name + '-local') if kaas_dedicated_etcd else 'd
 
 # Pomerium kubectl access (impersonation model). The admin user gets cluster-admin inside the tenant.
 kaas_admin_user: "{{ dex_user_email }}"
+
+# ── Tenant user authentication (adr-pomerium-ingress.md §9) ──────────────────────────────────────
+# OFF by default: turning it on adds --oidc-* args to the tenant apiserver, which restarts the tenant
+# control plane. The issuer must be reachable from the apiserver pods when they start.
+# When enabled, the shared `pomerium` ServiceAccount + impersonation path becomes redundant — but it
+# is deliberately NOT removed here; that happens once a real kubectl login is proven end to end.
+kaas_oidc_enabled: false
+kaas_oidc_issuer_url: "https://id.{{ lab_domain }}/dex"
+kaas_oidc_client_id: "kubernetes"

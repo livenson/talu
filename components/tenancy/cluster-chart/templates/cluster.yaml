@@ -67,6 +67,17 @@ spec:
     preferredAddressTypes: [InternalIP]
   network:
     serviceType: LoadBalancer   # LB-IPAM assigns the endpoint from the tenant pool
+{{- if .Values.controlPlane.oidc.enabled }}
+{{- $iss := required "controlPlane.oidc.issuerUrl is required when controlPlane.oidc.enabled" .Values.controlPlane.oidc.issuerUrl }}
+  # Set at the CAPI level, NOT on the TenantControlPlane: the TCP is owned by (and reconciled from)
+  # this KamajiControlPlane, so args written onto the TCP directly would be reverted.
+  apiServer:
+    extraArgs:
+      - --oidc-issuer-url={{ $iss }}
+      - --oidc-client-id={{ .Values.controlPlane.oidc.clientId | default "kubernetes" }}
+      - --oidc-username-claim=email
+      - --oidc-groups-claim={{ .Values.controlPlane.oidc.groupsClaim | default "groups" }}
+{{- end }}
   version: {{ .Values.kubernetesVersion | default "v1.34.1" }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1

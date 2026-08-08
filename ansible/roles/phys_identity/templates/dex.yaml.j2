@@ -19,6 +19,20 @@ data:
         name: Pomerium
         secret: {{ pomerium_idp_client_secret }}
         redirectURIs: [https://authenticate.{{ lab_domain }}/oauth2/callback]
+      # kubectl against MANAGED (KaaS) tenant clusters, which authenticate users directly against Dex
+      # rather than through Pomerium impersonation (adr-pomerium-ingress.md §9). A PUBLIC client: the
+      # authorization-code + PKCE flow kubectl/kubelogin uses has nowhere safe to keep a secret, and
+      # PKCE is what protects the exchange instead. The loopback redirects are kubelogin's defaults;
+      # the oob entry covers headless use.
+      - id: {{ kaas_oidc_client_id | default('kubernetes') }}
+        name: Kubernetes
+        public: true
+        redirectURIs:
+          - http://localhost:8000
+          - http://127.0.0.1:8000
+          - http://localhost:18000
+          - http://127.0.0.1:18000
+          - urn:ietf:wg:oauth:2.0:oob
     enablePasswordDB: true
     staticPasswords:
       - email: {{ dex_user_email }}
