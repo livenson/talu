@@ -268,6 +268,78 @@
   changed_when: false
   tags: [idp-secret]
 
+# ── Ingress-controller prerequisite: ACME ClusterIssuers ─────────────────────────────────────────
+# certificateAutoProvision hands issuance to cert-manager (adr-pomerium-ingress.md §3b), so the
+# issuers must exist before the swap. phys_cert_manager deliberately ships only the `selfsigned`
+# root and leaves ACME to "the layers that need them" — this is that layer.
+#
+# BOTH are created, and staging is the one to iterate against. lab-notes records an hour-long Let's
+# Encrypt lockout here ("too many failed authorizations (5) per hostname per hour") caused by
+# retrying against PROD over the flaky inbound :80/:443 forward, after which Pomerium served the
+# wrong hostname certificate and broke OIDC login even for hosts whose certs were fine. Staging has
+# far higher limits and the same failure modes, so it is where the cutover gets debugged.
+#
+# HTTP-01 is solved through the `pomerium` ingressClass, which is the path the CRD reference names.
+# That means the solver only works ONCE the controller is serving — see the note below on why no
+# Certificate is created yet.
+#
+# Creating an issuer is itself inert: cert-manager registers an ACME account and stores its key, and
+# issues nothing until a Certificate asks. That registration doubles as an early, cheap check that
+# ACME is reachable at all from this cluster.
+- name: ACME ClusterIssuers (Let's Encrypt staging + production)
+  ansible.builtin.shell: |
+    cat <<'EOF' | {{ id_k }} apply -f -
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    metadata: {name: letsencrypt-staging}
+    spec:
+      acme:
+        server: https://acme-staging-v02.api.letsencrypt.org/directory
+        {{ ('email: ' ~ acme_email) if acme_email else '' }}
+        privateKeySecretRef: {name: letsencrypt-staging-account-key}
+        solvers:
+          - http01: {ingress: {ingressClassName: {{ acme_solver_ingress_class }}}}
+    ---
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    metadata: {name: letsencrypt-prod}
+    spec:
+      acme:
+        server: https://acme-v02.api.letsencrypt.org/directory
+        {{ ('email: ' ~ acme_email) if acme_email else '' }}
+        privateKeySecretRef: {name: letsencrypt-prod-account-key}
+        solvers:
+          - http01: {ingress: {ingressClassName: {{ acme_solver_ingress_class }}}}
+    EOF
+  args: { executable: /bin/bash }
+  register: pom_acme
+  changed_when: "'created' in pom_acme.stdout or 'configured' in pom_acme.stdout"
+  tags: [acme-issuers]
+
+# An issuer that exists but never reached Ready is the silent-failure shape again: it looks installed
+# and fails at the moment a certificate is actually needed. Registration requires egress to the ACME
+# endpoint, so this doubles as the reachability check — and it is far better to learn that here than
+# during the cutover.
+- name: Wait for both ACME ClusterIssuers to become Ready
+  ansible.builtin.command: >-
+    {{ id_k }} wait --for=condition=Ready clusterissuer/letsencrypt-staging
+    clusterissuer/letsencrypt-prod --timeout=180s
+  register: pom_acme_ready
+  changed_when: false
+  tags: [acme-issuers]
+
+# NOTE — deliberately NOT created here: the Certificate for authenticate.<domain>.
+#
+# §7.3: that hostname is the one route certificateAutoProvision does NOT cover (settings records
+# contribute certificate names, never route names, so it is never "missing"), so it needs an explicit
+# Secret referenced from the CRD certificates list. But a Certificate is NOT inert — cert-manager
+# starts an Order immediately, the HTTP-01 solver publishes on the `pomerium` ingressClass, and until
+# the controller is serving nothing answers the challenge. It would fail, retry, and spend exactly
+# the failed-authorization budget that caused the lockout above.
+#
+# So it belongs to the swap step, against STAGING first. Creating it now would be the one part of
+# this preparation that is not free.
+
 # The external domain is a per-environment VALUE (it tracks the floating IP). Both Pomerium's route
 # renderer (route-sync) and any other consumer read it from the talu-platform ConfigMap — the single
 # source of truth (gotcha #40), so a reinstall with a new IP updates one place. Without it route-sync's

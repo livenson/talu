@@ -5,3 +5,11 @@
 id_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
 id_kubeconfig: "{{ talos_gen_dir }}/kubeconfig"
 pomerium_version: "v0.33.0"        # matches all.yml pin
+
+# ACME contact address for the Let's Encrypt ClusterIssuers (adr-pomerium-ingress.md §3b). Optional:
+# left empty the issuers register without a contact, which LE permits. Set it per site to get expiry
+# warnings — the lab has no real mailbox, so it stays empty here rather than carrying a fake address.
+acme_email: ""
+# The ingressClass the HTTP-01 solver publishes its challenge on. Must match the IngressClass the
+# Pomerium controller serves; the CRD reference names this as the way to solve HTTP-01 for Pomerium.
+acme_solver_ingress_class: pomerium
