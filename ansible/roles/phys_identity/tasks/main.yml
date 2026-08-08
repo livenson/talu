@@ -254,12 +254,14 @@
     ours=$({{ id_k }} -n pomerium get secret pomerium-idp -o jsonpath='{.data.client_secret}' \
       | base64 -d | sha256sum | cut -d' ' -f1)
     # Capture first, then hash with printf: `awk print` appends a newline, and hashing "secret\n"
-    # against the Secret's raw "secret" mismatches every time.
+    # against the raw "secret" held in the Secret mismatches every time.
+    # (No apostrophes in this block: ansible split_args counts quotes across comments too, and an
+    # unbalanced one fails the whole play with "unbalanced jinja2 block or quotes".)
     dexsec=$({{ id_k }} -n identity get cm dex-config -o "jsonpath={.data.config\.yaml}" \
       | awk '/- id: pomerium$/{f=1} f && /secret:/{print $2; exit}')
-    [ -n "$dexsec" ] || { echo "FATAL: could not read Dex's pomerium client secret" >&2; exit 1; }
+    [ -n "$dexsec" ] || { echo "FATAL: could not read the Dex pomerium client secret" >&2; exit 1; }
     dex=$(printf '%s' "$dexsec" | sha256sum | cut -d' ' -f1)
-    [ "$ours" = "$dex" ] || { echo "FATAL: pomerium-idp client_secret != Dex's — every OIDC login would fail" >&2; exit 1; }
+    [ "$ours" = "$dex" ] || { echo "FATAL: pomerium-idp client_secret does not match Dex — every OIDC login would fail" >&2; exit 1; }
     echo "IdP client Secret OK: client_id=pomerium, client_secret matches the LIVE Dex client entry"
   args: { executable: /bin/bash }
   register: pom_idp_verify
