@@ -330,7 +330,10 @@ an LE production issuer both have to exist before the swap, with staging used wh
   - **`k8s-<tenant>` — the KaaS tenant kube-apiserver routes** (two live), and
   - **`clusters` — Headlamp.**
 
-The live blob is **11 routes across 6 classes**. Staging step 5 ("verify every route class") was
+The live blob is **12 routes across 6 classes** (an earlier revision of this section said 11 — a
+miscount; the apex appears twice, once from the base and once from a `talu.io/landing-expose`
+Service). Note also that **no tenant dashboard route is live**, so that class has never run in anger
+here and step 5 will be exercising it for the first time. Staging step 5 ("verify every route class") was
 written against a list that would have missed three of them.
 
 ### 7.5 · The KaaS `k8s-<tenant>` routes are the hardest port, and are not in the plan
