@@ -41,3 +41,10 @@ logging:
   consoleLevel: info       # Tier 1: journald→console max level
   agent: false             # Tier 2: run the in-guest agent (needs the tenant's logs-gateway)
   paths: []
+
+# Pomerium route as an Ingress object instead of a line in the shared config blob that the route-sync
+# CronJob renders (docs/architecture/adr-pomerium-ingress.md). OFF by default until the Ingress
+# Controller is deployed and serving — with it off, the route-sync path is unchanged.
+ingress:
+  enabled: false
+  className: pomerium

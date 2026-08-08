@@ -3,7 +3,11 @@
   "title": "Talu VM API",
   "description": "The typed contract for one Talu tenant VM. Ownership is marked with x-talu-owner exactly as in talu-tenant: 'consumer' = the integrator writes it per VM; 'operator' = the site supplies it once from environments/<site>/tenant-defaults.yaml. See docs/architecture/adr-api-layer.md §4 and §10.1.",
   "type": "object",
-  "required": ["projectUuid", "slug", "name"],
+  "required": [
+    "projectUuid",
+    "slug",
+    "name"
+  ],
   "additionalProperties": false,
   "properties": {
     "projectUuid": {
@@ -22,7 +26,9 @@
     "allowedUsers": {
       "type": "array",
       "description": "The tenant's members, stamped on the ssh Service for the Pomerium route renderer. Comes from the Tenant, not chosen per VM.",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "x-talu-owner": "consumer"
     },
     "name": {
@@ -32,10 +38,19 @@
       "maxLength": 63,
       "x-talu-owner": "consumer"
     },
-    "principal": { "type": "string", "description": "Guest OS user / SSH cert principal.", "x-talu-owner": "consumer" },
+    "principal": {
+      "type": "string",
+      "description": "Guest OS user / SSH cert principal.",
+      "x-talu-owner": "consumer"
+    },
     "size": {
       "type": "string",
-      "enum": ["", "small", "medium", "large"],
+      "enum": [
+        "",
+        "small",
+        "medium",
+        "large"
+      ],
       "description": "Named size -> VirtualMachineClusterInstancetype talu-<size> (components/tenancy/sizes/). Preferred over memory: it is the only way this API expresses vCPU, and KubeVirt enforces it. Mutually exclusive with memory.",
       "x-talu-owner": "consumer"
     },
@@ -44,18 +59,48 @@
       "description": "DEPRECATED legacy sizing, e.g. 1536Mi. Cannot express vCPU — KubeVirt defaults the guest to 1. Kept so pre-split tenants render unchanged; use size instead. Mutually exclusive with size.",
       "x-talu-owner": "consumer"
     },
-    "guestSecrets": { "type": "string", "description": "Written to /etc/talu/app.env in the guest.", "x-talu-owner": "consumer" },
+    "guestSecrets": {
+      "type": "string",
+      "description": "Written to /etc/talu/app.env in the guest.",
+      "x-talu-owner": "consumer"
+    },
     "securityGroups": {
       "type": "array",
       "description": "Names of the tenant's security groups this VM joins. Rendered as talu.io/sg.<name> labels that the tenant's CiliumNetworkPolicies select on.",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "x-talu-owner": "consumer"
     },
-    "source": { "type": "string", "enum": ["dataSource", "containerDisk"], "description": "OPERATOR — which image mechanism the site's catalog uses.", "x-talu-owner": "operator" },
-    "image": { "type": "string", "description": "OPERATOR — raw registry reference (source=containerDisk).", "x-talu-owner": "operator" },
-    "dataSource": { "type": "string", "description": "OPERATOR — golden-image catalog entry (source=dataSource).", "x-talu-owner": "operator" },
-    "dataSourceNamespace": { "type": "string", "description": "OPERATOR — where the catalog lives.", "x-talu-owner": "operator" },
-    "rootDiskSize": { "type": "string", "description": "Persistent root PVC size (source=dataSource).", "x-talu-owner": "consumer" },
+    "source": {
+      "type": "string",
+      "enum": [
+        "dataSource",
+        "containerDisk"
+      ],
+      "description": "OPERATOR — which image mechanism the site's catalog uses.",
+      "x-talu-owner": "operator"
+    },
+    "image": {
+      "type": "string",
+      "description": "OPERATOR — raw registry reference (source=containerDisk).",
+      "x-talu-owner": "operator"
+    },
+    "dataSource": {
+      "type": "string",
+      "description": "OPERATOR — golden-image catalog entry (source=dataSource).",
+      "x-talu-owner": "operator"
+    },
+    "dataSourceNamespace": {
+      "type": "string",
+      "description": "OPERATOR — where the catalog lives.",
+      "x-talu-owner": "operator"
+    },
+    "rootDiskSize": {
+      "type": "string",
+      "description": "Persistent root PVC size (source=dataSource).",
+      "x-talu-owner": "consumer"
+    },
     "sshUserCaPubKey": {
       "type": "string",
       "description": "OPERATOR. Pomerium SSH User CA public key. Injected at reconcile time from ConfigMap pomerium-user-ca — never written by a consumer.",
@@ -67,10 +112,18 @@
       "x-talu-owner": "operator",
       "additionalProperties": false,
       "properties": {
-        "package": { "type": "boolean" },
-        "baked": { "type": "boolean" },
-        "aptRepoLine": { "type": "string" },
-        "aptOrigin": { "type": "string" }
+        "package": {
+          "type": "boolean"
+        },
+        "baked": {
+          "type": "boolean"
+        },
+        "aptRepoLine": {
+          "type": "string"
+        },
+        "aptOrigin": {
+          "type": "string"
+        }
       }
     },
     "logging": {
@@ -78,9 +131,44 @@
       "additionalProperties": false,
       "description": "Guest-side logging. Tier 1 (serial console) is always on; Tier 2 (agent) needs the tenant's logs-gateway, rendered by talu-tenant.",
       "properties": {
-        "consoleLevel": { "type": "string", "enum": ["debug", "info", "notice", "warning", "err"], "x-talu-owner": "consumer" },
-        "agent": { "type": "boolean", "x-talu-owner": "consumer" },
-        "paths": { "type": "array", "items": { "type": "string" }, "x-talu-owner": "consumer" }
+        "consoleLevel": {
+          "type": "string",
+          "enum": [
+            "debug",
+            "info",
+            "notice",
+            "warning",
+            "err"
+          ],
+          "x-talu-owner": "consumer"
+        },
+        "agent": {
+          "type": "boolean",
+          "x-talu-owner": "consumer"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-talu-owner": "consumer"
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "OPERATOR. Render the VM's Pomerium route as an Ingress (adr-pomerium-ingress.md) instead of relying on the route-sync CronJob. Off until the Ingress Controller is serving.",
+      "x-talu-owner": "operator",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "className": {
+          "type": "string",
+          "default": "pomerium"
+        }
       }
     }
   }
