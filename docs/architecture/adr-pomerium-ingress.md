@@ -76,9 +76,31 @@ So there is one owner of Pomerium's configuration at every point in time:
 
 - `phys_identity` stops templating `pomerium-config`; Pomerium is deployed as the
   **ingress-controller** image, which ships its own Deployment, Namespace and IngressClass.
-- Base routes (`perses`, `hubble`, `alertmanager`, `id`) and global settings move into the
-  **`Pomerium` CRD** — that CRD *is* the configuration, not a second source merged into one.
+- **Every route becomes an `Ingress`** — including the base ones. Checked against the
+  [CRD reference](https://github.com/pomerium/ingress-controller/blob/main/reference.md):
+  **routes cannot be expressed in the `Pomerium` CRD at all**; it is global configuration only. An
+  earlier draft of this ADR said base routes "move into the CRD" — that was wrong, and it changes
+  step 5 below.
+- The **`Pomerium` CRD holds global settings**: `identityProvider`, `authenticate` (required),
+  `secrets` (required — `shared_secret`/`cookie_secret`/`signing_key`), `certificates`,
+  `certificateAutoProvision`, `storage`, cookie/DNS/timeout/header settings, and an `ssh` block with
+  `hostKeySecrets` and `userCaKeySecret`.
 - Per-workload routes are `Ingress` objects owned by the charts that create the workloads.
+
+Two consequences of that correction, both good:
+
+- **Base routes get owners.** `perses` and `alertmanager` belong to the monitoring component,
+  `hubble` to Cilium, `id` to identity — each renders its own `Ingress`, exactly as tenants render
+  theirs. Nothing is left in a shared blob for a job to reconstruct.
+- **Talu's Pomerium-as-SSH-CA design maps onto the CRD directly** (`ssh.hostKeySecrets`,
+  `ssh.userCaKeySecret`), which was the piece most at risk of not being expressible. The `pomerium-ssh`
+  Secret and the `pomerium-user-ca` ConfigMap that tenant VMs already trust keep their roles.
+
+One item this raises that is NOT a detail: Talu currently uses Pomerium **autocert** (Let's Encrypt),
+and the CRD offers `certificates` (explicit TLS Secrets) and `certificateAutoProvision` (cert-manager)
+instead. Given lab-notes records an hour-long **LE rate-limit lockout** from retrying against the prod
+endpoint over a flaky forward, the cert path must be decided *before* the swap, not discovered during
+it. cert-manager is already a platform component, so `certificateAutoProvision` is the likely answer.
 
 **This changes the staging plan.** "Install alongside" is not available when the thing supersedes:
 the cutover is a single moment, not a gradual overlap. What can still be staged is everything
