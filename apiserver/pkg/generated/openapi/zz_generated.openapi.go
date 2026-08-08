@@ -23,9 +23,9 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantSpec":            schema_pkg_apis_tenancy_v1alpha1_TenantSpec(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantStatus":          schema_pkg_apis_tenancy_v1alpha1_TenantStatus(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVM":              schema_pkg_apis_tenancy_v1alpha1_TenantVM(ref),
-		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachineList":    schema_pkg_apis_tenancy_v1alpha1_VirtualMachineList(ref),
-		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachineSpec":    schema_pkg_apis_tenancy_v1alpha1_VirtualMachineSpec(ref),
-		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachineStatus":  schema_pkg_apis_tenancy_v1alpha1_VirtualMachineStatus(ref),
+		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMList":          schema_pkg_apis_tenancy_v1alpha1_TenantVMList(ref),
+		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMSpec":          schema_pkg_apis_tenancy_v1alpha1_TenantVMSpec(ref),
+		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMStatus":        schema_pkg_apis_tenancy_v1alpha1_TenantVMStatus(ref),
 		"k8s.io/apimachinery/pkg/apis/meta/v1.APIGroup":                                      schema_pkg_apis_meta_v1_APIGroup(ref),
 		"k8s.io/apimachinery/pkg/apis/meta/v1.APIGroupList":                                  schema_pkg_apis_meta_v1_APIGroupList(ref),
 		"k8s.io/apimachinery/pkg/apis/meta/v1.APIResource":                                   schema_pkg_apis_meta_v1_APIResource(ref),
@@ -542,24 +542,24 @@ func schema_pkg_apis_tenancy_v1alpha1_TenantVM(ref common.ReferenceCallback) com
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachineSpec"),
+							Ref:     ref("github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMSpec"),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachineStatus"),
+							Ref:     ref("github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMStatus"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachineSpec", "github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.VirtualMachineStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+			"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMSpec", "github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
 	}
 }
 
-func schema_pkg_apis_tenancy_v1alpha1_VirtualMachineList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_pkg_apis_tenancy_v1alpha1_TenantVMList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -607,7 +607,7 @@ func schema_pkg_apis_tenancy_v1alpha1_VirtualMachineList(ref common.ReferenceCal
 	}
 }
 
-func schema_pkg_apis_tenancy_v1alpha1_VirtualMachineSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_pkg_apis_tenancy_v1alpha1_TenantVMSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -662,7 +662,7 @@ func schema_pkg_apis_tenancy_v1alpha1_VirtualMachineSpec(ref common.ReferenceCal
 	}
 }
 
-func schema_pkg_apis_tenancy_v1alpha1_VirtualMachineStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_pkg_apis_tenancy_v1alpha1_TenantVMStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
