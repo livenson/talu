@@ -393,3 +393,20 @@
 - name: Show
   ansible.builtin.debug:
     msg: "{{ id_status.stdout_lines }}"
+
+# ── Pomerium route as an Ingress (adr-pomerium-ingress.md §3b) ────────────────────────────────────
+# Dex itself. Public (it IS the login page) and preserve_host_header, matching the route
+# route-sync renders today.
+# Inert until the Ingress Controller is serving; the route-sync path is unchanged meanwhile.
+- name: Pomerium route — id (Ingress)
+  ansible.builtin.include_role:
+    name: phys_pomerium_route
+  vars:
+    pr_name: pomerium-route-id
+    pr_namespace: identity
+    pr_host: "id.{{ lab_domain }}"
+    pr_service: dex
+    pr_port: 5556
+    pr_public: true
+    pr_preserve_host: true
+  tags: [pomerium-routes]

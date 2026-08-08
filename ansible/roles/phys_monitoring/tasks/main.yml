@@ -94,3 +94,20 @@
 - name: Show
   ansible.builtin.debug:
     msg: "{{ mon_status.stdout_lines }}"
+
+# ── Pomerium route as an Ingress (adr-pomerium-ingress.md §3b) ────────────────────────────────────
+# Perses. NOTE the Service is named after the Perses CR ("talu"), not "perses".
+# NOTE also there is no alertmanager route on phys — it exists only in route-sync's VM-lab
+# fallback block, never in the phys base (§7.4).
+# Inert until the Ingress Controller is serving; the route-sync path is unchanged meanwhile.
+- name: Pomerium route — perses (Ingress)
+  ansible.builtin.include_role:
+    name: phys_pomerium_route
+  vars:
+    pr_name: pomerium-route-perses
+    pr_namespace: monitoring
+    pr_host: "perses.{{ lab_domain }}"
+    pr_service: talu
+    pr_port: 8080
+    pr_websockets: true
+  tags: [pomerium-routes]

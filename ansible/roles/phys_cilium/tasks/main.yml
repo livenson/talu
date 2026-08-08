@@ -82,3 +82,19 @@
 - name: Show cluster
   ansible.builtin.debug:
     msg: "{{ final_nodes.stdout_lines }}"
+
+# ── Pomerium route as an Ingress (adr-pomerium-ingress.md §3b) ────────────────────────────────────
+# Hubble UI. Lives in kube-system because an Ingress backend must be a Service in the
+# Ingress's own namespace.
+# Inert until the Ingress Controller is serving; the route-sync path is unchanged meanwhile.
+- name: Pomerium route — hubble (Ingress)
+  ansible.builtin.include_role:
+    name: phys_pomerium_route
+  vars:
+    pr_name: pomerium-route-hubble
+    pr_namespace: kube-system
+    pr_host: "hubble.{{ lab_domain }}"
+    pr_service: hubble-ui
+    pr_port: 80
+    pr_websockets: true
+  tags: [pomerium-routes]
