@@ -13,6 +13,8 @@ one layer up.
 - **Managed tenant Kubernetes (KaaS)** — Kamaji hosted control planes + CAPI/KubeVirt: [`kaas.md`](kaas.md).
 - **How Talu compares** (Cozystack, Harvester, OpenShift Virt, OpenStack, Proxmox…): [`comparison.md`](comparison.md).
 - Driving Talu from an external system: [`../integrations/`](../integrations/).
+- **Proposed — replace `route-sync` with Pomerium's Ingress Controller** (routes as objects):
+  [`adr-pomerium-ingress.md`](adr-pomerium-ingress.md).
 - **Proposed — a typed API layer** (`tenancy.talu.io`, aggregated apiserver over the charts):
   [`adr-api-layer.md`](adr-api-layer.md).
 - Operating guide & validated gotchas (the hard-won lab lessons): [`../../CLAUDE.md`](../../CLAUDE.md)
