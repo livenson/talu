@@ -454,3 +454,51 @@
   register: pom_crd_refs
   changed_when: false
   tags: [pomerium-crd]
+
+# ── The Ingress Controller itself (the swap, §6 step 4) ─────────────────────────────────────────
+# Gated: the prerequisites in §7.8 must exist first, and the CRD-reference check above must have
+# passed. Applying this replaces how the access plane is configured, so it is never implicit.
+- name: Render the Pomerium Ingress Controller
+  ansible.builtin.template:
+    src: pomerium-ingress.yaml.j2
+    dest: "{{ talos_gen_dir }}/pomerium-ingress.yaml"
+    mode: "0644"
+  when: pomerium_ingress_enabled | bool
+  tags: [pomerium-swap]
+
+- name: Apply the Pomerium Ingress Controller
+  ansible.builtin.command: "{{ id_k }} apply -f {{ talos_gen_dir }}/pomerium-ingress.yaml"
+  register: pom_ic
+  changed_when: "'created' in pom_ic.stdout or 'configured' in pom_ic.stdout"
+  when: pomerium_ingress_enabled | bool
+  tags: [pomerium-swap]
+
+- name: Wait for the Ingress Controller to be ready
+  ansible.builtin.command: "{{ id_k }} -n {{ pomerium_namespace }} rollout status deploy/pomerium-ic --timeout=300s"
+  changed_when: false
+  when: pomerium_ingress_enabled | bool
+  tags: [pomerium-swap]
+
+# The old plane is scaled to 0 rather than deleted: it is the rollback, and its image is already
+# cached on the node that ran it (§6). Deleting it belongs to step 6, once TLS is proven.
+- name: Retire the old Pomerium Deployment (scaled to 0, kept for rollback)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if {{ id_k }} -n {{ pomerium_namespace }} get deploy pomerium >/dev/null 2>&1; then
+      cur=$({{ id_k }} -n {{ pomerium_namespace }} get deploy pomerium -o jsonpath='{.spec.replicas}')
+      if [ "$cur" != "0" ]; then
+        {{ id_k }} -n {{ pomerium_namespace }} scale deploy/pomerium --replicas=0 >/dev/null
+        echo CHANGED=1
+      else
+        echo CHANGED=0
+      fi
+      # the old Service held the ingress LB IP; pomerium-proxy claims it now
+      {{ id_k }} -n {{ pomerium_namespace }} delete svc pomerium --ignore-not-found >/dev/null
+    else
+      echo CHANGED=0
+    fi
+  args: { executable: /bin/bash }
+  register: pom_old
+  changed_when: "'CHANGED=1' in pom_old.stdout"
+  when: pomerium_ingress_enabled | bool
+  tags: [pomerium-swap]
