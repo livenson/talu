@@ -19,3 +19,4 @@ secrets.yaml
 
 # Physical lab access data (IPs/ports) — never commit.
 /phys-lab.txt
+/last
