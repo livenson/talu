@@ -336,14 +336,19 @@ Service). Note also that **no tenant dashboard route is live**, so that class ha
 here and step 5 will be exercising it for the first time. Staging step 5 ("verify every route class") was
 written against a list that would have missed three of them.
 
-### 7.5 · The KaaS `k8s-<tenant>` routes are the hardest port, and are not in the plan
+### 7.5 · The KaaS `k8s-<tenant>` routes cannot be expressed as Ingresses at all
 
-Written by [`patch-pomerium-route.py`](../../ansible/roles/phys_kaas_tenant/files/patch-pomerium-route.py),
-each is shaped:
+**This section replaces an earlier version that was wrong in both directions.** It claimed the blocker
+was the upstream (`to: https://172.18.200.1:6443` — "a bare IP, not a Service") and proposed a headless
+Service with a hand-maintained EndpointSlice. Both halves were wrong, and the real blocker is
+elsewhere and harder.
+
+Each route is written by
+[`patch-pomerium-route.py`](../../ansible/roles/phys_kaas_tenant/files/patch-pomerium-route.py):
 
 ```yaml
 - from: https://k8s-<tenant>.<domain>
-  to: https://172.18.200.1:6443          # an IP, not a Service
+  to: https://172.18.200.1:6443
   tls_custom_ca: <inline base64 PEM>
   kubernetes_service_account_token: <inline JWT>
   allowed_users: [...]
@@ -352,13 +357,65 @@ each is shaped:
   timeout: 120s
 ```
 
-Everything except the upstream maps onto annotations —
-`tls_custom_ca_secret`, `kubernetes_service_account_token_secret` (both **Secret references**, so the
-inline CA and token must become Secrets), plus `secure_upstream`, `allow_spdy`, `allow_websockets`,
-`timeout`. The upstream does not: **an Ingress backend must be a Service**, and this one is a bare
-`IP:6443` — the tenant control plane's endpoint. Each tenant therefore needs a Service (headless plus a
-hand-maintained EndpointSlice, or ExternalName) before its route can be an Ingress at all. Owner:
-`phys_kaas_tenant` / `components/tenancy/cluster-chart`.
+**The upstream is not a problem.** `172.18.200.1` is not an external address — it is the
+LoadBalancer IP of `kaas-capi/tenant-a`, the Service Kamaji already creates for the tenant control
+plane, carrying selector `kamaji.clastix.io/name=tenant-a`. Because it *has* a selector, Kubernetes
+maintains its EndpointSlice automatically (`tenant-a-hj8qj`, ownerRef `Service`, pointing at the two
+apiserver pods). A hand-maintained EndpointSlice is only ever needed for a **selector-less** Service
+fronting something genuinely outside the cluster, which this is not. So the route is an ordinary
+Ingress in `kaas-capi` naming that Service — no new objects.
+
+TLS also lines up: the controller sets `TlsServerName` to `<svc>.<ns>.svc.cluster.local` for a
+`secure_upstream` route resolved via endpoints, and the tenant apiserver certificate carries
+`DNS:tenant-a.kaas-capi.svc.cluster.local` among its SANs. So `secure_upstream` plus
+`tls_custom_ca_secret` verifies, with no `tls_skip_verify` and no explicit `tls_server_name`.
+
+**The blocker is `kubernetes_service_account_token`, and it is an upstream gap.**
+
+- There is **no plain `kubernetes_service_account_token` annotation**. `baseAnnotations` in
+  `pomerium/ingress_annotations.go` is a hand-written allow-list, the key is not in it, and an
+  unrecognised key is a hard error (`unknown ingress.pomerium.io/<k>`). This is deliberate: upstream
+  issue **#188** asked for exactly that annotation and was closed by generalising to the
+  Secret-reference form instead, with the maintainers noting `_file`-style fields "exist for
+  historical reasons only".
+- The Secret form, `kubernetes_service_account_token_secret`, **strictly enforces** Secret type
+  `kubernetes.io/service-account-token`:
+  `if secret.Type != handler.expectedType { return error }`.
+- Kubernetes will not let that type hold a **foreign** token. Verified on the lab: without the
+  `kubernetes.io/service-account.name` annotation the API rejects the Secret outright
+  (`Required value`); with an annotation naming a non-existent local ServiceAccount it is created and
+  then **deleted within 8 seconds** by the token controller.
+- And the token *is* foreign: `phys_kaas_tenant` reads it from the **tenant** cluster
+  (`kube-system/pomerium-token`, via the tenant admin kubeconfig), not the management cluster.
+- The Gateway API path is not an escape hatch either — `pomerium/gateway/` contains **no** reference
+  to service-account tokens.
+
+**Why the obvious workaround is not equivalent.** A static `Authorization: Bearer <token>` via
+`set_request_headers_secret` (Opaque, no type constraint) would work mechanically. But Pomerium does
+not merely forward that token — it authenticates *as* the service account and **impersonates the end
+user**. The tenant cluster grants exactly that: ClusterRole `pomerium-impersonation`, verbs
+`impersonate` on `users` and `groups`, bound to the tenant-side `pomerium` ServiceAccount. A static
+header collapses every tenant user into that one service account, destroying per-user RBAC and audit
+*inside tenant clusters*. That is a security regression, not a cosmetic one, and it must not be taken
+silently.
+
+**So this is genuinely undecided**, and it gates the swap: cutting over without an answer would drop
+tenant `kubectl` access. The candidates, none free:
+
+1. **Tenant apiserver OIDC** — configure the tenant control planes to trust Dex directly, so users
+   authenticate as themselves and the shared service account disappears entirely. Architecturally the
+   cleanest (it removes a shared credential rather than relocating it), but it changes the kubectl UX
+   to an OIDC-capable kubeconfig. **← CHOSEN; see §9.**
+2. **Federate the token** — make tenant apiservers trust the management cluster's service-account
+   issuer, so a *local* ServiceAccount satisfies the Secret type. Preserves impersonation; a larger
+   change to tenant control-plane configuration than the cutover itself.
+3. **Upstream patch** — relax the type check to accept an Opaque Secret carrying a `token` key. It is
+   a small change, and is literally the inverse of issue **#335** (which asked for the type check to
+   be loosened in the other direction, and was resolved by swapping the required type rather than
+   dropping the check). Needs upstream acceptance and a release.
+4. **Static Authorization header** — fastest, and forfeits per-user identity as described above.
+
+Owner either way: `phys_kaas_tenant` / `components/tenancy/cluster-chart`.
 
 ### 7.6 · `route-sync` is already suspended — the premise has moved
 
@@ -405,7 +462,8 @@ From the v0.33.1 bundled manifest:
    production ClusterIssuers, and the explicit `authenticate.<domain>` certificate.
 3. Author the `Pomerium` CRD instance named `global`, and the base-route Ingresses — `id`, apex,
    `vms`, `perses`, `hubble`, `clusters` — each owned by the component that owns the workload.
-4. Give the KaaS tenant endpoints Services and their routes Ingresses (§7.5).
+4. Resolve the KaaS tenant-token blocker (§7.5) — it has no configuration-only answer, and the swap
+   drops tenant kubectl access until it is settled.
 5. Then swap, with the Service/port/LB-IP changes of §7.7 in the same action.
 
 ---
@@ -476,3 +534,65 @@ that trade defensible; a single instance would not, which is why it was rejected
 It is also a new component to operate, patch and back up. That cost is accepted here because the DR
 plan already requires Postgres under this plane, so the alternative is not "no Postgres" but
 "Postgres later, after building a DR story around something else".
+
+---
+
+## 9 · Decided: tenant clusters authenticate users directly, via OIDC
+
+§7.5 established that the KaaS `k8s-<tenant>` routes cannot be ported to Ingress mode as they stand,
+because Pomerium's `kubernetes_service_account_token_secret` requires a Secret type Kubernetes binds
+to a *local* ServiceAccount, and the token in question is minted inside the **tenant** cluster. Of the
+four candidates recorded there, **option 1 is chosen: configure tenant apiservers to trust Dex
+directly.**
+
+**The shared service account disappears rather than moving.** Today every tenant user reaches the
+tenant apiserver as one `pomerium` ServiceAccount, with Pomerium impersonating them
+(ClusterRole `pomerium-impersonation`, `impersonate` on `users` and `groups`). Under OIDC each user
+authenticates *as themselves*, so per-user RBAC and audit inside tenant clusters stop depending on an
+impersonation grant and a long-lived, non-expiring legacy token replicated into a ConfigMap. That is
+better than what the migration was trying to preserve, not merely equivalent — which is why this was
+preferred over federating the token (option 2) or patching upstream (option 3).
+
+### Verified feasible before deciding
+
+- **Kamaji can pass the flags.** `TenantControlPlane.spec.controlPlane.deployment.extraArgs.apiServer`
+  is a `[]string`. tenant-a currently has no `--oidc-*` flags.
+- **A pod can reach the issuer.** Probed from inside the cluster: `id.<domain>` resolves to the
+  floating IP via the CoreDNS template, the discovery document fetched in **4.5 s**, and **TLS
+  verified against system roots** — so no `--oidc-ca-file` is needed. The advertised issuer is exactly
+  `https://id.<domain>/dex`, which is what `--oidc-issuer-url` must match.
+- **The route can be a transparent proxy.** `bearer_token_format` is a per-route annotation, and
+  `default` means *"pass bearer tokens to upstream applications without interpreting them"* — the
+  `idp_*` modes consume them instead. So kubectl's own token reaches the apiserver untouched.
+
+### Shape
+
+- **Dex** gains a public `kubernetes` static client for the kubectl OIDC flow.
+- **Tenant apiserver** gets `--oidc-issuer-url=https://id.<domain>/dex`,
+  `--oidc-client-id=kubernetes`, `--oidc-username-claim=email`, `--oidc-groups-claim=groups`.
+- **The route** becomes an ordinary Ingress in `kaas-capi` naming the `tenant-a` Service:
+  `secure_upstream`, `tls_custom_ca_secret`, `allow_spdy`, `allow_websockets`, `timeout: 120s`,
+  plus `bearer_token_format: default` and `allow_public_unauthenticated_access`.
+- **Tenant RBAC** binds the user's email to a role, replacing the impersonation grant.
+
+Removed once proven: the tenant-side `pomerium` ServiceAccount and its `pomerium-impersonation`
+ClusterRole, and `patch-pomerium-route.py` — one of the four writers of `pomerium-config` (§7.6).
+
+### Costs, stated rather than buried
+
+- **Pomerium stops gating this route.** `allow_public_unauthenticated_access` means the IAP no longer
+  stands in front of the tenant apiserver; the apiserver authenticates every request itself and
+  returns 401 otherwise. This is the normal way a kube-apiserver is exposed, and per-user identity is
+  a net gain — but it is honestly one fewer layer, and should be recorded as such rather than
+  presented as a pure improvement.
+- **The kubectl UX changes.** Users need an OIDC-capable kubeconfig (an `oidc-login`/kubelogin exec
+  credential plugin) instead of today's flow. Headlamp is unaffected: `cluster-sync` merges the
+  client-certificate admin kubeconfigs and does not use this path.
+- **OIDC discovery hairpins through the public floating IP.** CoreDNS answers `*.<domain>` with the
+  floating IP, so the apiserver's back-channel to Dex leaves and re-enters via the same provider
+  forward whose flakiness caused the Let's Encrypt lockout (§3b). It works today — measured above —
+  but it is a dependency worth removing by answering that name with the **internal** ingress LB IP
+  instead, so the back-channel never leaves the cluster. Not yet tested, and deliberately not bundled
+  into this decision.
+- **A tenant apiserver restart** is required to add the flags, and the OIDC issuer must be reachable
+  at apiserver start or authentication fails for everyone on that tenant.

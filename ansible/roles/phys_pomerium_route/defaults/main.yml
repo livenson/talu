@@ -1,0 +1,37 @@
+---
+# phys_pomerium_route — render ONE Pomerium route as an Ingress object.
+#
+# adr-pomerium-ingress.md §3b: routes cannot live in the Pomerium CRD (it is global configuration
+# only), so every route is an Ingress owned by the component that owns the workload — perses by
+# monitoring, hubble by Cilium, id by identity, and so on. §7.7/PR #39 settled that the OWNING
+# ANSIBLE ROLE templates the host, because kustomize `replacements` cannot read a live ConfigMap and
+# phys-stack.yml applies each component with `kubectl apply -k <component>` directly, so an
+# environments/<site>/ overlay patch would never be evaluated.
+#
+# This role exists so the annotation contract is written down ONCE. Six near-identical Ingresses
+# spread across six roles is exactly the shape that drifts, and none of them can be exercised until
+# the controller is serving — so a single wrong annotation name would be discovered six times over,
+# at the cutover.
+pr_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+pr_dir: "{{ talos_gen_dir }}/pomerium-routes"
+
+# Required per call: pr_name, pr_namespace, pr_host, pr_service, pr_port.
+# The Ingress MUST live in the backend Service's namespace — an Ingress backend can only reference a
+# Service in its own namespace.
+pr_ingress_class: pomerium
+
+# Authorization. Public routes carry allow_public_unauthenticated_access; everything else gets a PPL
+# policy built from pr_allowed_users, matching what the tenant/VM charts already render. Policy
+# travels WITH the route, which is what makes the adr-api-layer.md §10.1 allowedUsers inversion
+# unnecessary — there is no annotation left for a job to scrape back out.
+pr_public: false
+pr_allowed_users: ["{{ dex_user_email }}"]
+
+# Opt-in per-route behaviours.
+pr_websockets: false
+pr_preserve_host: false
+
+# NO spec.tls block: certificateAutoProvision (§3b, PR #40) issues a certificate for every https
+# route hostname that has none, Ingress-derived routes included (§7.3, verified against
+# internal/certificate/convert.go). The one exception, authenticate.<domain>, is not a route and is
+# handled separately at the swap.

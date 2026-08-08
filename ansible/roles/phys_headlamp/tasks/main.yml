@@ -96,3 +96,19 @@
     msg: >-
       Headlamp at https://clusters.{{ lab_domain }} — single Pomerium/Dex SSO, shows the provisioned
       tenant clusters (cluster-sync reconciles new/removed tenants every 2 min). {{ hl_sync.stdout }}
+
+# ── Pomerium route as an Ingress (adr-pomerium-ingress.md §3b) ────────────────────────────────────
+# Headlamp, the tenant-cluster console. Replaces the route add-headlamp-route.py patches
+# into the live blob today (§7.6) — that patcher goes at step 6.
+# Inert until the Ingress Controller is serving; the route-sync path is unchanged meanwhile.
+- name: Pomerium route — clusters (Ingress)
+  ansible.builtin.include_role:
+    name: phys_pomerium_route
+  vars:
+    pr_name: pomerium-route-clusters
+    pr_namespace: kamaji-system
+    pr_host: "clusters.{{ lab_domain }}"
+    pr_service: headlamp
+    pr_port: 80
+    pr_websockets: true
+  tags: [pomerium-routes]

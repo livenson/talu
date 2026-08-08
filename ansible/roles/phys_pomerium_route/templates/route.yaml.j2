@@ -1,0 +1,45 @@
+# ANSIBLE MANAGED — a Pomerium route as an Ingress OBJECT rather than a line in a shared config blob
+# re-rendered by a CronJob (docs/architecture/adr-pomerium-ingress.md). Owned by the component that
+# owns the workload, so it is garbage-collected with it and a malformed route breaks only itself.
+#
+# Inert until the Pomerium Ingress Controller is serving: nothing reconciles an Ingress while no
+# controller claims the {{ pr_ingress_class }} IngressClass.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ pr_name }}
+  namespace: {{ pr_namespace }}
+  labels:
+    app.kubernetes.io/part-of: talu
+    # Marks the base routes that replace route-sync's static block, so step 6 can find them all.
+    talu.io/pomerium-route: base
+  annotations:
+{% if pr_public %}
+    ingress.pomerium.io/allow_public_unauthenticated_access: "true"
+{% else %}
+    ingress.pomerium.io/policy: |
+      allow:
+        and:
+          - email:
+              in: [{{ pr_allowed_users | join(', ') }}]
+{% endif %}
+{% if pr_websockets %}
+    ingress.pomerium.io/allow_websockets: "true"
+{% endif %}
+{% if pr_preserve_host %}
+    ingress.pomerium.io/preserve_host_header: "true"
+{% endif %}
+spec:
+  ingressClassName: {{ pr_ingress_class }}
+  rules:
+    - host: {{ pr_host }}
+      http:
+        paths:
+          # Prefix/`/` is correct for an HTTP route. Only ssh_upstream routes must use
+          # ImplementationSpecific with no path (adr-pomerium-ingress.md §7.2).
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ pr_service }}
+                port: { number: {{ pr_port }} }

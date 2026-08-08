@@ -44,3 +44,18 @@
   changed_when: false
 - ansible.builtin.debug:
     msg: "kubevirt-manager: {{ kvm_status.stdout_lines }} — UI at https://vms.{{ lab_domain }}"
+
+# ── Pomerium route as an Ingress (adr-pomerium-ingress.md §3b) ────────────────────────────────────
+# The KubeVirt admin UI. Admin-only; websockets for the VNC/serial console.
+# Inert until the Ingress Controller is serving; the route-sync path is unchanged meanwhile.
+- name: Pomerium route — vms (Ingress)
+  ansible.builtin.include_role:
+    name: phys_pomerium_route
+  vars:
+    pr_name: pomerium-route-vms
+    pr_namespace: kubevirt-manager
+    pr_host: "vms.{{ lab_domain }}"
+    pr_service: kubevirt-manager
+    pr_port: 8080
+    pr_websockets: true
+  tags: [pomerium-routes]
