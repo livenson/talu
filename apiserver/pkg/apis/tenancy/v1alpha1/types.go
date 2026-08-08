@@ -48,11 +48,11 @@ type TenantVM struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   VirtualMachineSpec   `json:"spec,omitempty"`
-	Status VirtualMachineStatus `json:"status,omitempty"`
+	Spec   TenantVMSpec   `json:"spec,omitempty"`
+	Status TenantVMStatus `json:"status,omitempty"`
 }
 
-type VirtualMachineSpec struct {
+type TenantVMSpec struct {
 	// Size is a named size backed by a VirtualMachineClusterInstancetype (components/tenancy/sizes/).
 	// KubeVirt rejects a VM that overrides its instancetype, so a size is enforced, not advisory —
 	// and it is the only way this API expresses vCPU at all.
@@ -68,12 +68,12 @@ type VirtualMachineSpec struct {
 	SecurityGroups []string `json:"securityGroups,omitempty"`
 }
 
-type VirtualMachineStatus struct {
+type TenantVMStatus struct {
 	Phase      string             `json:"phase,omitempty"`
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-type VirtualMachineList struct {
+type TenantVMList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []TenantVM `json:"items"`

@@ -84,7 +84,7 @@ func (in *TenantList) DeepCopyObject() runtime.Object {
 	return nil
 }
 
-func (in *VirtualMachineSpec) DeepCopyInto(out *VirtualMachineSpec) {
+func (in *TenantVMSpec) DeepCopyInto(out *TenantVMSpec) {
 	*out = *in
 	if in.SecurityGroups != nil {
 		out.SecurityGroups = make([]string, len(in.SecurityGroups))
@@ -92,7 +92,7 @@ func (in *VirtualMachineSpec) DeepCopyInto(out *VirtualMachineSpec) {
 	}
 }
 
-func (in *VirtualMachineStatus) DeepCopyInto(out *VirtualMachineStatus) {
+func (in *TenantVMStatus) DeepCopyInto(out *TenantVMStatus) {
 	*out = *in
 	if in.Conditions != nil {
 		out.Conditions = make([]metav1.Condition, len(in.Conditions))
@@ -126,7 +126,7 @@ func (in *TenantVM) DeepCopyObject() runtime.Object {
 	return nil
 }
 
-func (in *VirtualMachineList) DeepCopyInto(out *VirtualMachineList) {
+func (in *TenantVMList) DeepCopyInto(out *TenantVMList) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
 	in.ListMeta.DeepCopyInto(&out.ListMeta)
@@ -138,16 +138,16 @@ func (in *VirtualMachineList) DeepCopyInto(out *VirtualMachineList) {
 	}
 }
 
-func (in *VirtualMachineList) DeepCopy() *VirtualMachineList {
+func (in *TenantVMList) DeepCopy() *TenantVMList {
 	if in == nil {
 		return nil
 	}
-	out := new(VirtualMachineList)
+	out := new(TenantVMList)
 	in.DeepCopyInto(out)
 	return out
 }
 
-func (in *VirtualMachineList) DeepCopyObject() runtime.Object {
+func (in *TenantVMList) DeepCopyObject() runtime.Object {
 	if c := in.DeepCopy(); c != nil {
 		return c
 	}

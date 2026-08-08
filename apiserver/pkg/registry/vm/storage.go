@@ -63,7 +63,7 @@ var (
 func NewREST(c dynamic.Interface, o Options) *REST { return &REST{client: c, opts: o} }
 
 func (r *REST) New() runtime.Object     { return &v1alpha1.TenantVM{} }
-func (r *REST) NewList() runtime.Object { return &v1alpha1.VirtualMachineList{} }
+func (r *REST) NewList() runtime.Object { return &v1alpha1.TenantVMList{} }
 func (r *REST) NamespaceScoped() bool   { return true }
 func (r *REST) GetSingularName() string { return "tenantvm" }
 
@@ -199,7 +199,7 @@ func (r *REST) List(ctx context.Context, _ *metainternalversion.ListOptions) (ru
 	if err != nil {
 		return nil, err
 	}
-	out := &v1alpha1.VirtualMachineList{}
+	out := &v1alpha1.TenantVMList{}
 	out.ResourceVersion = l.GetResourceVersion()
 	for i := range l.Items {
 		v, err := fromRelease(&l.Items[i])
@@ -388,7 +388,7 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 	switch v := obj.(type) {
 	case *v1alpha1.TenantVM:
 		t.Rows = append(t.Rows, row(v))
-	case *v1alpha1.VirtualMachineList:
+	case *v1alpha1.TenantVMList:
 		t.ResourceVersion = v.ResourceVersion
 		for i := range v.Items {
 			t.Rows = append(t.Rows, row(&v.Items[i]))

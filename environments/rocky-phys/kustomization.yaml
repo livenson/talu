@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# rocky-phys is ANSIBLE-driven, not kustomize-driven: phys-stack.yml applies each component with
+# `kubectl apply -k <component>` on the gateway. This overlay exists so `make kbuild` — which loops
+# over every environments/*/ — has something to build here instead of erroring, which it had done
+# since the environment was created.
+resources:
+  - ../../components/_base
+labels:
+  - pairs:
+      talu.io/environment: rocky-phys
+    includeSelectors: false
