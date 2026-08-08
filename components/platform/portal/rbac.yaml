@@ -1,0 +1,45 @@
+# Read-only access for the portal's `ingress` route source (docs/architecture/adr-pomerium-ingress.md).
+#
+# Under the Ingress Controller, routes ARE Ingress objects — there is no config blob left to mount, so
+# listing them is the only way the landing page can still show what is exposed. In `config` mode
+# (pre-swap, the default) nothing here is used.
+#
+# Worth being explicit, because the ADR's own §2 criticises route-sync for holding a cluster-wide
+# `services` list plus a `configmaps` PATCH in the access plane: this is deliberately much weaker.
+# It is read-only (get/list/watch, no write verb anywhere), scoped to one resource type, and grants
+# nothing that is not already rendered on a public landing page. It cannot change who can reach what.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: talu-portal
+  labels:
+    app: talu-portal
+    app.kubernetes.io/part-of: talu
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: talu-portal-routes
+  labels:
+    app: talu-portal
+    app.kubernetes.io/part-of: talu
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: talu-portal-routes
+  labels:
+    app: talu-portal
+    app.kubernetes.io/part-of: talu
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: talu-portal-routes
+subjects:
+  - kind: ServiceAccount
+    name: talu-portal
+    namespace: pomerium

@@ -1,17 +1,44 @@
 #!/usr/bin/env python3
 """Talu route portal — a read-only landing page that lists every route Pomerium exposes.
 
-The routes are read from the live `pomerium-config` (the same ConfigMap the route renderer writes),
-mounted read-only at $POMERIUM_CONFIG. So this page never drifts: it shows exactly what is exposed,
-to whom. No cluster API access, no state — just parse + render on each request.
+Routes have TWO possible sources, because the cluster is mid-migration
+(docs/architecture/adr-pomerium-ingress.md):
+
+  TALU_ROUTE_SOURCE=config    (default, pre-swap) — parse the live `pomerium-config` ConfigMap,
+                              mounted read-only at $POMERIUM_CONFIG.
+  TALU_ROUTE_SOURCE=ingress   (post-swap)         — list `Ingress` objects whose ingressClassName is
+                              the Pomerium class, which is where routes live once the Ingress
+                              Controller owns them.
+
+This switch is deliberate rather than automatic. After the swap `pomerium-config` is ORPHANED but
+still present, so a portal that kept parsing it would render a stale route list forever while looking
+perfectly healthy — showing routes that no longer exist and hiding every new one. Auto-detecting
+"which source is real" would guess wrong in exactly that window, since the Ingress objects are
+created BEFORE the swap and sit inert. So the source is stated, and flipped in the same change that
+flips `ingress.enabled` and suspends route-sync.
+
+Still stdlib-only: no YAML library, no HTTP client dependency. In `ingress` mode it needs read-only
+`list` on Ingresses (see rbac.yaml) — a genuine change from "no cluster API access at all", and the
+narrowest grant that can answer the question.
 """
 import html
+import json
 import os
 import re
+import ssl
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CONFIG_PATH = os.environ.get("POMERIUM_CONFIG", "/config/config.yaml")
 LISTEN_PORT = int(os.environ.get("PORT", "8080"))
+ROUTE_SOURCE = os.environ.get("TALU_ROUTE_SOURCE", "config").strip().lower()
+INGRESS_CLASS = os.environ.get("TALU_INGRESS_CLASS", "pomerium")
+ANN = "ingress.pomerium.io/"
+# The site domain. route-sync resolved it at run time from the talu-platform ConfigMap (lab-notes #40,
+# the single source both writers read); in ingress mode there is no config blob to recover it from, so
+# the same ConfigMap is mounted here rather than inventing a second source of truth.
+DOMAIN_FILE = os.environ.get("TALU_DOMAIN_FILE", "/platform/domain")
+SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
 # External port the provider forwards to Pomerium's Native SSH proxy (ssh_address :2222). Site-specific:
 # the physical lab forwards :2222 straight through; the old OpenStack lab used :23 (socat→NodePort). Set
 # SSH_PORT per environment on the portal Deployment; default matches Pomerium's own listener.
@@ -25,14 +52,92 @@ PLATFORM = {
     "vms":          ("VM console", "KubeVirt Manager — create, start/stop, serial console"),
     "perses":       ("Dashboards", "Perses — fleet metrics · Access Audit · VM Logs"),
     "hubble":       ("Network flows", "Hubble UI — live Cilium service map &amp; flows"),
+    "clusters":     ("Tenant clusters", "Headlamp — the provisioned managed (KaaS) clusters"),
+    "alertmanager": ("Alerts", "Alertmanager — firing &amp; silenced alerts"),
 }
+# Managed-cluster kube-apiserver routes (k8s-<tenant>) get their own section rather than being
+# mistaken for platform pages — they are kubectl endpoints, not links to open in a browser.
+K8S_PREFIX = "k8s-"
 SKIP_SUBDOMAINS = {"authenticate"}  # the auth service itself is not a user destination
 # OIDC IdP endpoint: reachable only via the OAuth login redirect (/dex/auth?…); its root path 404s, so
 # show it (users like knowing the IdP) but DON'T make it a link that dead-ends on a 404.
 NONLINK_SUBDOMAINS = {"id"}
 
 
+def load_domain():
+    """Site domain from the talu-platform ConfigMap, when mounted. '' if unavailable."""
+    try:
+        return open(DOMAIN_FILE).read().strip()
+    except OSError:
+        return ""
+
+
+def _emails_from_policy(text):
+    """Pull the allow-list out of a PPL policy annotation (`email: { in: [a, b] }`)."""
+    out = []
+    for grp in re.findall(r"in:\s*\[([^\]]*)\]", text or ""):
+        out += [x.strip() for x in grp.split(",") if x.strip()]
+    return out
+
+
+def load_routes_from_ingresses():
+    """List Pomerium-class Ingresses and shape them like config routes.
+
+    Returns the SAME dicts as the config parser (from / to / public / allow-list), so classify() and
+    render() below are untouched by the migration — only where the facts come from changes.
+    """
+    host = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+    port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+    token = open(f"{SA_DIR}/token").read().strip()
+    ctx = ssl.create_default_context(cafile=f"{SA_DIR}/ca.crt")
+    req = urllib.request.Request(
+        f"https://{host}:{port}/apis/networking.k8s.io/v1/ingresses",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    )
+    with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+        items = json.load(resp).get("items", [])
+
+    routes = []
+    for ing in items:
+        spec = ing.get("spec") or {}
+        if spec.get("ingressClassName") != INGRESS_CLASS:
+            continue
+        meta = ing.get("metadata") or {}
+        ns = meta.get("namespace", "")
+        ann = meta.get("annotations") or {}
+        is_ssh = ann.get(ANN + "ssh_upstream") == "true"
+        emails = _emails_from_policy(ann.get(ANN + "policy"))
+        allowed = [x.strip() for x in (ann.get(ANN + "allowed_users") or "").strip("[] ").split(",") if x.strip()]
+        for rule in spec.get("rules") or []:
+            h = rule.get("host")
+            if not h:
+                continue  # a catch-all host is not a nameable destination
+            paths = ((rule.get("http") or {}).get("paths")) or []
+            svc = ((paths[0].get("backend") or {}).get("service")) if paths else None
+            to = ""
+            if svc:
+                p = (svc.get("port") or {}).get("number", "")
+                to = f"{'ssh' if is_ssh else 'http'}://{svc.get('name','')}.{ns}.svc:{p}"
+            r = {"from": (f"ssh://{h}" if is_ssh else f"https://{h}"), "to": to}
+            if ann.get(ANN + "allow_public_unauthenticated_access") == "true":
+                r["public"] = True
+            if allowed:
+                r["allowed_users"] = allowed
+            if emails:
+                r["policy_emails"] = emails
+            routes.append(r)
+    return routes
+
+
 def load_routes():
+    """Dispatch on TALU_ROUTE_SOURCE. Domain comes from the mounted ConfigMap when present."""
+    if ROUTE_SOURCE == "ingress":
+        return load_domain(), load_routes_from_ingresses()
+    domain, routes = load_routes_from_config()
+    return (load_domain() or domain), routes
+
+
+def load_routes_from_config():
     """Parse the pomerium config WITHOUT a YAML library (no runtime deps / no egress needed).
 
     Talu renders this config itself (dev/lab/expose-vm.sh · components/tenancy/flux/route-sync.yaml) in
@@ -85,6 +190,10 @@ def classify(route, domain):
     sub = host.split(".", 1)[0]
     if sub in SKIP_SUBDOMAINS:
         return None
+    if sub.startswith(K8S_PREFIX):
+        tenant = sub[len(K8S_PREFIX):]
+        return ("Managed clusters", f"{html.escape(tenant)} · kube-apiserver",
+                "kubectl endpoint — sign in with your OIDC kubeconfig, not a browser", frm, False)
     if sub.endswith("-dashboard"):
         ns = sub[: -len("-dashboard")]
         return ("Tenant dashboards", f"{html.escape(ns)} · dashboard",
@@ -145,13 +254,21 @@ def render(domain, routes):
             else:
                 body.append(f'<div class="row">{inner}</div>')
     dom = html.escape(domain or "this cluster")
+    # Name the source on the page: during the migration "which mechanism is actually serving these
+    # routes" is the question an operator most needs answered, and a page that hides it can look
+    # right while describing the wrong world.
+    src = ("Ingress objects (ingressClassName: " + html.escape(INGRESS_CLASS) + ")"
+           if ROUTE_SOURCE == "ingress" else "pomerium-config")
+    empty = ("No routes found — are there Ingresses with ingressClassName: "
+             + html.escape(INGRESS_CLASS) + "?") if ROUTE_SOURCE == "ingress" else \
+            "No routes found — is pomerium-config present?"
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Talu — routes on {dom}</title><style>{CSS}</style></head>
 <body><div class="wrap">
 <h1>Talu</h1>
-<p class="sub">exposed routes on {dom} · generated live from pomerium-config</p>
-{''.join(body) or '<p class="desc">No routes found — is pomerium-config present?</p>'}
+<p class="sub">exposed routes on {dom} · generated live from {src}</p>
+{''.join(body) or f'<p class="desc">{empty}</p>'}
 <p class="foot">Every route enters through Pomerium (the only ingress). Links open the service;
 you'll be asked to sign in unless the route is marked <span class="acc pub">public</span>.
 SSH routes use Native SSH: <code>ssh &lt;principal&gt;@&lt;vm&gt;@ssh.{dom} -p {SSH_PORT}</code>.</p>
@@ -167,7 +284,9 @@ class Handler(BaseHTTPRequestHandler):
             page = render(domain, routes).encode()
             code = 200
         except FileNotFoundError:
-            page = b"<h1>Talu portal</h1><p>pomerium-config not mounted yet.</p>"; code = 200
+            missing = ("service-account token not mounted (ingress mode needs it)"
+                       if ROUTE_SOURCE == "ingress" else "pomerium-config not mounted yet")
+            page = f"<h1>Talu portal</h1><p>{html.escape(missing)}.</p>".encode(); code = 200
         except Exception as e:  # never 500 the landing page
             page = f"<h1>Talu portal</h1><pre>{html.escape(str(e))}</pre>".encode(); code = 200
         self.send_response(code)
