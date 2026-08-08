@@ -96,11 +96,31 @@ Two consequences of that correction, both good:
   `ssh.userCaKeySecret`), which was the piece most at risk of not being expressible. The `pomerium-ssh`
   Secret and the `pomerium-user-ca` ConfigMap that tenant VMs already trust keep their roles.
 
-One item this raises that is NOT a detail: Talu currently uses Pomerium **autocert** (Let's Encrypt),
-and the CRD offers `certificates` (explicit TLS Secrets) and `certificateAutoProvision` (cert-manager)
-instead. Given lab-notes records an hour-long **LE rate-limit lockout** from retrying against the prod
-endpoint over a flaky forward, the cert path must be decided *before* the swap, not discovered during
-it. cert-manager is already a platform component, so `certificateAutoProvision` is the likely answer.
+### Certificates — decided: `certificateAutoProvision` (cert-manager)
+
+Talu currently uses Pomerium **autocert** (Let's Encrypt, HTTP-01). The CRD offers `certificates`
+(explicit TLS Secrets) or `certificateAutoProvision` (cert-manager issues per-route certs). **Use
+`certificateAutoProvision`.**
+
+The reasoning is this ADR's own principle applied once more: today Pomerium's autocert and
+cert-manager are **two independent ACME clients** in one cluster, each with its own retry behaviour
+and its own view of rate limits. cert-manager is already a platform component (internal CA,
+`talu-apiserver` serving certs, Rook), so consolidating on it means one issuer, one place to reason
+about limits, and certs stored as ordinary Secrets that survive a Pomerium restart rather than living
+in Pomerium's own storage.
+
+It also directly addresses a failure this lab has already had: lab-notes records an **hour-long
+Let's Encrypt rate-limit lockout** — "too many failed authorizations (5) per hostname per hour" —
+caused by Pomerium retrying aggressively against the prod ACME endpoint over an unstable inbound
+forward, after which Pomerium served the wrong hostname's certificate and broke the whole OIDC login
+even for hosts whose certs were valid. cert-manager's backoff is far better behaved.
+
+**What it does NOT fix, and this must not be glossed:** the root cause there was the flaky inbound
+`:80`/`:443` provider forward, and HTTP-01 still needs that path. cert-manager handles the failure
+more gracefully; it does not make it succeed. The real fix is **DNS-01**, which needs DNS API
+credentials for the site domain — worth deciding separately, and worth using LE **staging**
+(`autocert_use_staging`-equivalent) while iterating, exactly as lab-notes advises, rather than
+re-locking the hour.
 
 **This changes the staging plan.** "Install alongside" is not available when the thing supersedes:
 the cutover is a single moment, not a gradual overlap. What can still be staged is everything
