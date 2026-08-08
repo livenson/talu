@@ -26,10 +26,19 @@ type TenantSpec struct {
 }
 
 type TenantStatus struct {
-	// Phase is a coarse rollup: Pending | Provisioning | Ready | Degraded.
+	// Phase is a coarse rollup: Pending | Provisioning | Ready | Degraded | Deleting.
 	Phase string `json:"phase,omitempty"`
+	// VMs counts this tenant's VirtualMachineInstances. "HelmRelease Ready" only means the chart
+	// applied — it says nothing about whether the VMs actually came up, which is the question an
+	// orchestrator is really asking (problem 5 in the ADR).
+	VMs TenantVMCounts `json:"vms,omitempty"`
 	// Conditions are projected from the backing HelmRelease.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+type TenantVMCounts struct {
+	Running int32 `json:"running"`
+	Total   int32 `json:"total"`
 }
 
 type TenantList struct {

@@ -227,6 +227,29 @@ func (r *REST) getOwned(ctx context.Context, ns, name string) (*unstructured.Uns
 	return hr.GetOwned(ctx, r.client, ns, name, v1alpha1.Resource("tenants"), kindName)
 }
 
+// vmiGVR is read only to COUNT: the Tenant's own status must answer "did the VMs come up", which the
+// backing HelmRelease cannot. One extra list per Get and per listed Tenant — acceptable for an
+// inventory-sized resource, and the count is best-effort: a failure here leaves the counts at zero
+// rather than failing the read, because a Tenant is still perfectly readable without them.
+var vmiGVR = schema.GroupVersionResource{
+	Group: "kubevirt.io", Version: "v1", Resource: "virtualmachineinstances",
+}
+
+func (r *REST) countVMs(ctx context.Context, slug string) v1alpha1.TenantVMCounts {
+	var c v1alpha1.TenantVMCounts
+	l, err := r.client.Resource(vmiGVR).Namespace(slug).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return c
+	}
+	for i := range l.Items {
+		c.Total++
+		if p, _, _ := unstructured.NestedString(l.Items[i].Object, "status", "phase"); p == "Running" {
+			c.Running++
+		}
+	}
+	return c
+}
+
 func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
 	ns, err := namespaceFrom(ctx)
 	if err != nil {
@@ -236,7 +259,12 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 	if err != nil {
 		return nil, err
 	}
-	return fromHelmRelease(u)
+	t, err := fromHelmRelease(u)
+	if err != nil {
+		return nil, err
+	}
+	t.Status.VMs = r.countVMs(ctx, t.Name)
+	return t, nil
 }
 
 // Update rewrites the backing HelmRelease's values in place. Without it a Tenant could be created and
@@ -324,6 +352,7 @@ func (r *REST) List(ctx context.Context, _ *metainternalversion.ListOptions) (ru
 		if err != nil {
 			continue
 		}
+		t.Status.VMs = r.countVMs(ctx, t.Name)
 		out.Items = append(out.Items, *t)
 	}
 	return out, nil
@@ -422,13 +451,15 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 		{Name: "Name", Type: "string", Format: "name", Description: "Tenant name (its namespace)."},
 		{Name: "Project", Type: "string", Description: "talu.io/project-uuid — the manager join key."},
 		{Name: "Phase", Type: "string", Description: "Rolled up from the backing HelmRelease."},
+		{Name: "VMs", Type: "string", Description: "Running / total VirtualMachineInstances."},
 		{Name: "Members", Type: "integer", Description: "Number of members with access."},
 		{Name: "Age", Type: "string"},
 	}}
 	row := func(x *v1alpha1.Tenant) metav1.TableRow {
 		return metav1.TableRow{
 			Cells: []interface{}{
-				x.Name, x.Spec.ProjectUUID, x.Status.Phase, len(x.Spec.Members),
+				x.Name, x.Spec.ProjectUUID, x.Status.Phase,
+				fmt.Sprintf("%d/%d", x.Status.VMs.Running, x.Status.VMs.Total), len(x.Spec.Members),
 				duration.HumanDuration(time.Since(x.CreationTimestamp.Time)),
 			},
 			Object: runtime.RawExtension{Object: x},
