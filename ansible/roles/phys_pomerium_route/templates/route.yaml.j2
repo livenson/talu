@@ -12,7 +12,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: talu
     # Marks the base routes that replace route-sync's static block, so step 6 can find them all.
-    talu.io/pomerium-route: base
+    talu.io/pomerium-route: {{ pr_route_class }}
   annotations:
 {% if pr_public %}
     ingress.pomerium.io/allow_public_unauthenticated_access: "true"
@@ -29,6 +29,9 @@ metadata:
 {% if pr_preserve_host %}
     ingress.pomerium.io/preserve_host_header: "true"
 {% endif %}
+{% for k, v in (pr_extra_annotations | default({})).items() %}
+    ingress.pomerium.io/{{ k }}: {{ v | string | to_json }}
+{% endfor %}
 spec:
   ingressClassName: {{ pr_ingress_class }}
   rules:
