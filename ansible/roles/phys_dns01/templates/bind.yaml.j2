@@ -1,0 +1,127 @@
+# ANSIBLE MANAGED — authoritative nameserver for the delegated _acme-challenge zones, so cert-manager
+# can satisfy DNS-01 (adr-pomerium-ingress.md §3b). Serves ONLY these zones; recursion is off, so this
+# is not an open resolver and cannot be used for amplification.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dns01-bind
+  namespace: {{ dns01_namespace }}
+  labels: {app.kubernetes.io/part-of: talu}
+data:
+  named.conf: |
+    options {
+      directory "/var/cache/bind";
+      listen-on { any; };
+      listen-on-v6 { none; };
+      # NOT a resolver: answer only for the zones below. Keeps this off the amplification radar,
+      # which matters because the provider filters :53 by default for exactly that reason.
+      recursion no;
+      allow-query { any; };
+      dnssec-validation no;
+    };
+    key "{{ dns01_tsig_key_name }}" {
+      algorithm hmac-sha256;
+      include "/etc/bind/tsig/secret.conf";
+    };
+{% for z in dns01_zones %}
+    zone "{{ z }}" {
+      type master;
+      file "/var/lib/bind/db.{{ loop.index }}";
+      # cert-manager writes the TXT over the CLUSTER network with this key; nothing external can.
+      allow-update { key "{{ dns01_tsig_key_name }}"; };
+    };
+{% endfor %}
+{% for z in dns01_zones %}
+  db.{{ loop.index }}: |
+    $ORIGIN {{ z }}.
+    $TTL 60
+    @ IN SOA ns.{{ z }}. hostmaster.{{ z }}. 1 7200 3600 1209600 60
+    @ IN NS  ns.{{ z }}.
+    ns IN A  {{ lab_floating_ip }}
+{% endfor %}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dns01-bind
+  namespace: {{ dns01_namespace }}
+  labels: {app: dns01-bind, app.kubernetes.io/part-of: talu}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: dns01-bind}}
+  strategy: {type: Recreate}    # single writable zone dir; two writers would diverge the journal
+  template:
+    metadata:
+      labels: {app: dns01-bind}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 100, runAsGroup: 101, fsGroup: 101}
+      initContainers:
+        # BIND rewrites the zone file and keeps a journal beside it, so it cannot live on the
+        # read-only ConfigMap mount. Seed a writable copy once per start.
+        - name: seed-zones
+          image: {{ dns01_image }}
+          command: ["sh", "-ceu"]
+          args:
+            - |
+              for f in /config/db.*; do
+                [ -e "$f" ] || continue
+                dest=/var/lib/bind/$(basename "$f")
+                [ -e "$dest" ] || cp "$f" "$dest"
+              done
+          volumeMounts:
+            - {name: config, mountPath: /config, readOnly: true}
+            - {name: zones, mountPath: /var/lib/bind}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
+      containers:
+        - name: bind
+          image: {{ dns01_image }}
+          args: ["-g", "-c", "/etc/bind/named.conf"]
+          ports:
+            - {name: dns-udp, containerPort: 53, protocol: UDP}
+            - {name: dns-tcp, containerPort: 53, protocol: TCP}
+          volumeMounts:
+            - {name: config, mountPath: /etc/bind/named.conf, subPath: named.conf, readOnly: true}
+            - {name: tsig, mountPath: /etc/bind/tsig, readOnly: true}
+            - {name: zones, mountPath: /var/lib/bind}
+            - {name: cache, mountPath: /var/cache/bind}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {cpu: 200m, memory: 256Mi}
+      volumes:
+        - {name: config, configMap: {name: dns01-bind}}
+        - {name: tsig, secret: {secretName: {{ dns01_tsig_secret }}, items: [{key: secret.conf, path: secret.conf}]}}
+        - {name: zones, emptyDir: {}}
+        - {name: cache, emptyDir: {}}
+---
+# In-cluster address for cert-manager's UPDATEs. This path never leaves the cluster, which is why the
+# provider only has to forward queries.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns01-bind
+  namespace: {{ dns01_namespace }}
+  labels: {app: dns01-bind}
+spec:
+  type: ClusterIP
+  selector: {app: dns01-bind}
+  ports:
+    - {name: dns-udp, port: 53, targetPort: 53, protocol: UDP}
+    - {name: dns-tcp, port: 53, targetPort: 53, protocol: TCP}
+---
+# Public address the CA queries. The provider must forward :53/udp here:
+#   firewall-cmd --permanent --add-forward-port=port=53:proto=udp:toport=53:toaddr={{ dns01_lb_ip }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns01-bind-public
+  namespace: {{ dns01_namespace }}
+  labels: {app: dns01-bind}
+  annotations:
+    lbipam.cilium.io/ips: "{{ dns01_lb_ip }}"
+spec:
+  type: LoadBalancer
+  selector: {app: dns01-bind}
+  ports:
+    - {name: dns-udp, port: 53, targetPort: 53, protocol: UDP}
+    - {name: dns-tcp, port: 53, targetPort: 53, protocol: TCP}

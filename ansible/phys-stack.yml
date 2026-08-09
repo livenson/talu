@@ -25,6 +25,8 @@
     # The Pomerium session database must exist before the access plane is asked to use it
     # (adr-pomerium-ingress.md §8) — Postgres, not the in-memory default that logs every user out on
     # each restart.
+    # The DNS-01 nameserver must exist before the issuers reference its TSIG secret.
+    - { role: phys_dns01,      tags: [dns01, certs, access] }
     - { role: phys_postgres,   tags: [postgres, database, access] }
     - { role: phys_identity,   tags: [identity, access] }
     - { role: phys_portal,     tags: [portal, ui] }
