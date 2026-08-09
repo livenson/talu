@@ -350,15 +350,6 @@
     --from-literal=domain={{ lab_domain }} --dry-run=client -o yaml | {{ id_k }} apply -f -
   changed_when: true
 
-# The static Pomerium base for route-sync (route-sync appends the dynamic per-Service routes on top).
-- name: Publish the Pomerium base config (pomerium-base ConfigMap)
-  ansible.builtin.template:
-    src: pomerium-base.yaml.j2
-    dest: "{{ talos_gen_dir }}/pomerium-base.yaml"
-    mode: "0644"
-- ansible.builtin.command: "{{ id_k }} apply -f {{ talos_gen_dir }}/pomerium-base.yaml"
-  changed_when: true
-
 - name: Deploy Pomerium (IAP)
   ansible.builtin.template:
     src: pomerium.yaml.j2

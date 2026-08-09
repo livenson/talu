@@ -191,22 +191,6 @@
     chmod 600 {{ kt_dir }}/pomerium-token
   changed_when: true
 
-- name: Copy the pomerium route patcher
-  ansible.builtin.copy:
-    src: patch-pomerium-route.py
-    dest: "{{ kt_dir }}/patch-pomerium-route.py"
-    mode: "0755"
-
-- name: Patch the kubectl route into pomerium-base + pomerium-config, restart Pomerium
-  ansible.builtin.shell: |
-    set -e
-    EP="https://$({{ kt_k }} -n {{ kaas_namespace }} get tcp {{ kaas_tenant_name }} -o jsonpath='{.status.controlPlaneEndpoint}')"
-    KUBECONFIG={{ kt_kubeconfig }} python3 {{ kt_dir }}/patch-pomerium-route.py \
-      "{{ kaas_tenant_name }}" "$EP" "{{ kt_dir }}/pomerium-token" "{{ kt_dir }}/ca.b64" "{{ kaas_admin_user }}"
-    {{ kt_k }} -n pomerium rollout restart deploy/pomerium
-    {{ kt_k }} -n pomerium rollout status deploy/pomerium --timeout=180s
-  changed_when: true
-
 # ── 5. Acceptance ──────────────────────────────────────────────────────────────────────────
 - name: "Acceptance: nodes Ready, CSI smoke, route gated, impersonation chain"
   ansible.builtin.shell: |
