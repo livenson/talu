@@ -117,10 +117,29 @@ even for hosts whose certs were valid. cert-manager's backoff is far better beha
 
 **What it does NOT fix, and this must not be glossed:** the root cause there was the flaky inbound
 `:80`/`:443` provider forward, and HTTP-01 still needs that path. cert-manager handles the failure
-more gracefully; it does not make it succeed. The real fix is **DNS-01**, which needs DNS API
-credentials for the site domain — worth deciding separately, and worth using LE **staging**
-(`autocert_use_staging`-equivalent) while iterating, exactly as lab-notes advises, rather than
-re-locking the hour.
+more gracefully; it does not make it succeed. The real fix is **DNS-01**, and it is worth using LE
+**staging** while iterating rather than re-locking the hour.
+
+**Correction — DNS-01 does NOT need DNS API credentials on this domain.** An earlier version of this
+paragraph assumed it did, and that assumption shaped several later decisions. `sslip.io` delegates the
+challenge name **back to the host itself**, verified against its authoritative server:
+
+```
+$ dig @ns-ovh.sslip.io _acme-challenge.authenticate.92-220-16-211.sslip.io TXT
+;; AUTHORITY SECTION:
+_acme-challenge.authenticate.92-220-16-211.sslip.io. 604800 IN NS authenticate.92-220-16-211.sslip.io.
+;; ADDITIONAL SECTION:
+authenticate.92-220-16-211.sslip.io. 604800 IN A 92.220.16.211
+```
+
+So the CA is sent to **our own IP** for the TXT lookup. No control of the `sslip.io` zone is required
+and no provider API token exists to obtain — what is required is an authoritative DNS responder on the
+floating IP (`acme-dns` or a cert-manager webhook solver) and an inbound **`:53/udp`** forward, which
+the provider currently does not forward (only `:80`, `:443`, `:2222`).
+
+That trade is strongly favourable: DNS-01 removes the dependency on the flaky inbound **`:80`** path
+that caused the rate-limit lockout, the 4-of-8 issuance seen at cutover, and the structural failure of
+`authenticate` (§7.3). It replaces a lossy TCP fetch with one small UDP round trip.
 
 **This changes the staging plan.** "Install alongside" is not available when the thing supersedes:
 the cutover is a single moment, not a gradual overlap. What can still be staged is everything
@@ -340,11 +359,19 @@ retries on both staging and production.
 
 So the options for this one hostname are:
 
-1. **DNS-01** — needs DNS API credentials for the site domain, and is the only path that depends on
-   nothing inbound.
-2. **Keep autocert alive for `authenticate` only.** Pomerium's own autocert performs HTTP-01 *or*
-   **TLS-ALPN-01**, and TLS-ALPN-01 validates on `:443`, sidestepping the redirect entirely. This is
-   almost certainly how the pre-migration Pomerium obtained its `authenticate` certificate.
+1. **DNS-01** — **the recommended answer, and cheaper than previously recorded.** It needs no DNS API
+   credentials on `sslip.io`: the challenge name is delegated back to the host itself (see the
+   correction in §3b), so an authoritative responder on the floating IP plus an inbound `:53/udp`
+   forward is the whole requirement. It is also the only option that works for `authenticate`, since
+   HTTP-01 cannot and autocert is unavailable — the `Pomerium` CRD has no autocert field and
+   cert-manager does not implement TLS-ALPN-01.
+2. ~~**Keep autocert alive for `authenticate` only.**~~ **NOT AVAILABLE.** Pomerium's autocert does
+   perform TLS-ALPN-01, which validates on `:443` and sidesteps the redirect — almost certainly how
+   the pre-migration Pomerium obtained its `authenticate` certificate. But autocert was a
+   `config.yaml` option of the standalone deployment: the **`Pomerium` CRD has no autocert field**
+   (only `certificates` / `certificateAutoProvision`), and cert-manager does not implement
+   TLS-ALPN-01. Running the old Pomerium alongside for renewal does not work either, because
+   TLS-ALPN-01 needs `:443` for that hostname and the controller owns it.
 3. **Supply it out of band** and renew it before expiry.
 
 **What the lab is running now (option 3, as a stopgap):** the pre-migration Pomerium's autocert
