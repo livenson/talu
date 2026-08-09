@@ -298,6 +298,23 @@
         {{ ('email: ' ~ acme_email) if acme_email else '' }}
         privateKeySecretRef: {name: letsencrypt-staging-account-key}
         solvers:
+    {% if dns01_enabled | default(false) %}
+          # DNS-01 for the hostnames HTTP-01 cannot do. cert-manager picks the MOST SPECIFIC solver,
+          # so this applies only to the names listed and everything else keeps HTTP-01.
+          # authenticate.<domain> is served by Pomerium internally with no Ingress, so its HTTP-01
+          # solver route can never exist (ingress-controller#698, lab-notes #43).
+          - dns01:
+              rfc2136:
+                # in-cluster: the UPDATE path never crosses the public internet
+                nameserver: dns01-bind.{{ dns01_namespace | default('cert-manager') }}.svc:53
+                tsigKeyName: {{ dns01_tsig_key_name | default('cert-manager') }}
+                tsigAlgorithm: HMACSHA256
+                tsigSecretSecretRef:
+                  name: {{ dns01_tsig_secret | default('dns01-tsig') }}
+                  key: tsig-secret-key
+            selector:
+              dnsNames: [authenticate.{{ lab_domain }}]
+    {% endif %}
           - http01: {ingress: {ingressClassName: {{ acme_solver_ingress_class }}}}
     ---
     apiVersion: cert-manager.io/v1
@@ -309,6 +326,18 @@
         {{ ('email: ' ~ acme_email) if acme_email else '' }}
         privateKeySecretRef: {name: letsencrypt-prod-account-key}
         solvers:
+    {% if dns01_enabled | default(false) %}
+          - dns01:
+              rfc2136:
+                nameserver: dns01-bind.{{ dns01_namespace | default('cert-manager') }}.svc:53
+                tsigKeyName: {{ dns01_tsig_key_name | default('cert-manager') }}
+                tsigAlgorithm: HMACSHA256
+                tsigSecretSecretRef:
+                  name: {{ dns01_tsig_secret | default('dns01-tsig') }}
+                  key: tsig-secret-key
+            selector:
+              dnsNames: [authenticate.{{ lab_domain }}]
+    {% endif %}
           - http01: {ingress: {ingressClassName: {{ acme_solver_ingress_class }}}}
     EOF
   args: { executable: /bin/bash }

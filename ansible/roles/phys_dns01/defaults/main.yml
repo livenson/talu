@@ -1,0 +1,27 @@
+---
+# DNS-01 for the hostnames HTTP-01 cannot validate (docs/architecture/adr-pomerium-ingress.md §3b/§7.3).
+#
+# WHY THIS SHAPE. sslip.io delegates `_acme-challenge.<host>` back to <host>, which resolves to our own
+# floating IP (lab-notes #44) — so the certificate authority asks US for the TXT record and there is no
+# zone to control and no API token to buy. What is needed is an authoritative responder on that IP.
+#
+# WHY rfc2136 AND NOT acme-dns. cert-manager's acme-dns solver expects a CNAME from
+# `_acme-challenge.<host>` to `<uuid>.<acme-dns-domain>`, and we cannot create records in the sslip.io
+# zone — the delegation is all we get. rfc2136 matches the delegation exactly: cert-manager sends a
+# dynamic DNS UPDATE to a nameserver we run that is authoritative for the delegated zone.
+#
+# THE SPLIT THAT MAKES THIS CHEAP: cert-manager reaches the nameserver over the CLUSTER network, so the
+# UPDATE path never touches the public internet. Only the CA's queries arrive from outside, so the
+# provider forward needs `:53/udp` inbound and nothing else.
+dns01_enabled: false                     # ON only once the provider forwards :53/udp
+dns01_k: "kubectl --kubeconfig={{ talos_gen_dir }}/kubeconfig"
+dns01_namespace: cert-manager
+dns01_image: "docker.io/internetsystemsconsortium/bind9:9.20"
+# The delegated zone. One zone per protected hostname: sslip.io delegates each `_acme-challenge.<host>`
+# separately, so this is not a wildcard and additional hostnames need additional zones.
+dns01_zones:
+  - "_acme-challenge.authenticate.{{ lab_domain }}"
+# The LoadBalancer address the provider forwards :53/udp to. MUST NOT collide with the ingress LB IP.
+dns01_lb_ip: "172.18.200.11"
+dns01_tsig_secret: dns01-tsig
+dns01_tsig_key_name: cert-manager

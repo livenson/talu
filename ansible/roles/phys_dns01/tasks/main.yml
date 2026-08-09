@@ -1,0 +1,69 @@
+---
+# Generated ONCE and reused: rotating the TSIG key under a running BIND would break cert-manager's
+# updates until both sides are restarted, and there is no reason to rotate it on every play.
+- name: TSIG key present?
+  ansible.builtin.command: "{{ dns01_k }} -n {{ dns01_namespace }} get secret {{ dns01_tsig_secret }}"
+  register: dns01_key
+  changed_when: false
+  failed_when: false
+  when: dns01_enabled | bool
+
+- name: Generate the TSIG key (one-time)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    K=$(openssl rand -base64 32)
+    # BIND wants an include fragment; cert-manager wants the raw base64 in its own key. Same secret,
+    # two representations, so the two sides cannot drift.
+    {{ dns01_k }} -n {{ dns01_namespace }} create secret generic {{ dns01_tsig_secret }} \
+      --from-literal=secret.conf="secret \"$K\";" \
+      --from-literal=tsig-secret-key="$K"
+  args: { executable: /bin/bash }
+  when: dns01_enabled | bool and dns01_key.rc != 0
+  changed_when: true
+  no_log: true
+
+- name: Render the authoritative nameserver
+  ansible.builtin.template:
+    src: bind.yaml.j2
+    dest: "{{ talos_gen_dir }}/dns01-bind.yaml"
+    mode: "0644"
+  when: dns01_enabled | bool
+
+- name: Apply the authoritative nameserver
+  ansible.builtin.command: "{{ dns01_k }} apply -f {{ talos_gen_dir }}/dns01-bind.yaml"
+  register: dns01_apply
+  changed_when: "'created' in dns01_apply.stdout or 'configured' in dns01_apply.stdout"
+  when: dns01_enabled | bool
+
+- name: Wait for the nameserver
+  ansible.builtin.command: "{{ dns01_k }} -n {{ dns01_namespace }} rollout status deploy/dns01-bind --timeout=180s"
+  changed_when: false
+  when: dns01_enabled | bool
+
+# Prove the two things that actually matter, rather than that a pod is Running: the server answers
+# authoritatively for the delegated zone, and it REFUSES to act as a resolver (an open resolver on a
+# public IP is why providers filter :53 in the first place).
+- name: Verify the nameserver answers authoritatively and is not an open resolver
+  ansible.builtin.shell: |
+    set -uo pipefail
+    IP=$({{ dns01_k }} -n {{ dns01_namespace }} get svc dns01-bind -o jsonpath='{.spec.clusterIP}')
+    POD=$({{ dns01_k }} -n {{ dns01_namespace }} get pod -l app=dns01-bind -o jsonpath='{.items[0].metadata.name}')
+    fail=0
+    for z in {{ dns01_zones | join(' ') }}; do
+      out=$({{ dns01_k }} -n {{ dns01_namespace }} exec "$POD" -- dig @127.0.0.1 "$z" SOA +noall +answer 2>/dev/null)
+      if printf '%s' "$out" | grep -q SOA; then printf '  authoritative for %s\n' "$z"; else printf '  NOT authoritative for %s\n' "$z"; fail=1; fi
+    done
+    rec=$({{ dns01_k }} -n {{ dns01_namespace }} exec "$POD" -- dig @127.0.0.1 example.com A +noall +comments 2>/dev/null | grep -c "flags:.* ra" || true)
+    if [ "$rec" = "0" ]; then echo "  recursion refused (not an open resolver)"; else echo "  OPEN RESOLVER - refusing to continue"; fail=1; fi
+    [ "$fail" -eq 0 ] || { echo "FATAL: nameserver is not serving the delegated zones safely" >&2; exit 1; }
+  args: { executable: /bin/bash }
+  register: dns01_verify
+  changed_when: false
+  when: dns01_enabled | bool
+
+- name: Show what the provider still has to forward
+  ansible.builtin.debug:
+    msg: >-
+      DNS-01 nameserver on {{ dns01_lb_ip }}. The provider must forward inbound :53/udp to it —
+      without that the CA cannot reach the delegated zone and DNS-01 will not validate.
+  when: dns01_enabled | bool
