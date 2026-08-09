@@ -704,7 +704,17 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     on the floating IP — `acme-dns` (cert-manager has a built-in `acme-dns` solver) or a webhook
     solver — plus an inbound **`:53/udp`** forward. The provider currently forwards only `:80`,
     `:443` and `:2222`, so that rule is the one new prerequisite.
-    **Why it is worth it:** DNS-01 removes the dependency on the flaky inbound `:80` path that caused
-    the hour-long Let's Encrypt lockout, left issuance at 4-of-8 during the Ingress cutover, and makes
-    `authenticate.<domain>` impossible to validate at all (#43). One small UDP round trip replaces a
-    lossy TCP fetch. Note the same trick works for **wildcard** certificates on sslip.io.
+    **Why it would be worth it:** DNS-01 removes the dependency on the flaky inbound `:80` path that
+    caused the hour-long Let's Encrypt lockout, left issuance at 4-of-8 during the Ingress cutover, and
+    makes `authenticate.<domain>` impossible to validate at all (#43). Note the same trick works for
+    **wildcard** certificates on sslip.io.
+
+    **BUT ON THIS LAB IT IS BLOCKED, and the delegation is not the reason.** Tested end to end: a
+    CoreDNS responder authoritative for the delegated zone was deployed on an LB IP, answered
+    correctly *inside* the cluster (`dig @172.18.200.11 … TXT` -> the expected record), and a firewalld
+    forward `port=53:proto=udp:toport=53:toaddr=<lb-ip>` was added on the DNAT host. From outside,
+    **5/5 queries timed out**, and a `tcpdump -ni any 'udp port 53'` on that host captured **nothing** —
+    so inbound UDP/53 never arrives. The provider filters it upstream (common, to prevent DNS
+    amplification abuse). **Do not re-debug this locally**: the local path is correct and proven; the
+    block is off-box. Reviving DNS-01 here needs the provider to pass inbound `:53/udp` — worth asking,
+    since it would fix certificate issuance for the whole lab.

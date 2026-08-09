@@ -137,9 +137,17 @@ and no provider API token exists to obtain — what is required is an authoritat
 floating IP (`acme-dns` or a cert-manager webhook solver) and an inbound **`:53/udp`** forward, which
 the provider currently does not forward (only `:80`, `:443`, `:2222`).
 
-That trade is strongly favourable: DNS-01 removes the dependency on the flaky inbound **`:80`** path
-that caused the rate-limit lockout, the 4-of-8 issuance seen at cutover, and the structural failure of
-`authenticate` (§7.3). It replaces a lossy TCP fetch with one small UDP round trip.
+That trade would be strongly favourable: DNS-01 removes the dependency on the flaky inbound **`:80`**
+path that caused the rate-limit lockout, the 4-of-8 issuance seen at cutover, and the structural
+failure of `authenticate` (§7.3).
+
+**Blocked in practice on this lab, and not by the delegation.** Tested end to end (lab-notes #44): an
+authoritative responder for the delegated zone answers correctly *inside* the cluster and a firewalld
+`:53/udp` forward was added on the DNAT host, yet from outside every query timed out and `tcpdump` on
+that host captured **no inbound UDP/53 at all**. The provider filters it upstream. So DNS-01 here is
+gated on the provider passing `:53/udp` — a question to ask them, not something to solve in the
+cluster. Until then `authenticate.<domain>` has **no automated renewal path**: HTTP-01 cannot validate
+it (§7.3), autocert is unavailable in the CRD, and DNS-01 cannot reach us.
 
 **This changes the staging plan.** "Install alongside" is not available when the thing supersedes:
 the cutover is a single moment, not a gradual overlap. What can still be staged is everything
