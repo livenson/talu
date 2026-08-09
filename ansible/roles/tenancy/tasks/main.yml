@@ -44,16 +44,17 @@
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: false
 
-# --- control plane: registry + OCIRepository source + route-sync -----------------------------------
-- name: Apply the tenant control plane (chart registry + OCIRepository + route-sync)
+# --- control plane: registry + OCIRepository source ------------------------------------------------
+- name: Apply the tenant control plane (chart registry + OCIRepository)
   ansible.builtin.command: "kubectl apply -k {{ flux_dir }}"
+  environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
+  changed_when: true
 
 # route-sync is no longer part of that kustomization: the physical lab serves routes as Ingress objects
 # and must not have the CronJob re-created (adr-pomerium-ingress.md §6). The VM lab has not migrated,
 # so it still needs the renderer and applies it explicitly here.
 - name: "VM lab only: the route-sync CronJob (not yet migrated to Ingress routing)"
   ansible.builtin.command: "kubectl apply -f {{ flux_dir }}/route-sync.yaml"
-  changed_when: true
   environment: { KUBECONFIG: "{{ kubeconfig_path }}" }
   changed_when: true
 
