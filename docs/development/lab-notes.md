@@ -669,3 +669,22 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     retry loop is not acceptable — the access-plane swap, for one — reference the image by **digest**
     (no tag resolution) or push it into the **pushable** `talu.registry` on :5010, which is
     authoritative rather than a proxy.
+
+43. **`authenticate.<domain>` cannot get a certificate via HTTP-01 through the Pomerium Ingress
+    Controller — by design, and it is an open upstream bug.** Pomerium's `:80` listener *only*
+    redirects to `:443`; every route lives on the 443 listener
+    ([ingress-controller#698](https://github.com/pomerium/ingress-controller/issues/698), open since
+    2023). Let's Encrypt fetches the HTTP-01 token on `:80` and follows the redirect, which is fine
+    for a normal route host (the solver route exists on 443) but fatal for the authenticate hostname,
+    which Pomerium serves **internally** with no Ingress — so the redirect lands on a **404** and the
+    authorization goes `invalid`. Symptom: that one hostname fails every attempt while every other
+    hostname issues normally; forcing retries just burns the Let's Encrypt failed-authorization
+    budget (5/hostname/hour) and is how the earlier hour-long lockout happened. **Do not debug this as
+    a networking problem** — verify it in one shot by fetching the live token from OUTSIDE the cluster
+    while the challenge is `pending`: `301 -> https -> 404` is the signature. Fixes: DNS-01, or keep
+    Pomerium **autocert** for that hostname alone (it can use **TLS-ALPN-01**, which validates on
+    :443 and dodges the redirect), or supply the certificate out of band.
+    Related: [#142 "Wrong certificate exposed"](https://github.com/pomerium/ingress-controller/issues/142)
+    is the companion symptom — when a hostname has **no** certificate, Pomerium serves some *other*
+    host's certificate rather than failing the handshake, so a missing cert looks like a mis-issued
+    one (`clusters.<domain>` presenting the `hubble.<domain>` certificate).
