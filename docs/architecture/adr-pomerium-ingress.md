@@ -314,6 +314,48 @@ Two consequences worth knowing before the swap:
   at cutover** — Pomerium must already be serving `:80` to obtain the certificate that makes login work
   — and it is the one certificate whose absence breaks *every* authenticated route at once.
 
+**CORRECTION, proven on the lab: `authenticate.<domain>` cannot be issued by HTTP-01 at all.** The
+paragraph above says it needs an explicit certificate and that HTTP-01 can be solved "through the
+`pomerium` ingressClass" — that is what the CRD reference and the
+[cert-manager Pomerium tutorial](https://cert-manager.io/docs/tutorials/acme/pomerium-ingress/) both
+say, and it does not work.
+
+The mechanism is a known, still-open upstream limitation,
+[ingress-controller#698](https://github.com/pomerium/ingress-controller/issues/698):
+
+> "Currently, we automatically redirect from port 80 to 443. […] This is unfortunately non trivial to
+> change, as **all routes are configured in listener on port 443, while port 80 is doing just
+> redirects**."
+
+Let's Encrypt fetches the challenge over plaintext `:80` and follows redirects. For an ordinary route
+hostname that is harmless — the redirect lands on `:443`, where the solver route exists, and
+validation succeeds. For `authenticate.<domain>` there is no route on `:443` either, because Pomerium
+serves that hostname **internally** rather than from an Ingress, so the redirect lands on a 404 and the
+authorization is marked invalid.
+
+Measured rather than inferred: with the solver Ingress **alive** and the challenge **pending**, an
+external fetch of the token returned `301 → https → 404`. Over the same period **four ordinary route
+hostnames issued successfully while `authenticate` failed every single attempt**, including forced
+retries on both staging and production.
+
+So the options for this one hostname are:
+
+1. **DNS-01** — needs DNS API credentials for the site domain, and is the only path that depends on
+   nothing inbound.
+2. **Keep autocert alive for `authenticate` only.** Pomerium's own autocert performs HTTP-01 *or*
+   **TLS-ALPN-01**, and TLS-ALPN-01 validates on `:443`, sidestepping the redirect entirely. This is
+   almost certainly how the pre-migration Pomerium obtained its `authenticate` certificate.
+3. **Supply it out of band** and renew it before expiry.
+
+**What the lab is running now (option 3, as a stopgap):** the pre-migration Pomerium's autocert
+volume still held valid *production* certificates for every hostname, so the four that cert-manager
+could not issue — `authenticate`, `clusters`, `vms`, `k8s-tenant-a` — were extracted from the
+`pomerium-autocert` PVC and installed as TLS Secrets referenced from `spec.certificates`. They are
+genuine Let's Encrypt certificates valid to **late October 2026**, and **nothing renews them**. Two
+consequences worth stating plainly: the access plane now depends on data inside the old plane's PVC,
+so that volume must not be deleted with the old Deployment; and a renewal answer for `authenticate`
+is required before October regardless of which option above is chosen.
+
 Two smaller traps: a Secret named in `spec.certificates` that does not exist is **silently skipped**
 with a log line and no status condition (the house failure mode again — §"Silent failure" in the lab
 notes), and the lab currently has **only a `selfsigned` ClusterIssuer**. An LE **staging** issuer and
