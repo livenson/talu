@@ -78,10 +78,19 @@ It is a **two-step flow, deliberately**: the Job does not start the VM. Set
 `runStrategy` itself, Flux would reconcile it straight back to `Halted` and the two would fight —
 whether a VM runs stays a Git decision.
 
-> ⚠️ **Unvalidated on hardware.** Open risks: libguestfs' appliance VM under Talos PSA, and whether
-> `resetCloudInit` suffices for a guest whose `datasource_list` excludes NoCloud. Set `forceTcg: true`
-> where there is no `/dev/kvm`. **Try the cheap thing first** — a guest whose cached instance-id
-> differs from the NoCloud one may simply re-run cloud-init and trust the CA for free.
+**Validated on `rocky-phys`**: Job `Complete` in 117 s on Ubuntu 24.04, and `virt-cat` read the
+site's real User CA back out of the disk byte-exact. Three things to know:
+
+- **`forceTcg: true` is required even on KVM-capable hosts** — a plain pod gets no `/dev/kvm`, so
+  libguestfs' appliance is emulated.
+- `diskFsGroup` (107) and `appliancePath` exist because the image does not work out of the box as a
+  bare Job; both failures point somewhere misleading. See lab-notes #44.
+- **cirros is useless as a test guest** — `virt-customize` reports "no operating systems were found".
+  Use a real cloud image.
+
+> ⚠️ Still open: whether a genuinely *provisioned* guest (cloud-init already run — what a real DR
+> package contains) re-runs cloud-init from the NoCloud seed. The validation used a pristine image,
+> so it does not settle that. If it does re-run, most of this Job is unnecessary.
 
 ## Security groups
 
