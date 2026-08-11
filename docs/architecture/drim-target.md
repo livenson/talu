@@ -1,8 +1,10 @@
 # Talu as a DRIM recovery target — gap analysis
 
-> **Status: ANALYSIS.** Nothing here is implemented. Assessed against **DRIM `drim/v1alpha1`**
-> (Disaster Recovery Infosystem Manifest, draft 2026-07-17). Every Talu claim below is anchored to a
-> file in this repo; unverified external claims are marked **(unverified)**.
+> **Status: ANALYSIS + a validated restore path.** Assessed against **DRIM `drim/v1alpha1`**
+> (Disaster Recovery Infosystem Manifest, draft 2026-07-17). The VM restore path (§4.1) is
+> **implemented** in `talu-vm` 0.2.0 and **exercised end-to-end on the physical lab** (§10, §11);
+> everything else remains analysis. Every Talu claim is anchored to a file in this repo, and
+> measured claims say so explicitly.
 
 ## 1. The question and the answer
 
@@ -345,7 +347,241 @@ else, which is itself a live confirmation that the pin works.
 breaks rbd-nbd (lab-notes #14/#15), so a `volume-import` into an RBD-backed PVC has nowhere to land.
 The chart change unit-tests with `make kbuild` + `helm template` anywhere; the round trip does not.
 
-## 11. Open questions
+## 11. Anatomy: backup → storage → recovery, and the same system as DRIM
+
+The round trip in §10.2 was run with an HTTP artifact server standing in for S3. This section shows
+the shape it would have as a real DRIM package, so the mapping between the format and the machinery
+is concrete. **Measured values are marked; everything else is illustrative.**
+
+### 11.1 The three phases
+
+```mermaid
+flowchart LR
+    subgraph CAP["1 · Capture — source site"]
+      direction TB
+      V1["Running VM<br/>cloud-init done<br/>live state on disk"]
+      Q["quiesce or halt<br/>crash- vs app-consistent"]
+      X["export the volume"]
+      V1 --> Q --> X
+    end
+
+    subgraph PKG["2 · Package — S3, encrypted + Object Lock"]
+      direction TB
+      M["manifest.yaml<br/>drim/v1alpha1"]
+      I["index.json<br/>sha256 + sizes"]
+      A["snapshots/vm/origin1/<br/>disk-0.raw.zst"]
+      R["representation-info/<br/>schema + tool versions"]
+    end
+
+    subgraph REC["3 · Recover — Talu"]
+      direction TB
+      DV["CDI DataVolume<br/>source.http or source.s3"]
+      PV["PVC on ceph-block"]
+      V2["VirtualMachine<br/>talu-vm, source: import"]
+      DV --> PV --> V2
+    end
+
+    X ==> A
+    A ==> DV
+    I -.->|"level-0: verify before restoring"| DV
+    M -.->|"profile: flavor, storageClass, network"| V2
+
+    classDef c fill:#e8f0fe,stroke:#5b7fb5,color:#111827;
+    class M,I,A,R c;
+```
+
+The DR service owns the dotted arrows. Talu owns the solid path — and everything Talu owns is now
+exercised on hardware.
+
+### 11.2 What actually ran on rocky-phys
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Op as Operator / DR service
+    participant K as Kubernetes API
+    participant C as CDI importer
+    participant S as Rook-Ceph RBD
+    participant G as Guest, Ubuntu 24.04
+
+    Note over Op,G: CAPTURE — origin1 is an ordinary talu-vm, nothing special
+    Op->>K: apply talu-vm (source: dataSource)
+    K->>S: clone golden image into PVC origin1-root, 11Gi
+    G->>G: first boot, cloud-init runs, instance-id 29dcd75d
+    Op->>G: ssh with test key, write /etc/talu-drim-marker
+    Op->>K: runStrategy Halted, so the RWO PVC is released
+
+    Note over Op,G: PACKAGE — here the artifact IS the volume, served over HTTP
+    Op->>K: pod mounts origin1-root, serves disk.img
+
+    Note over Op,G: RECOVER — restored4 is a STOCK chart render
+    Op->>K: apply talu-vm (source: import, url ends /disk.img)
+    K->>C: DataVolume restored4-root
+    C->>S: stream 11.7 GB into a new PVC, 12Gi
+    Note right of C: decompresses gz, xz and zst transparently
+    K->>G: start VMI
+    G->>G: cloud-init RE-RUNS, new instance-id eecb4664
+    Op->>G: ssh with the SAME key
+    G-->>Op: LOGIN_OK, marker returned byte-exact
+```
+
+Steps 4 and 12 are the ones that matter: the same key, and the same bytes.
+
+### 11.3 Where the bytes actually live
+
+A restored disk crosses four representations. Two of the crossings are where this bit me.
+
+```mermaid
+flowchart TB
+    A["RBD image · origin1-root"] --> B["ext4, volumeMode Filesystem"]
+    B --> C["/disk.img<br/>mode 0660, owner 107:107"]
+    C -->|"HTTP GET"| D["CDI importer pod"]
+    D -->|"decompress, then resize<br/>to the target PVC"| E["/disk.img on the new PVC"]
+    E --> F["RBD image · restored4-root"]
+    F --> G["virtio vda in the guest"]
+
+    C -.->|"a Job reading this needs<br/>fsGroup 107 — see lab-notes 44"| H["virt-customize<br/>offline retrust"]
+    E -.->|"grown to the PVC size:<br/>112 MiB image became 1 GiB"| I["so the imported sha256<br/>differs from the source"]
+
+    classDef w fill:#fdeaea,stroke:#c33,color:#5c0d0d;
+    class H,I w;
+```
+
+Two consequences worth stating out loud, because both look like bugs when you first meet them:
+
+- **The imported `disk.img` will not hash-match the artifact.** CDI expands the image to fill the
+  target volume, so a 112 MiB source produced a 1 GiB file. Integrity has to be checked on the
+  **artifact** (DRIM level-0, against `index.json`), never on the landed volume.
+- **Ownership is `107:107`,** which is why anything reading the volume out-of-band needs `fsGroup`.
+
+### 11.4 The tested system, expressed as DRIM
+
+```yaml
+apiVersion: drim/v1alpha1
+kind: Infosystem
+metadata:
+  name: drim-roundtrip
+  id: "d21b0000-0000-4000-8000-0000000000a1"     # MEASURED: origin1's talu.io/project-uuid
+  owner: "org:talu/project:drim-test"
+  labels: { criticality: tier-3, rpo: "24h", rto: "1h" }
+spec:
+  components:
+    - name: origin1
+      type: vm
+      requirements: { cpu: 2, memoryGiB: 4, architecture: x86_64 }   # MEASURED: = talu-medium
+      disks:
+        - { name: root, role: system, sizeGiB: 11 }                  # MEASURED
+      networks:
+        # Talu's tier-1 binding is masquerade over the pod network, so `dhcp` is the only
+        # honourable mode — static-remap maps to a LoadBalancer Service IP, preserve cannot
+        # be expressed at all, and no MAC survives. See §4.4.
+        - { name: default, addresses: { mode: dhcp } }
+      source:                       # informational; the spec illustrates OpenStack, this is Talu
+        platform: talu
+        region: rocky-phys
+        namespace: drim-test
+        vmName: origin1
+        volumes:
+          - { claim: origin1-root, storageClass: ceph-block, bootable: true }
+      restore:
+        method: volume-import       # MEASURED: renders `source: import` in talu-vm 0.2.0
+        bootOrder: 10
+        guestAgent: qemu-ga
+
+  validation:
+    levels:
+      - name: package
+        checks: [{ type: checksum }, { type: manifest-schema }]
+      - name: infrastructure
+        checks:
+          - { type: vm-running, target: origin1 }
+          - { type: guest-agent, target: origin1, timeoutSeconds: 300 }
+      - name: application
+        checks:
+          # This is literally the assertion the round trip made by hand: runtime state,
+          # written on the original, must come back from the restored guest.
+          - type: script
+            runOn: origin1
+            script: 'test "$(cat /etc/talu-drim-marker)" = "DRIM-ROUNDTRIP-1786464585-9105"'
+            timeoutSeconds: 60
+    policy: { failFast: false, report: summary }
+
+  launchModes:
+    validation:
+      network: { isolation: strict, addressing: ephemeral }   # Tenant.networkBaseline = default-deny
+      ttlSeconds: 7200                                        # needs a Kyverno CleanupPolicy — §9 item 4
+    recovery:
+      network: { isolation: none, addressing: from-profile }
+      scale: as-declared
+      dnsCutover: { manual: true }
+
+  profiles:
+    - name: talu-rocky-phys
+      platform:
+        vm:
+          provider: talu
+          region: rocky-phys
+          flavorMapping:
+            # The whole catalog is small-1/2, medium-2/4, large-4/8 — anything larger is
+            # unsatisfiable and stalls at WAITING_INPUT. See §4.2.
+            - { match: { cpu: 2, memoryGiB: 4 }, flavor: talu-medium }
+          storage:
+            system: { volumeType: ceph-block }
+        k8s:
+          kubeconfigRef: kamaji          # a KaaS tenant cluster publishes its own admin kubeconfig
+          storageClass: ceph-block
+      networks:
+        default: { subnet: "10.244.0.0/16" }
+
+  backupPolicy:
+    schedule: "0 3 * * *"
+    retention: { daily: 14, weekly: 8 }
+    validateEvery: 7d
+    encryption: { mode: sse-kms, keyRef: "kms://dr-packages" }
+    immutability: { objectLockDays: 14 }    # NOT satisfiable by Talu's own Garage — §7
+```
+
+### 11.5 The package, with the numbers this run produced
+
+```
+s3://dr-packages/d21b0000-…-0000000000a1/2026-08-11T16-09Z/
+├── index.json
+├── manifest.yaml                       # §11.4
+├── snapshots/vm/origin1/
+│   ├── disk-0.raw.zst                  # MEASURED source: 11 768 168 448 B raw
+│   └── disk-0.meta.json                # driver: rook-ceph.rbd.csi.ceph.com, class: ceph-block
+├── representation-info/
+│   └── tool-versions.json              # MEASURED: CDI v1.65.0, KubeVirt v1.8.4, k8s v1.35.7
+└── logs/backup.log.zst
+```
+
+`index.json` is what level-0 verifies. Digests below are **illustrative** — the run served the volume
+over HTTP and did not produce a package — but the *sizes* are measured:
+
+```json
+{
+  "packageFormatVersion": "1.0.0",
+  "revision": "2026-08-11T16-09Z",
+  "artifacts": {
+    "snapshots/vm/origin1/disk-0.raw.zst": { "sizeBytes": 11768168448, "sha256": "…" },
+    "manifest.yaml": { "sizeBytes": 2411, "sha256": "…" }
+  }
+}
+```
+
+**Compression is a free choice** — measured separately on the same lab, importing one cirros disk
+three ways through `source.http`:
+
+| Artifact | Size on the wire | Import | Landed `disk.img` sha256 |
+|---|---|---|---|
+| `cirros.raw` | 117 440 512 | Succeeded | `4a6c1d1c…e5d48a` |
+| `cirros.raw.gz` | 21 202 602 | Succeeded | `4a6c1d1c…e5d48a` |
+| `cirros.raw.zst` | 21 186 318 | Succeeded | `4a6c1d1c…e5d48a` |
+
+Identical results from all three, so DRIM's native `.zst` needs no repackaging (§4.5). Note the
+landed hash is *not* the source hash (`809dc3e0…`) — that is §11.3's resize, not corruption.
+
+## 12. Open questions
 
 1. **Does a DRIM `type: k8s` recovery always provision a fresh KaaS cluster**, or may it restore into
    an existing one? Fresh is cleaner and matches "original infrastructure destroyed," but costs a
