@@ -718,3 +718,50 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     amplification abuse). **Do not re-debug this locally**: the local path is correct and proven; the
     block is off-box. Reviving DNS-01 here needs the provider to pass inbound `:53/udp` — worth asking,
     since it would fix certificate issuance for the whole lab.
+45. **`virt-customize` against a CDI-imported PVC needs TWO things the image does not give you, and
+    both fail late with unhelpful errors.** Rewriting a restored disk offline (the `talu-vm`
+    `restore.retrust` path, `docs/architecture/drim-target.md` §4.3) runs
+    `quay.io/kubevirt/libguestfs-tools` as a plain Job — not via `virtctl guestfs`, which normally
+    papers over both. Validated on **rocky-phys**:
+    (a) **Permissions.** CDI writes `disk.img` as `-rw-rw---- 107:107` (qemu) and the libguestfs image
+    runs as **uid 1001, gid 0** — "other" has no access, so you get a bare
+    `libguestfs error: /disk/disk.img: Permission denied` *after* "Examining the guest ...", which
+    reads like a corrupt image rather than a permission problem. Fix: pod
+    `securityContext.fsGroup: 107` (+ `fsGroupChangePolicy: OnRootMismatch` so a large restored disk
+    is not re-chowned on every retry). Same class as the block-mode CDI importer wall (#14-adjacent).
+    (b) **The appliance is unreachable.** The image ships the supermin appliance at
+    `/usr/local/lib/guestfs/appliance` but leaves **`LIBGUESTFS_PATH` unset**; libguestfs then
+    searches only `/usr/lib64/guestfs` and dies with "cannot find any suitable libguestfs supermin,
+    fixed or old-style appliance". Fix: set `LIBGUESTFS_PATH` explicitly.
+    Also: a pod gets no `/dev/kvm`, so **`LIBGUESTFS_BACKEND_SETTINGS=force_tcg` is required even on
+    the KVM-capable physical hosts** — the appliance is emulated, and a 3.5 GiB Ubuntu guest took
+    ~117 s end to end. Finally, **cirros is useless as a test guest here**: `virt-customize` reports
+    "no operating systems were found in the guest image" because its buildroot rootfs is not
+    inspectable. Use a real cloud image.
+
+46. **CDI v1.65.0 DOES decompress `zstd` — measured, not assumed.** Imported the same cirros disk
+    three ways on rocky-phys (`.raw`, `.raw.gz`, `.raw.zst` over `source.http`); all three reached
+    `Succeeded` and produced **byte-identical** `disk.img` (same SHA-256). So a DR package shipping
+    `disk-0.raw.zst` needs no repackaging. Note that "Succeeded" alone proves nothing — a verbatim
+    copy of the compressed bytes would also succeed — so compare hashes across formats, not phases.
+
+47. **A restored VM DOES re-run cloud-init — KubeVirt's NoCloud `instance-id` follows the new VM, not
+    the disk.** The intuition that "cloud-init never runs again on an already-provisioned disk" is
+    wrong here, and it matters because the whole SSH-CA-trust injection rides on cloud-init. Measured
+    on **rocky-phys** with a full round trip (real Talu VM → halt → serve its `disk.img` → import into
+    a new VM): the restored guest gets a **different** `instance-id` (derived from the new VM's
+    firmware UUID), treats itself as a brand-new instance, runs `modules:config` + `modules:final`,
+    and applies the chart's cloud-init. The tell is `/var/lib/cloud/instances` holding **both** IDs.
+    Consequences:
+    - A restored guest that has cloud-init with **NoCloud in its `datasource_list`** picks up this
+      site's SSH User CA on its own — `restore.retrust` is unnecessary for it. Reach for retrust only
+      when the guest has no cloud-init, or its datasource list excludes NoCloud (an OpenStack-only
+      image being the obvious case).
+    - The re-run does **not** clobber an existing `~/.ssh/authorized_keys`, even when the new VM's
+      cloud-init declares no keys.
+    - Runtime state survives the round trip intact: a marker file written by hand on the original was
+      returned byte-exact from the restored guest.
+    Test-harness note for repeating this: the chart's `<vm>-ssh-pin` CiliumNetworkPolicy allows `:22`
+    **only from the `pomerium` namespace**, so a validation pod that SSHes to a tenant VM must run
+    there or it is silently dropped. `docker.io/alpine/git` carries an ssh client; the KubeVirt
+    libguestfs image does not.

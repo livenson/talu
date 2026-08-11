@@ -72,6 +72,15 @@ spec:
     spec:
       serviceAccountName: {{ $name }}-retrust
       restartPolicy: Never
+      # CDI writes disk.img as `-rw-rw---- 107:107` (qemu) while the libguestfs image runs as uid
+      # 1001 — "other" has no access, so virt-customize fails with a bare
+      # `libguestfs error: /disk/disk.img: Permission denied` after "Examining the guest".
+      # fsGroup adds 107 as a supplementary group, which the file's group-rw bits then satisfy.
+      # (Verified on rocky-phys; this is the same class of wall as CDI's block-mode importer on Talos.)
+      # OnRootMismatch so a large restored disk is not needlessly re-chowned on every retry.
+      securityContext:
+        fsGroup: {{ $rt.diskFsGroup | default 107 }}
+        fsGroupChangePolicy: OnRootMismatch
       initContainers:
         # The PVC is attached at POD start, before any container runs — so the wait cannot prevent the
         # mount, only the write. That is the part that matters: nothing touches disk.img until CDI
@@ -94,6 +103,12 @@ spec:
               value: {{ required "sshUserCaPubKey is required for restore.retrust" $root.Values.sshUserCaPubKey | trim | quote }}
             - name: LIBGUESTFS_BACKEND
               value: direct
+            # The image ships the supermin appliance at /usr/local/lib/guestfs/appliance but leaves
+            # LIBGUESTFS_PATH UNSET — `virtctl guestfs` sets it, and we are not virtctl. Without it
+            # libguestfs searches only /usr/lib64/guestfs and dies with "cannot find any suitable
+            # libguestfs supermin, fixed or old-style appliance". (Verified on rocky-phys.)
+            - name: LIBGUESTFS_PATH
+              value: {{ $rt.appliancePath | default "/usr/local/lib/guestfs/appliance" | quote }}
             {{- if $rt.forceTcg }}
             # No /dev/kvm (the nested lab): libguestfs' appliance must fall back to emulation.
             - name: LIBGUESTFS_BACKEND_SETTINGS

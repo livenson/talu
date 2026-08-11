@@ -71,9 +71,15 @@ restore:
     # KubeVirt's libguestfs image; track the cluster's KubeVirt version.
     image: quay.io/kubevirt/libguestfs-tools:v1.8.4
     kubectlImage: docker.io/bitnami/kubectl:latest
+    # The image ships the supermin appliance here but leaves LIBGUESTFS_PATH unset (virtctl guestfs
+    # normally sets it) — without it libguestfs cannot find its appliance at all.
+    appliancePath: /usr/local/lib/guestfs/appliance
     # libguestfs boots a small appliance VM. With no /dev/kvm (the nested lab) it must be told to use
     # TCG or it fails to launch.
     forceTcg: false
+    # CDI writes disk.img as 107:107 (qemu) with no access for "other", and the libguestfs image runs
+    # as uid 1001 — without this the Job dies with a bare "Permission denied" (verified on rocky-phys).
+    diskFsGroup: 107
     # Clear the guest's cached cloud-init state so NoCloud re-runs on first boot. Off by default:
     # on a restored production guest, re-running cloud-init can undo in-guest configuration.
     resetCloudInit: false
