@@ -12,11 +12,13 @@
 Kubernetes resource dumps, PV data, application artifacts) — be **recovered onto Talu**, with Talu
 acting as a DRIM *target environment profile* (§10 of the spec)?
 
-**Answer: yes for the Kubernetes half today, yes for the VM half after one small chart change and one
-non-obvious guest fix-up.** Talu already has every substrate primitive the format needs — KubeVirt +
-CDI, Ceph RBD, Cilium policy, Velero, an OCI registry, and real per-tenant Kubernetes. What it lacks is
-a **restore-shaped surface**: the consumer API only lets a VM boot from the site's golden-image
-catalog, and "boot this VM from *my* imported disk" is the entire DRIM VM story.
+**Answer: yes for both halves, and both are now validated on hardware** (§10). Talu already had every
+substrate primitive the format needs — KubeVirt + CDI, Ceph RBD, Cilium policy, Velero, an OCI
+registry, and real per-tenant Kubernetes. What it lacked was a **restore-shaped surface**: the
+consumer API only let a VM boot from the site's golden-image catalog, and "boot this VM from *my*
+imported disk" is the entire DRIM VM story. That gap is closed in `talu-vm` 0.2.0 (§4.1). The
+Kubernetes half needed **no product change at all** — a KaaS tenant cluster is already a valid
+restore target (§10.3).
 
 This document is scoped to Talu as a **recovery target**. Talu as a *package store* is assessed in
 §7 (short version: not with Garage as shipped). Talu's own multi-site DR design —
@@ -50,7 +52,7 @@ flowchart LR
 
 | DRIM component | Lands in | Why |
 |---|---|---|
-| `type: k8s` | **KaaS tenant cluster** ([`kaas.md`](kaas.md), [`cluster-chart`](../../components/tenancy/cluster-chart/)) | The tenant is cluster-admin on their own hosted control plane, gets a real StorageClass (kubevirt-csi → infra `ceph-block`), optional in-tenant Velero, and Kamaji publishes `<name>-admin-kubeconfig` — precisely what the DRIM profile's `platform.k8s.kubeconfigRef` needs. |
+| `type: k8s` | **KaaS tenant cluster** — ✅ validated §10.3 ([`kaas.md`](kaas.md), [`cluster-chart`](../../components/tenancy/cluster-chart/)) | The tenant is cluster-admin on their own hosted control plane, gets a real StorageClass (kubevirt-csi → infra `ceph-block`), optional in-tenant Velero, and Kamaji publishes `<name>-admin-kubeconfig` — precisely what the DRIM profile's `platform.k8s.kubeconfigRef` needs. |
 | `type: k8s` | **NOT the management cluster** | Platform tenancy is `Tenant`/`TenantVM` plus a namespace-scoped Role ([`apiserver/pkg/apis/tenancy/v1alpha1/types.go`](../../apiserver/pkg/apis/tenancy/v1alpha1/types.go)). There is no tenant path to apply arbitrary Deployments/Ingresses. A `type: k8s` component can only land here with **operator** privilege. |
 | `type: vm` | **Management cluster** ([`vm-chart`](../../components/tenancy/vm-chart/)) | Right place, wrong shape — §4. |
 | `type: external` | Neutral | Pure profile lookup (`contract.endpointRef: profile`); Talu is not involved. |
@@ -346,6 +348,79 @@ else, which is itself a live confirmation that the pin works.
 **Not the no-KVM VM lab.** Storage there is CephFS-only because the nested node's `/dev` isolation
 breaks rbd-nbd (lab-notes #14/#15), so a `volume-import` into an RBD-backed PVC has nowhere to land.
 The chart change unit-tests with `make kbuild` + `helm template` anywhere; the round trip does not.
+
+### 10.3 The `type: k8s` half — capture from one tenant cluster, restore into another
+
+§10.1–10.2 validate `type: vm`. This validates the other landing zone from §2: a Kubernetes
+component captured out of one KaaS tenant cluster and restored into a **different, freshly
+provisioned** one. Scripts and the manifest it produced: [`examples/drim-k8s/`](../../examples/drim-k8s/).
+
+```mermaid
+flowchart LR
+    subgraph SRC["Source · tenant-a"]
+      direction TB
+      A1["Deployment · Service · ConfigMap<br/>Secret · PVC"]
+      A2["PV data<br/>invoices.txt"]
+    end
+
+    subgraph P["DRIM package"]
+      direction TB
+      P1["resources.tar.zst<br/>stripFields applied<br/>Secret EXCLUDED"]
+      P2["pv/billing-data.tar.zst"]
+      P3["index.json · manifest-sha256.txt"]
+    end
+
+    subgraph DST["Target · tenant-dr, provisioned for this"]
+      direction TB
+      D1["namespace billing"]
+      D2["PVC on local-path<br/>remapped from kubevirt"]
+      D3["Deployment 2/2"]
+    end
+
+    A1 -->|"capture + scrub"| P1
+    A2 -->|"filesystem archive"| P2
+    P1 --> D1
+    P2 --> D2
+    P3 -.->|"level-0 gate: 4/4 OK"| D1
+    D1 --> D3
+    D2 --> D3
+    OP["Operator"] -.->|"§7: delivers the Secret<br/>out of band — WAITING_INPUT"| D3
+
+    classDef w fill:#fdeaea,stroke:#c33,color:#5c0d0d;
+    class OP w;
+```
+
+| Check | Result |
+|---|---|
+| Level-0 package integrity | ✅ 4/4 artifacts matched `index.json` |
+| Resources restored | ✅ Deployment, Service, ConfigMap, PVC |
+| **StorageClass remap** `kubevirt` → `local-path` | ✅ via `profiles[].platform.k8s.storageClass`; PVC **Bound** on the target's own provisioner |
+| PV data | ✅ **`md5 22795d2cf6e4f3b47bb96bef5ab0fb89`, identical to source** |
+| Level-1 `k8s-workload-ready` | ✅ `readyReplicas=2` |
+| Application check | ✅ the Service served the restored file |
+| §7 secrets | ✅ the source secret value appears **nowhere** in the package; the workload waited for the operator to supply it |
+
+**Two capture bugs the run found**, both of which produce silent failures and neither of which
+DRIM's `stripFields` example covers — now [`examples/drim-k8s/`](../../examples/drim-k8s/) and
+lab-notes #49:
+
+- **`spec.volumeName` is not enough for a PVC.** The binding annotations
+  (`pv.kubernetes.io/bind-completed`, `bound-by-controller`,
+  `volume.kubernetes.io/storage-provisioner` + its `beta` alias, `selected-node`) survive capture,
+  and the restored claim goes straight to **`Lost`** — pods `Pending`, nothing saying why. This bit
+  the first restore attempt exactly as described.
+- **A naive include-list captures `kube-root-ca.crt`**, which carries the *source* cluster's CA
+  bundle into the target.
+
+**And one platform bug, unrelated to DRIM but blocking:** provisioning the target cluster failed
+because the **Kamaji operator was OOMKilled** at the chart's default 100Mi limit. Existing tenant
+clusters were unaffected, so nothing looked broken — but new `TenantControlPlane`s never got a
+Deployment, with no events and no operator error, because it died before logging. Raising the limit
+made the stuck cluster go `Ready` in ~20 s. Fixed in `phys_kamaji`; lab-notes #48.
+
+**Caveat on scope:** the target cluster used `local-path` rather than kubevirt-csi, which is what
+made the StorageClass remap a real test — but it means kubevirt-csi-to-kubevirt-csi restore is still
+unexercised. And `resourceCapture` covered the five common kinds, not Ingress/NetworkPolicy/RBAC.
 
 ## 11. Anatomy: backup → storage → recovery, and the same system as DRIM
 

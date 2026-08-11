@@ -15,6 +15,11 @@ kam_dir: "{{ talos_gen_dir }}/kamaji"
 # image (clastix/kamaji:latest digest) when validating.
 kamaji_chart_version: "0.0.0+latest"
 
+# The chart's default memory limit (100Mi) OOMKills the operator once it watches a few tenant
+# control planes, and the only visible symptom is that NEW clusters never provision (lab-notes #48).
+kamaji_memory_limit: "512Mi"
+kamaji_memory_request: "128Mi"
+
 # Demo TenantControlPlane — proves the KaaS path end-to-end (apply → Ready → kubectl smoke).
 kamaji_demo_tcp: true
 kamaji_demo_namespace: "kaas-demo"

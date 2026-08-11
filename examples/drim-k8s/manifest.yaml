@@ -1,0 +1,72 @@
+apiVersion: drim/v1alpha1
+kind: Infosystem
+metadata:
+  name: billing-system
+  id: "d21b0000-0000-4000-8000-00000000c001"
+  owner: "org:talu/project:billing"
+  labels: { criticality: tier-3, rpo: "24h", rto: "1h" }
+spec:
+  components:
+    - name: billing-api
+      type: k8s
+      requirements:
+        kubernetesVersion: ">=1.30"
+        namespaces: ["billing"]
+      workloads:
+        - { kind: Deployment, name: billing-api, replicas: 2 }
+      persistentVolumes:
+        - claim: billing-data
+          sizeGiB: 1
+          role: data
+          backupMethod: filesystem
+      resourceCapture:
+        include: ["Deployment", "Service", "ConfigMap", "PVC"]
+        exclude: ["Secret"]
+        stripFields:
+          - metadata.uid
+          - metadata.resourceVersion
+          - metadata.creationTimestamp
+          - metadata.generation
+          - metadata.managedFields
+          - status
+          - spec.clusterIP
+          - spec.volumeName
+      source:
+        platform: talu-kaas
+        cluster: tenant-a
+        namespace: billing
+        storageClass: kubevirt
+      restore:
+        bootOrder: 20
+  validation:
+    levels:
+      - name: package
+        checks: [{ type: checksum }, { type: manifest-schema }]
+      - name: infrastructure
+        checks:
+          - { type: k8s-workload-ready, target: billing-api, condition: "replicas >= 1" }
+      - name: application
+        checks:
+          - type: script
+            runOn: billing-api
+            script: 'md5sum /usr/share/nginx/html/data/invoices.txt'
+            timeoutSeconds: 60
+    policy: { failFast: false, report: summary }
+  launchModes:
+    validation:
+      network: { isolation: strict, addressing: ephemeral }
+      ttlSeconds: 7200
+    recovery:
+      network: { isolation: none, addressing: from-profile }
+      scale: as-declared
+  profiles:
+    - name: talu-kaas-dr
+      platform:
+        k8s:
+          provider: talu-kaas
+          kubeconfigRef: kamaji            # <cluster>-admin-kubeconfig Secret on the mgmt cluster
+          storageClass: local-path         # REMAP: source used `kubevirt` (kubevirt-csi -> ceph-block)
+  backupPolicy:
+    schedule: "0 3 * * *"
+    retention: { daily: 14 }
+    validateEvery: 7d

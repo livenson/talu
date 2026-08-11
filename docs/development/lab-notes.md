@@ -765,3 +765,30 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     **only from the `pomerium` namespace**, so a validation pod that SSHes to a tenant VM must run
     there or it is silently dropped. `docker.io/alpine/git` carries an ssh client; the KubeVirt
     libguestfs image does not.
+
+48. **The Kamaji operator OOMKills at the chart's default 100Mi, and the only symptom is that NEW
+    tenant clusters never provision.** Hit on **rocky-phys** while building a DR restore target. The
+    failure mode is nasty because everything that already exists keeps working: running tenant
+    clusters are unaffected (their control-plane Deployments exist; nothing needs reconciling), so
+    the lab looks healthy. A newly-applied `TenantControlPlane` gets its certificates and its
+    LoadBalancer Service, then **stops** — `status: Provisioning` forever, `kubernetesResources.deployment`
+    empty, **no events, and no error in the operator log**, because the process is killed (exit 137)
+    before it can log one. `kubectl -n kamaji-system get pod` is where the truth is:
+    `CrashLoopBackOff` with a double-digit restart count. Fix = raise the limit
+    (`--set resources.limits.memory=512Mi`, now the `phys_kamaji` default): the stuck TCP went
+    **Ready within ~20 s** of the operator staying up. Suspect this any time a CAPI/Kamaji cluster
+    stalls with a healthy-looking control plane and no diagnostics — check the operator's restarts
+    before reading anything else.
+
+49. **`stripFields: [spec.volumeName]` is NOT enough to make a PVC restorable elsewhere — the
+    binding ANNOTATIONS have to go too, or it restores straight to `Lost`.** Found while validating
+    a DRIM `type: k8s` restore across two tenant clusters. A captured PVC carries
+    `pv.kubernetes.io/bind-completed: "yes"` and `pv.kubernetes.io/bound-by-controller: "yes"`; on
+    restore the binding controller believes the claim was already bound, finds no PV, and parks it in
+    **`Lost`** — where it stays. The pods sit `Pending` and nothing says why. It also carries
+    `volume.kubernetes.io/storage-provisioner` (+ the `beta` alias) naming the SOURCE cluster's CSI
+    driver, which then contradicts a remapped StorageClass, and `volume.kubernetes.io/selected-node`
+    naming a node that does not exist in the target. Strip all five plus `spec.volumeName` and
+    `metadata.finalizers`, and the claim binds normally against the target's own provisioner.
+    Related capture trap in the same pass: a naive namespace include-list picks up the auto-created
+    **`kube-root-ca.crt` ConfigMap**, which holds the *source* cluster's CA bundle — never restore it.
