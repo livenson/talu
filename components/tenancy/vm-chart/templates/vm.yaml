@@ -3,6 +3,11 @@
 {{- $ns := .Values.slug -}}
 {{- $name := .Values.name -}}
 {{- $principal := .Values.principal | default "talu" -}}
+{{- /* Nil-safe: an overlay may set `restore:` with no body. Validation (talu-vm.validate)
+       has already run by the time these are used. */ -}}
+{{- $restore := .Values.restore | default dict -}}
+{{- $restoreRoot := $restore.root | default dict -}}
+{{- $retrustCfg := $restore.retrust | default dict -}}
 ---
 # Cloud-init lives in a Secret (guest secrets stay out of the VM manifest; the manager writes it).
 apiVersion: v1
@@ -130,7 +135,15 @@ metadata:
     talu.io/vm: {{ $name | quote }}
     {{- include "talu-vm.labels" $root | nindent 4 }}
 spec:
+  {{- $retrust := and (eq $root.Values.source "import") $retrustCfg.enabled }}
+  {{- if $retrust }}
+  # Held OFF while the offline re-trust Job rewrites the imported disk — booting first would let the
+  # guest come up with the wrong SSH CA (and would race virt-customize for the image). Git flips this
+  # back: set restore.retrust.enabled=false once the Job has Completed. See retrust-job.yaml.
+  runStrategy: Halted
+  {{- else }}
   runStrategy: Always
+  {{- end }}
   {{- if $root.Values.size }}
   # Named size (preferred). KubeVirt REJECTS a VM that also sets domain.cpu/domain.resources, which is
   # the point: the size is enforced, not advisory. Snapshotted into a ControllerRevision at creation,
@@ -139,10 +152,14 @@ spec:
     kind: VirtualMachineClusterInstancetype
     name: talu-{{ $root.Values.size }}
   {{- end }}
-  {{- if eq $root.Values.source "dataSource" }}
-  # Persistent root disk cloned from the golden-image DataSource (CDI). New VMs get the latest patched
-  # image automatically (the DataImportCron rolls the DataSource); the disk persists → bootc self-update.
+  {{- $dataDisks := $root.Values.dataDisks | default list }}
+  {{- if or (eq $root.Values.source "dataSource") (eq $root.Values.source "import") $dataDisks }}
+  # Every DataVolume uses `storage:` rather than `pvc:` so CDI's StorageProfile picks the access mode
+  # and volume mode — the sites force Filesystem/RWO because block-mode CDI is broken on Talos.
   dataVolumeTemplates:
+    {{- if eq $root.Values.source "dataSource" }}
+    # Persistent root disk cloned from the golden-image DataSource (CDI). New VMs get the latest patched
+    # image automatically (the DataImportCron rolls the DataSource); the disk persists → bootc self-update.
     - metadata:
         name: {{ $name }}-root
         labels:
@@ -154,6 +171,32 @@ spec:
           namespace: {{ $root.Values.dataSourceNamespace | quote }}
         storage:
           resources: { requests: { storage: {{ $root.Values.rootDiskSize }} } }
+    {{- else if eq $root.Values.source "import" }}
+    # DR restore: the root disk is imported from a package artifact, NOT cloned from the site catalog
+    # (docs/architecture/drim-target.md §4.1). This bypasses the golden image entirely — so it also
+    # bypasses the cosign policy, which matches registry sources only, and the guest carries whatever
+    # SSH CA trust it had at its origin (§4.3, gated on restore.acknowledgeGuestTrust).
+    - metadata:
+        name: {{ $name }}-root
+        labels:
+          {{- include "talu-vm.labels" $root | nindent 10 }}
+      spec:
+        source:
+          {{- include "talu-vm.dvSource" $restoreRoot | trim | nindent 10 }}
+        storage:
+          resources: { requests: { storage: {{ $root.Values.rootDiskSize }} } }
+    {{- end }}
+    {{- range $d := $dataDisks }}
+    - metadata:
+        name: {{ $name }}-{{ $d.name }}
+        labels:
+          {{- include "talu-vm.labels" $root | nindent 10 }}
+      spec:
+        source:
+          {{- include "talu-vm.dvSource" $d | trim | nindent 10 }}
+        storage:
+          resources: { requests: { storage: {{ $d.size }} } }
+    {{- end }}
   {{- end }}
   template:
     metadata:
@@ -172,6 +215,13 @@ spec:
           disks:
             - { name: rootdisk, disk: { bus: virtio } }
             - { name: cloudinit, disk: { bus: virtio } }
+            {{- if $dataDisks }}
+            # `serial` surfaces in the guest as /dev/disk/by-id/virtio-<name>, so a restored guest can
+            # mount each data disk by name instead of guessing device order (which is not stable).
+            {{- end }}
+            {{- range $d := $dataDisks }}
+            - { name: {{ $d.name }}, disk: { bus: virtio }, serial: {{ $d.name | quote }} }
+            {{- end }}
           interfaces: [{ name: default, masquerade: {} }]
         {{- if $root.Values.memory }}
         # Legacy sizing. Deprecated in favour of `size:` — it cannot express vCPU, so KubeVirt defaults
@@ -180,16 +230,23 @@ spec:
         {{- end }}
       networks: [{ name: default, pod: {} }]
       volumes:
-        {{- if eq $root.Values.source "dataSource" }}
+        {{- if or (eq $root.Values.source "dataSource") (eq $root.Values.source "import") }}
         - name: rootdisk
           dataVolume: { name: {{ $name }}-root }
         {{- else }}
         - name: rootdisk
           containerDisk: { image: {{ $root.Values.image }} }
         {{- end }}
+        # Attached even for an imported disk: harmless if the guest has no cloud-init, and it is what
+        # a guest whose cached instance-id differs picks up on first boot. Do NOT rely on it to carry
+        # the SSH CA trust into an imported guest — see README.md § Importing a disk.
         - name: cloudinit
           cloudInitNoCloud:
             secretRef: { name: {{ $name }}-userdata }
+        {{- range $d := $dataDisks }}
+        - name: {{ $d.name }}
+          dataVolume: { name: {{ $name }}-{{ $d.name }} }
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

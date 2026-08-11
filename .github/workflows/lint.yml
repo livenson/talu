@@ -70,6 +70,45 @@ jobs:
             helm template t "components/tenancy/$chart" -f "components/tenancy/$chart/ci/lint-values.yaml" \
               | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
           done
+          # vm-chart in DR-restore mode: source=import + data disks. It cannot live in lint-values.yaml
+          # (that file sets source=containerDisk, and the modes are mutually exclusive), so this is the
+          # only thing exercising the import/dataDisks templates. kubeconform runs with
+          # -ignore-missing-schemas, so DataVolume is NOT schema-checked — grep the rendered output or
+          # this step proves only that the YAML parses.
+          set -f   # dataDisks[0] is a glob pattern to the shell; disable pathname expansion
+          helm template t components/tenancy/vm-chart -f components/tenancy/vm-chart/ci/lint-values.yaml \
+            --set source=import --set restore.root.url=https://s3.example/pkg/disk-0.raw \
+            --set restore.acknowledgeGuestTrust=true \
+            --set dataDisks[0].name=data --set dataDisks[0].size=20Gi \
+            --set dataDisks[1].name=logs --set dataDisks[1].size=5Gi \
+            --set dataDisks[1].url=s3://dr/logs.raw --set dataDisks[1].secretRef=dr-s3 \
+            > /tmp/vm-import.yaml
+          kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 < /tmp/vm-import.yaml
+          grep -q 'url: "https://s3.example/pkg/disk-0.raw"' /tmp/vm-import.yaml   # http source rendered
+          grep -q 'url: "s3://dr/logs.raw"'                  /tmp/vm-import.yaml   # s3 source rendered
+          grep -q 'blank: {}'                                /tmp/vm-import.yaml   # urlless disk is blank
+          grep -q 'serial: "data"'                           /tmp/vm-import.yaml   # by-id addressable
+          # The offline re-trust Job + its RBAC, and the Halted hold that keeps it from racing the boot.
+          helm template t components/tenancy/vm-chart -f components/tenancy/vm-chart/ci/lint-values.yaml \
+            --set source=import --set restore.root.url=https://s3.example/pkg/disk-0.raw \
+            --set restore.acknowledgeGuestTrust=true --set restore.retrust.enabled=true \
+            --set restore.retrust.forceTcg=true > /tmp/vm-retrust.yaml
+          kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 < /tmp/vm-retrust.yaml
+          grep -q 'runStrategy: Halted' /tmp/vm-retrust.yaml   # must not boot before the disk is fixed
+          grep -q 'virt-customize'      /tmp/vm-retrust.yaml
+          # …and the guardrails must REFUSE to render (each failure they catch is silent at runtime).
+          for bad in \
+            "--set source=import --set restore.acknowledgeGuestTrust=true" \
+            "--set source=import --set restore.root.url=https://x/y.raw" \
+            "--set restore.root.url=https://x/y.raw" \
+            "--set dataDisks[0].name=rootdisk --set dataDisks[0].size=1Gi" ; do
+            # shellcheck disable=SC2086
+            if helm template t components/tenancy/vm-chart \
+                 -f components/tenancy/vm-chart/ci/lint-values.yaml $bad >/dev/null 2>&1; then
+              echo "::error::vm-chart rendered invalid restore values: $bad"; exit 1
+            fi
+          done
+          set +f
           # cluster-chart with wiring + in-tenant backup + worker autoscaling enabled (all opt-in paths).
           helm template t components/tenancy/cluster-chart -f components/tenancy/cluster-chart/ci/lint-values.yaml \
             --set wiring.enabled=true --set wiring.inTenant.adminUser=alice@talu.local \

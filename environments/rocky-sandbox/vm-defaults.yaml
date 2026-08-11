@@ -18,3 +18,14 @@ image: quay.io/containerdisks/ubuntu:24.04
 #   package: false
 # logging:
 #   consoleLevel: info
+
+# DR restore (drim-target.md §4.1). A VM file sets these per restore — they are operator-owned, so
+# they live here or in the VM file, never in a consumer-authored TenantVM. Prefer a presigned https
+# URL: an s3:// source needs a credentials Secret in the TENANT's namespace.
+# source: import
+# rootDiskSize: 40Gi
+# restore:
+#   root: { url: "https://s3.example/pkg/<rev>/disk-0.raw" }
+#   acknowledgeGuestTrust: true   # you have re-trusted the guest's SSH CA out of band (§4.3)
+# dataDisks:
+#   - { name: data, size: 500Gi, url: "https://s3.example/pkg/<rev>/disk-1.raw" }

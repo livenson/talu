@@ -1,0 +1,127 @@
+{{- $rt := (.Values.restore | default dict).retrust | default dict -}}
+{{- if and (eq .Values.source "import") $rt.enabled }}
+{{- $root := . -}}
+{{- $ns := .Values.slug -}}
+{{- $name := .Values.name -}}
+# Offline SSH-CA re-trust for an imported disk (docs/architecture/drim-target.md §4.3).
+#
+# THE PROBLEM: a disk imported from another platform carries that platform's SSH trust, not this
+# site's. Talu's access plane is Pomerium Native SSH — without /etc/ssh/talu_ca.pub and
+# TrustedUserCAKeys, sshd rejects every certificate this site issues. Cloud-init is attached but does
+# not re-run on an already-provisioned disk, so the chart's normal trust injection does nothing. The
+# VM boots, the guest agent connects, every health check passes, and no human can log in.
+#
+# THE FIX: KubeVirt exposes no generic guest-exec, so the disk is rewritten OFFLINE with
+# virt-customize while the VM is held Halted (see vm.yaml).
+#
+# ⚠️ UNVALIDATED on real hardware. Two known risks: libguestfs' appliance VM under Talos PSA, and
+# whether resetCloudInit is enough for a guest whose datasource_list excludes NoCloud.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}-retrust
+  namespace: {{ $ns }}
+  labels:
+    talu.io/vm: {{ $name | quote }}
+    {{- include "talu-vm.labels" $root | nindent 4 }}
+---
+# Read-only, and only the one DataVolume this VM imports: the Job waits for the import to finish, it
+# never drives it. Notably it canNOT patch the VirtualMachine — starting the VM stays a Git decision
+# (values), so Flux and this Job can never fight over runStrategy.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-retrust
+  namespace: {{ $ns }}
+  labels:
+    talu.io/vm: {{ $name | quote }}
+    {{- include "talu-vm.labels" $root | nindent 4 }}
+rules:
+  - apiGroups: [cdi.kubevirt.io]
+    resources: [datavolumes]
+    resourceNames: [{{ printf "%s-root" $name | quote }}]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-retrust
+  namespace: {{ $ns }}
+  labels:
+    talu.io/vm: {{ $name | quote }}
+    {{- include "talu-vm.labels" $root | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $name }}-retrust }
+subjects: [{ kind: ServiceAccount, name: {{ $name }}-retrust, namespace: {{ $ns }} }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-retrust
+  namespace: {{ $ns }}
+  labels:
+    talu.io/vm: {{ $name | quote }}
+    {{- include "talu-vm.labels" $root | nindent 4 }}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        talu.io/vm: {{ $name | quote }}
+        {{- include "talu-vm.labels" $root | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}-retrust
+      restartPolicy: Never
+      initContainers:
+        # The PVC is attached at POD start, before any container runs — so the wait cannot prevent the
+        # mount, only the write. That is the part that matters: nothing touches disk.img until CDI
+        # reports the import Succeeded.
+        - name: wait-for-import
+          image: {{ $rt.kubectlImage | quote }}
+          command:
+            - kubectl
+            - wait
+            - --for=jsonpath={.status.phase}=Succeeded
+            - --timeout=60m
+            - -n
+            - {{ $ns }}
+            - datavolume/{{ $name }}-root
+      containers:
+        - name: retrust
+          image: {{ $rt.image | quote }}
+          env:
+            - name: CA_PUB
+              value: {{ required "sshUserCaPubKey is required for restore.retrust" $root.Values.sshUserCaPubKey | trim | quote }}
+            - name: LIBGUESTFS_BACKEND
+              value: direct
+            {{- if $rt.forceTcg }}
+            # No /dev/kvm (the nested lab): libguestfs' appliance must fall back to emulation.
+            - name: LIBGUESTFS_BACKEND_SETTINGS
+              value: force_tcg
+            {{- end }}
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              img=/disk/disk.img
+              [ -f "$img" ] || img="$(find /disk -maxdepth 1 -name '*.img' | head -1)"
+              [ -n "$img" ] || { echo "no disk image under /disk"; exit 1; }
+              printf '%s\n' "$CA_PUB" > /tmp/talu_ca.pub
+              printf 'TrustedUserCAKeys /etc/ssh/talu_ca.pub\nPasswordAuthentication no\n' \
+                > /tmp/60-talu-ca.conf
+              virt-customize -a "$img" \
+                --upload /tmp/talu_ca.pub:/etc/ssh/talu_ca.pub \
+                --upload /tmp/60-talu-ca.conf:/etc/ssh/sshd_config.d/60-talu-ca.conf \
+                --run-command 'chmod 0644 /etc/ssh/talu_ca.pub /etc/ssh/sshd_config.d/60-talu-ca.conf' \
+                {{- if $rt.resetCloudInit }}
+                --run-command 'rm -rf /var/lib/cloud/instance /var/lib/cloud/instances' \
+                {{- end }}
+                --no-network
+              echo "re-trusted $img — now set restore.retrust.enabled=false to boot the VM"
+          volumeMounts:
+            - { name: rootdisk, mountPath: /disk }
+      volumes:
+        # The PVC CDI imported into, via the VM's dataVolumeTemplate.
+        - name: rootdisk
+          persistentVolumeClaim: { claimName: {{ $name }}-root }
+{{- end }}

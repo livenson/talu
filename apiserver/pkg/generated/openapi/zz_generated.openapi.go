@@ -24,6 +24,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantStatus":          schema_pkg_apis_tenancy_v1alpha1_TenantStatus(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVM":              schema_pkg_apis_tenancy_v1alpha1_TenantVM(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMCounts":        schema_pkg_apis_tenancy_v1alpha1_TenantVMCounts(ref),
+		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMDataDisk":      schema_pkg_apis_tenancy_v1alpha1_TenantVMDataDisk(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMList":          schema_pkg_apis_tenancy_v1alpha1_TenantVMList(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMSpec":          schema_pkg_apis_tenancy_v1alpha1_TenantVMSpec(ref),
 		"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMStatus":        schema_pkg_apis_tenancy_v1alpha1_TenantVMStatus(ref),
@@ -594,6 +595,36 @@ func schema_pkg_apis_tenancy_v1alpha1_TenantVMCounts(ref common.ReferenceCallbac
 	}
 }
 
+func schema_pkg_apis_tenancy_v1alpha1_TenantVMDataDisk(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "TenantVMDataDisk is one extra volume attached to a TenantVM.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name is unique within the VM and becomes the guest-visible disk serial.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"size": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Size is the PVC size, e.g. 500Gi.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"name", "size"},
+			},
+		},
+	}
+}
+
 func schema_pkg_apis_tenancy_v1alpha1_TenantVMList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -691,9 +722,25 @@ func schema_pkg_apis_tenancy_v1alpha1_TenantVMSpec(ref common.ReferenceCallback)
 							},
 						},
 					},
+					"dataDisks": {
+						SchemaProps: spec.SchemaProps{
+							Description: "DataDisks are extra non-root volumes, each surfacing in the guest as /dev/disk/by-id/virtio-<name>.\n\nName and size ONLY — deliberately. The chart can also populate a disk from a URL (`source: import`, the DR restore path), but that is operator-owned: which image a VM may boot is site plumbing, not a per-VM consumer choice. x-talu-owner is a contract the Helm merge does not enforce, so THIS projection is the enforcement — a TenantVM cannot express a URL, and a consumer of this API therefore cannot escape the site's golden-image catalog. See docs/architecture/drim-target.md §4.1.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMDataDisk"),
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
+		Dependencies: []string{
+			"github.com/livenson/talu/apiserver/pkg/apis/tenancy/v1alpha1.TenantVMDataDisk"},
 	}
 }
 
