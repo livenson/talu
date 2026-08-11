@@ -10,8 +10,8 @@ All notable changes to this project are documented here. Format follows
   The recovery path for a portable DR package; see `docs/architecture/drim-target.md`.
 - `docs/architecture/drim-target.md` — analysis of Talu as a DRIM disaster-recovery target,
   with the restore path validated end-to-end on `rocky-phys`.
-- lab-notes #44 (`virt-customize` against a CDI PVC: fsGroup + LIBGUESTFS_PATH + force_tcg),
-  #45 (CDI v1.65.0 decompresses zstd — measured) and #46 (a restored VM DOES re-run cloud-init,
+- lab-notes #45 (`virt-customize` against a CDI PVC: fsGroup + LIBGUESTFS_PATH + force_tcg),
+  #46 (CDI v1.65.0 decompresses zstd — measured) and #47 (a restored VM DOES re-run cloud-init,
   so most restores need no `restore.retrust`).
 - Initial monorepo scaffold: `components/` (product) + `environments/` (values-only overlays),
   the customization boundary, and OSS project files (MIT).

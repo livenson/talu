@@ -61,7 +61,7 @@ Three things this mode does **not** do, each of which is silent:
    - **Cloud-init present with NoCloud in its `datasource_list`** (the common case): it **re-runs**.
      KubeVirt derives the NoCloud `instance-id` from the new VM's firmware UUID, so the restored
      guest sees a new instance and applies this chart's cloud-init, CA trust included. Measured on
-     `rocky-phys`; lab-notes #46. Nothing extra to do.
+     `rocky-phys`; lab-notes #47. Nothing extra to do.
    - **No cloud-init, or a `datasource_list` without NoCloud** (an OpenStack-only image): nothing
      reads the seed and the trust is never written. Use `restore.retrust` below.
 
@@ -91,12 +91,12 @@ site's real User CA back out of the disk byte-exact. Three things to know:
 - **`forceTcg: true` is required even on KVM-capable hosts** — a plain pod gets no `/dev/kvm`, so
   libguestfs' appliance is emulated.
 - `diskFsGroup` (107) and `appliancePath` exist because the image does not work out of the box as a
-  bare Job; both failures point somewhere misleading. See lab-notes #44.
+  bare Job; both failures point somewhere misleading. See lab-notes #45.
 - **cirros is useless as a test guest** — `virt-customize` reports "no operating systems were found".
   Use a real cloud image.
 
 > **Most restores do not need this.** A guest with cloud-init and NoCloud re-runs it and picks the CA
-> up for free (see (2) above, lab-notes #46). Reach for `retrust` when the guest cannot read the
+> up for free (see (2) above, lab-notes #47). Reach for `retrust` when the guest cannot read the
 > NoCloud seed at all.
 
 ## Security groups

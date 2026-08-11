@@ -689,7 +689,36 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     host's certificate rather than failing the handshake, so a missing cert looks like a mis-issued
     one (`clusters.<domain>` presenting the `hubble.<domain>` certificate).
 
-44. **`virt-customize` against a CDI-imported PVC needs TWO things the image does not give you, and
+44. **DNS-01 IS available on `sslip.io` — it delegates the challenge name back to your own host, so
+    there are no DNS API credentials to obtain.** This was assumed impossible for most of the Pomerium
+    Ingress migration and it shaped several decisions; it is wrong. Verified against the authoritative
+    server rather than the docs:
+    ```
+    $ dig @ns-ovh.sslip.io _acme-challenge.authenticate.92-220-16-211.sslip.io TXT
+    ;; AUTHORITY SECTION:
+    _acme-challenge.authenticate.<ip>.sslip.io. 604800 IN NS authenticate.<ip>.sslip.io.
+    ;; ADDITIONAL SECTION:
+    authenticate.<ip>.sslip.io.                 604800 IN A  <floating-ip>
+    ```
+    The CA therefore asks **our** IP for the TXT record. What is needed is an authoritative responder
+    on the floating IP — `acme-dns` (cert-manager has a built-in `acme-dns` solver) or a webhook
+    solver — plus an inbound **`:53/udp`** forward. The provider currently forwards only `:80`,
+    `:443` and `:2222`, so that rule is the one new prerequisite.
+    **Why it would be worth it:** DNS-01 removes the dependency on the flaky inbound `:80` path that
+    caused the hour-long Let's Encrypt lockout, left issuance at 4-of-8 during the Ingress cutover, and
+    makes `authenticate.<domain>` impossible to validate at all (#43). Note the same trick works for
+    **wildcard** certificates on sslip.io.
+
+    **BUT ON THIS LAB IT IS BLOCKED, and the delegation is not the reason.** Tested end to end: a
+    CoreDNS responder authoritative for the delegated zone was deployed on an LB IP, answered
+    correctly *inside* the cluster (`dig @172.18.200.11 … TXT` -> the expected record), and a firewalld
+    forward `port=53:proto=udp:toport=53:toaddr=<lb-ip>` was added on the DNAT host. From outside,
+    **5/5 queries timed out**, and a `tcpdump -ni any 'udp port 53'` on that host captured **nothing** —
+    so inbound UDP/53 never arrives. The provider filters it upstream (common, to prevent DNS
+    amplification abuse). **Do not re-debug this locally**: the local path is correct and proven; the
+    block is off-box. Reviving DNS-01 here needs the provider to pass inbound `:53/udp` — worth asking,
+    since it would fix certificate issuance for the whole lab.
+45. **`virt-customize` against a CDI-imported PVC needs TWO things the image does not give you, and
     both fail late with unhelpful errors.** Rewriting a restored disk offline (the `talu-vm`
     `restore.retrust` path, `docs/architecture/drim-target.md` §4.3) runs
     `quay.io/kubevirt/libguestfs-tools` as a plain Job — not via `virtctl guestfs`, which normally
@@ -710,13 +739,13 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     "no operating systems were found in the guest image" because its buildroot rootfs is not
     inspectable. Use a real cloud image.
 
-45. **CDI v1.65.0 DOES decompress `zstd` — measured, not assumed.** Imported the same cirros disk
+46. **CDI v1.65.0 DOES decompress `zstd` — measured, not assumed.** Imported the same cirros disk
     three ways on rocky-phys (`.raw`, `.raw.gz`, `.raw.zst` over `source.http`); all three reached
     `Succeeded` and produced **byte-identical** `disk.img` (same SHA-256). So a DR package shipping
     `disk-0.raw.zst` needs no repackaging. Note that "Succeeded" alone proves nothing — a verbatim
     copy of the compressed bytes would also succeed — so compare hashes across formats, not phases.
 
-46. **A restored VM DOES re-run cloud-init — KubeVirt's NoCloud `instance-id` follows the new VM, not
+47. **A restored VM DOES re-run cloud-init — KubeVirt's NoCloud `instance-id` follows the new VM, not
     the disk.** The intuition that "cloud-init never runs again on an already-provisioned disk" is
     wrong here, and it matters because the whole SSH-CA-trust injection rides on cloud-init. Measured
     on **rocky-phys** with a full round trip (real Talu VM → halt → serve its `disk.img` → import into

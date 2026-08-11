@@ -156,7 +156,7 @@ Deliberately two-step: the Job does not start the VM, because Flux would reconci
 straight back and fight it; Git stays the source of truth for whether a VM runs. Validated on
 rocky-phys after fixing two undocumented mechanics that both fail with misleading errors — CDI writes
 `disk.img` `107:107` while the image runs as uid 1001 (needs `fsGroup`), and the image leaves
-`LIBGUESTFS_PATH` unset so the appliance it ships is unreachable (lab-notes #44). A pod gets no
+`LIBGUESTFS_PATH` unset so the appliance it ships is unreachable (lab-notes #45). A pod gets no
 `/dev/kvm`, so `forceTcg` is required even on KVM-capable hosts.
 
 `restore.acknowledgeGuestTrust` stays mandatory regardless: the operator should decide which of the
@@ -196,7 +196,7 @@ repackaging.
 
 Worth keeping the method in mind: `Succeeded` alone proves nothing, because writing the compressed
 bytes verbatim would also "succeed". The evidence is the hash comparison across formats, not the
-phase. (lab-notes #45.)
+phase. (lab-notes #46.)
 
 ### 4.6 No machine identity for a DR service
 
@@ -307,7 +307,7 @@ v1.65.0, KubeVirt v1.8.4. Source images were served from the gateway on the pod 
 | `dataDisks[]` blank volume | ✅ provisioned, attached as a third virtio disk |
 | Disk `serial` reaches the hypervisor | ✅ `<serial>data</serial>` on `vdc` in the libvirt domain XML |
 | `.raw` / `.raw.gz` / `.raw.zst` | ✅ all three byte-identical (§4.5) |
-| `restore.retrust` Job | ✅ `Complete` in 117 s on Ubuntu, after two fixes (lab-notes #44) |
+| `restore.retrust` Job | ✅ `Complete` in 117 s on Ubuntu, after two fixes (lab-notes #45) |
 | CA actually inside the disk | ✅ `virt-cat` returned the site's real Pomerium User CA, byte-exact, plus `TrustedUserCAKeys` |
 | The Halted hold | ✅ VM stayed `Stopped` for the Job's whole life; flipping `enabled: false` booted it |
 
@@ -440,7 +440,7 @@ flowchart TB
     E --> F["RBD image · restored4-root"]
     F --> G["virtio vda in the guest"]
 
-    C -.->|"a Job reading this needs<br/>fsGroup 107 — see lab-notes 44"| H["virt-customize<br/>offline retrust"]
+    C -.->|"a Job reading this needs<br/>fsGroup 107 — see lab-notes 45"| H["virt-customize<br/>offline retrust"]
     E -.->|"grown to the PVC size:<br/>112 MiB image became 1 GiB"| I["so the imported sha256<br/>differs from the source"]
 
     classDef w fill:#fdeaea,stroke:#c33,color:#5c0d0d;
