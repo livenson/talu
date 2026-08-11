@@ -105,6 +105,15 @@ func (r *REST) toRelease(v *v1alpha1.TenantVM, tenant string) *unstructured.Unst
 		}
 		values["securityGroups"] = sgs
 	}
+	// Name and size only — the chart's import URL fields are operator-owned and must not be
+	// reachable through this API (types.go: TenantVMSpec.DataDisks).
+	if len(v.Spec.DataDisks) > 0 {
+		disks := make([]interface{}, 0, len(v.Spec.DataDisks))
+		for _, d := range v.Spec.DataDisks {
+			disks = append(disks, map[string]interface{}{"name": d.Name, "size": d.Size})
+		}
+		values["dataDisks"] = disks
+	}
 	// projectUuid and allowedUsers are the TENANT's, injected here exactly as the tenancy role does
 	// from tenant.yaml — a VM never restates its tenant's identity.
 	values["projectUuid"] = v.Annotations["talu.io/project-uuid"]
@@ -162,6 +171,19 @@ func fromRelease(u *unstructured.Unstructured) (*v1alpha1.TenantVM, error) {
 			if s, ok := x.(string); ok {
 				v.Spec.SecurityGroups = append(v.Spec.SecurityGroups, s)
 			}
+		}
+	}
+	if dd, ok := values["dataDisks"].([]interface{}); ok {
+		for _, x := range dd {
+			m, ok := x.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name, _ := m["name"].(string)
+			size, _ := m["size"].(string)
+			// A disk the site added out of band may carry operator-only keys (url, secretRef);
+			// they are intentionally dropped here rather than surfaced on the typed object.
+			v.Spec.DataDisks = append(v.Spec.DataDisks, v1alpha1.TenantVMDataDisk{Name: name, Size: size})
 		}
 	}
 	if ts := u.GetDeletionTimestamp(); ts != nil {

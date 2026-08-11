@@ -75,6 +75,24 @@ type TenantVMSpec struct {
 	// SecurityGroups are the tenant security groups this VM joins; they become labels the tenant's
 	// CiliumNetworkPolicies select on.
 	SecurityGroups []string `json:"securityGroups,omitempty"`
+	// DataDisks are extra non-root volumes, each surfacing in the guest as
+	// /dev/disk/by-id/virtio-<name>.
+	//
+	// Name and size ONLY — deliberately. The chart can also populate a disk from a URL
+	// (`source: import`, the DR restore path), but that is operator-owned: which image a VM may boot
+	// is site plumbing, not a per-VM consumer choice. x-talu-owner is a contract the Helm merge does
+	// not enforce, so THIS projection is the enforcement — a TenantVM cannot express a URL, and a
+	// consumer of this API therefore cannot escape the site's golden-image catalog.
+	// See docs/architecture/drim-target.md §4.1.
+	DataDisks []TenantVMDataDisk `json:"dataDisks,omitempty"`
+}
+
+// TenantVMDataDisk is one extra volume attached to a TenantVM.
+type TenantVMDataDisk struct {
+	// Name is unique within the VM and becomes the guest-visible disk serial.
+	Name string `json:"name"`
+	// Size is the PVC size, e.g. 500Gi.
+	Size string `json:"size"`
 }
 
 type TenantVMStatus struct {

@@ -29,6 +29,9 @@ func sampleVM() *v1alpha1.TenantVM {
 		Spec: v1alpha1.TenantVMSpec{
 			Size: "small", Principal: "alice", RootDiskSize: "20Gi",
 			SecurityGroups: []string{"web", "db"},
+			DataDisks: []v1alpha1.TenantVMDataDisk{
+				{Name: "data", Size: "500Gi"},
+			},
 		},
 	}
 }
@@ -47,6 +50,41 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if len(out.Spec.SecurityGroups) != 2 || out.Spec.SecurityGroups[0] != "web" {
 		t.Errorf("securityGroups lost: %v", out.Spec.SecurityGroups)
+	}
+	if len(out.Spec.DataDisks) != 1 || out.Spec.DataDisks[0].Name != "data" ||
+		out.Spec.DataDisks[0].Size != "500Gi" {
+		t.Errorf("dataDisks lost: %v", out.Spec.DataDisks)
+	}
+}
+
+// The chart can populate a disk from a URL (source=import), but that is operator-owned. x-talu-owner
+// is a contract the Helm merge does not enforce, so this projection is where it becomes real: if
+// TenantVM ever learns to carry a URL, a tenant can boot any image and escape the golden-image
+// catalog. Assert the projected values stay name+size only.
+func TestDataDisksCannotCarryAnImportURL(t *testing.T) {
+	u := testREST().toRelease(sampleVM(), "acme")
+	vals, _, _ := unstructuredMap(u.Object, "spec", "values")
+	disks, ok := vals["dataDisks"].([]interface{})
+	if !ok || len(disks) != 1 {
+		t.Fatalf("dataDisks = %v", vals["dataDisks"])
+	}
+	d, ok := disks[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("dataDisks[0] is not a map: %v", disks[0])
+	}
+	for _, forbidden := range []string{"url", "secretRef", "certConfigMap"} {
+		if _, present := d[forbidden]; present {
+			t.Errorf("dataDisks[0] projected operator-owned key %q: %v", forbidden, d)
+		}
+	}
+	if len(d) != 2 {
+		t.Errorf("dataDisks[0] should project name+size only, got %v", d)
+	}
+	// The root disk's import source must not be reachable either.
+	for _, forbidden := range []string{"restore", "source", "image", "dataSource"} {
+		if _, present := vals[forbidden]; present {
+			t.Errorf("values projected operator-owned key %q", forbidden)
+		}
 	}
 }
 

@@ -91,6 +91,10 @@ func (in *TenantVMSpec) DeepCopyInto(out *TenantVMSpec) {
 		out.SecurityGroups = make([]string, len(in.SecurityGroups))
 		copy(out.SecurityGroups, in.SecurityGroups)
 	}
+	if in.DataDisks != nil {
+		out.DataDisks = make([]TenantVMDataDisk, len(in.DataDisks))
+		copy(out.DataDisks, in.DataDisks)
+	}
 }
 
 func (in *TenantVMStatus) DeepCopyInto(out *TenantVMStatus) {

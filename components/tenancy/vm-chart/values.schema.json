@@ -76,9 +76,10 @@
       "type": "string",
       "enum": [
         "dataSource",
-        "containerDisk"
+        "containerDisk",
+        "import"
       ],
-      "description": "OPERATOR — which image mechanism the site's catalog uses.",
+      "description": "OPERATOR — which image mechanism the site's catalog uses. 'import' populates the root disk from restore.root.url instead of the catalog (the DR restore path, docs/architecture/drim-target.md §4.1).",
       "x-talu-owner": "operator"
     },
     "image": {
@@ -98,8 +99,112 @@
     },
     "rootDiskSize": {
       "type": "string",
-      "description": "Persistent root PVC size (source=dataSource).",
+      "description": "Persistent root PVC size (source=dataSource or source=import).",
       "x-talu-owner": "consumer"
+    },
+    "restore": {
+      "type": "object",
+      "description": "OPERATOR — populate the root disk from a DR package instead of the golden-image catalog (source=import). Which image a VM may boot is site plumbing, not a per-VM consumer choice; TenantVM deliberately cannot express it. See docs/architecture/drim-target.md §4.1.",
+      "x-talu-owner": "operator",
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "OPERATOR — the root disk's import source.",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "OPERATOR — https:// (presigned, preferred: it leaves no credential in the tenant namespace) or s3://bucket/key.",
+              "pattern": "^$|^(https?|s3)://"
+            },
+            "secretRef": {
+              "type": "string",
+              "description": "OPERATOR — Secret{accessKeyId,secretKey} in the tenant namespace; only for s3:// or authenticated https."
+            },
+            "certConfigMap": {
+              "type": "string",
+              "description": "OPERATOR — ConfigMap holding a CA bundle for a private HTTPS endpoint."
+            }
+          }
+        },
+        "acknowledgeGuestTrust": {
+          "type": "boolean",
+          "description": "OPERATOR — required for source=import. An imported guest does not trust this site's SSH User CA and cloud-init does not re-run on a provisioned disk, so the VM boots healthy and rejects every human login. Setting this states that guest trust is handled out of band (drim-target.md §4.3).",
+          "default": false
+        },
+        "retrust": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "OPERATOR — write this site's SSH User CA into the imported disk offline (virt-customize) before first boot. While enabled the VM is held Halted; set false once the Job completes to boot it. UNVALIDATED — see the chart README.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "image": {
+              "type": "string",
+              "description": "OPERATOR — libguestfs image; track the cluster's KubeVirt version."
+            },
+            "kubectlImage": {
+              "type": "string",
+              "description": "OPERATOR — image for the init container that waits on the DataVolume."
+            },
+            "forceTcg": {
+              "type": "boolean",
+              "description": "OPERATOR — libguestfs boots an appliance VM; without /dev/kvm it must use TCG.",
+              "default": false
+            },
+            "resetCloudInit": {
+              "type": "boolean",
+              "description": "OPERATOR — clear the guest's cached cloud-init state so NoCloud re-runs. Off by default: on a restored guest this can undo in-guest configuration.",
+              "default": false
+            }
+          }
+        }
+      }
+    },
+    "dataDisks": {
+      "type": "array",
+      "description": "Extra non-root disks. Sizes are the consumer's; import URLs are the operator's, as for the root disk. A disk with no url is provisioned blank. The guest finds each at /dev/disk/by-id/virtio-<name>.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "size"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Disk name, unique within the VM; becomes the DataVolume suffix and the guest-visible serial.",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "maxLength": 40,
+            "x-talu-owner": "consumer"
+          },
+          "size": {
+            "type": "string",
+            "description": "PVC size, e.g. 500Gi.",
+            "x-talu-owner": "consumer"
+          },
+          "url": {
+            "type": "string",
+            "description": "OPERATOR — import source; empty means a blank disk.",
+            "pattern": "^$|^(https?|s3)://",
+            "x-talu-owner": "operator"
+          },
+          "secretRef": {
+            "type": "string",
+            "description": "OPERATOR — Secret{accessKeyId,secretKey} for this disk's source.",
+            "x-talu-owner": "operator"
+          },
+          "certConfigMap": {
+            "type": "string",
+            "description": "OPERATOR — ConfigMap holding a CA bundle for this disk's source.",
+            "x-talu-owner": "operator"
+          }
+        }
+      }
     },
     "sshUserCaPubKey": {
       "type": "string",

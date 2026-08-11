@@ -24,11 +24,67 @@ guestSecrets: ""           # optional — written to /etc/talu/app.env in the gu
 securityGroups: []         # group names; rendered as talu.io/sg.<name> labels the tenant's CNPs select
 
 # ── image (operator-owned; site defaults live in environments/<site>/tenant-defaults.yaml) ────────
-source: containerDisk                        # containerDisk | dataSource
+source: containerDisk                        # containerDisk | dataSource | import
 image: quay.io/containerdisks/ubuntu:24.04   # used when source=containerDisk
 dataSource: ubuntu                           # used when source=dataSource
 dataSourceNamespace: golden-images
-rootDiskSize: 10Gi                           # persistent root PVC size (source=dataSource)
+rootDiskSize: 10Gi                           # persistent root PVC size (source=dataSource|import)
+
+# ── restore / DR import (operator-owned) ──────────────────────────────────────────────────────────
+# `source: import` populates the root disk from a URL instead of cloning the site's golden-image
+# catalog — the recovery path for a portable DR package (docs/architecture/drim-target.md §4.1).
+# It is OPERATOR-owned for the same reason `source`/`image`/`dataSource` are: which image a VM may
+# boot is catalog plumbing the site owns, not a per-VM consumer choice. The typed API is what makes
+# that real — TenantVM cannot express a URL at all (adr-api-layer.md §4).
+#
+# PREFER A PRESIGNED https:// URL. CDI's s3:// source needs `secretRef` to name a Secret in the
+# DataVolume's namespace — i.e. DR-bucket credentials sitting in the TENANT's namespace, where the
+# tenant can read them. A presigned URL puts nothing there.
+#
+# NOTE: an imported disk is NOT signature-verified — components/platform/kyverno/verify-images-cosign.yaml
+# matches DataVolume *registry* sources only. See README.md.
+restore:
+  root:
+    url: ""              # https://… (presigned, preferred) or s3://bucket/key
+    secretRef: ""        # Secret{accessKeyId,secretKey}; only for s3:// or authenticated https
+    certConfigMap: ""    # ConfigMap with a CA bundle, for a private HTTPS endpoint
+  # An imported guest carries the SSH CA trust of wherever it came from — not this site's — and
+  # cloud-init does not re-run on an already-provisioned disk, so the trust injection below silently
+  # does nothing. The VM then boots, passes every health check, and rejects every human SSH login.
+  # Set this to true to state that guest trust has been handled out of band (drim-target.md §4.3) —
+  # either by `retrust` below, or by whatever the site does instead.
+  acknowledgeGuestTrust: false
+
+  # Offline re-trust: write this site's SSH User CA into the imported disk BEFORE first boot, with
+  # virt-customize (KubeVirt exposes no generic guest-exec, so the fix has to be offline).
+  #
+  # TWO-STEP AND DELIBERATELY SO. While `enabled: true` the VM is held at runStrategy: Halted and the
+  # Job runs; once the Job has Completed, set it back to false and the VM boots the re-trusted guest.
+  # The Job does NOT start the VM itself: Flux would reconcile runStrategy straight back to Halted
+  # and fight it. Git stays the source of truth for whether a VM runs.
+  #
+  # UNVALIDATED — see README.md § Importing a disk. Before reaching for this, check whether the guest
+  # simply re-runs cloud-init (its cached instance-id will differ from the NoCloud one), which does
+  # the same job for free.
+  retrust:
+    enabled: false
+    # KubeVirt's libguestfs image; track the cluster's KubeVirt version.
+    image: quay.io/kubevirt/libguestfs-tools:v1.8.4
+    kubectlImage: docker.io/bitnami/kubectl:latest
+    # libguestfs boots a small appliance VM. With no /dev/kvm (the nested lab) it must be told to use
+    # TCG or it fails to launch.
+    forceTcg: false
+    # Clear the guest's cached cloud-init state so NoCloud re-runs on first boot. Off by default:
+    # on a restored production guest, re-running cloud-init can undo in-guest configuration.
+    resetCloudInit: false
+
+# Extra (non-root) disks. `size` is the consumer's; `url`/`secretRef`/`certConfigMap` are the
+# operator's, exactly as for the root disk. A disk with no `url` is provisioned BLANK.
+# The guest finds each disk at /dev/disk/by-id/virtio-<name> (rendered as the disk `serial`).
+dataDisks: []
+# - name: data
+#   size: 500Gi
+#   url: ""
 
 # ── operator-owned guest plumbing (mirrors talu-tenant; supplied by the site) ─────────────────────
 sshUserCaPubKey: ""        # injected from ConfigMap pomerium-user-ca; never written by a consumer

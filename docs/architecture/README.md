@@ -17,6 +17,10 @@ one layer up.
   [`adr-pomerium-ingress.md`](adr-pomerium-ingress.md).
 - **Proposed — a typed API layer** (`tenancy.talu.io`, aggregated apiserver over the charts):
   [`adr-api-layer.md`](adr-api-layer.md).
+- **Proposed — multi-site DR & failover** (RBD snapshot mirroring, front door, access-plane failover):
+  [`disaster-recovery.md`](disaster-recovery.md).
+- **Analysis — Talu as a DRIM recovery target** (restoring a portable disaster-recovery package onto
+  Talu; what's missing): [`drim-target.md`](drim-target.md).
 - Operating guide & validated gotchas (the hard-won lab lessons): [`../../CLAUDE.md`](../../CLAUDE.md)
   and [`../development/lab-notes.md`](../development/lab-notes.md).
 

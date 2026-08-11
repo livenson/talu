@@ -18,7 +18,10 @@ spec:
   interval: 5m
   insecure: true
   url: oci://registry.flux-system.svc:5000/charts/talu-vm
-  ref: { tag: "0.1.0" }
+  # 0.2.0 adds source=import + dataDisks (the DR restore path). helm push tags by the chart's own
+  # version, so this MUST track components/tenancy/vm-chart/Chart.yaml — a mismatched ref silently
+  # never resolves — and the chart-publish Job must be re-created to push the new tag.
+  ref: { tag: "0.2.0" }
 ---
 # Flux source for the talu-cluster chart — a tenant's own Kubernetes cluster (KaaS), served by the
 # typed API as ManagedCluster.
