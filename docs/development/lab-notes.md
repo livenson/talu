@@ -715,3 +715,24 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     `Succeeded` and produced **byte-identical** `disk.img` (same SHA-256). So a DR package shipping
     `disk-0.raw.zst` needs no repackaging. Note that "Succeeded" alone proves nothing — a verbatim
     copy of the compressed bytes would also succeed — so compare hashes across formats, not phases.
+
+46. **A restored VM DOES re-run cloud-init — KubeVirt's NoCloud `instance-id` follows the new VM, not
+    the disk.** The intuition that "cloud-init never runs again on an already-provisioned disk" is
+    wrong here, and it matters because the whole SSH-CA-trust injection rides on cloud-init. Measured
+    on **rocky-phys** with a full round trip (real Talu VM → halt → serve its `disk.img` → import into
+    a new VM): the restored guest gets a **different** `instance-id` (derived from the new VM's
+    firmware UUID), treats itself as a brand-new instance, runs `modules:config` + `modules:final`,
+    and applies the chart's cloud-init. The tell is `/var/lib/cloud/instances` holding **both** IDs.
+    Consequences:
+    - A restored guest that has cloud-init with **NoCloud in its `datasource_list`** picks up this
+      site's SSH User CA on its own — `restore.retrust` is unnecessary for it. Reach for retrust only
+      when the guest has no cloud-init, or its datasource list excludes NoCloud (an OpenStack-only
+      image being the obvious case).
+    - The re-run does **not** clobber an existing `~/.ssh/authorized_keys`, even when the new VM's
+      cloud-init declares no keys.
+    - Runtime state survives the round trip intact: a marker file written by hand on the original was
+      returned byte-exact from the restored guest.
+    Test-harness note for repeating this: the chart's `<vm>-ssh-pin` CiliumNetworkPolicy allows `:22`
+    **only from the `pomerium` namespace**, so a validation pod that SSHes to a tenant VM must run
+    there or it is silently dropped. `docker.io/alpine/git` carries an ssh client; the KubeVirt
+    libguestfs image does not.

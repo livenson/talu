@@ -132,24 +132,33 @@ the chart's trust injection silently does nothing. The failure mode is quiet and
 - the guest agent connects, so a level-3 `script` check passes;
 - **every human SSH attempt is rejected by the guest's `sshd`**, and the DR report is green.
 
-A recovery path must therefore include a **post-import re-trust step**. KubeVirt exposes no generic
-guest-exec, so it has to be **offline**: `restore.retrust.enabled: true` in the chart holds the VM at
-`runStrategy: Halted` and runs a Job that waits for the import, then `virt-customize`s the disk to
-write `/etc/ssh/talu_ca.pub` + `TrustedUserCAKeys` (optionally clearing the cached cloud-init state).
-It is deliberately two-step — the Job does not start the VM, because Flux would reconcile
-`runStrategy` straight back and fight it; Git stays the source of truth for whether a VM runs.
+**The premise was half wrong — measured on rocky-phys by a full round trip** (§10.2). Cloud-init
+*does* re-run on a restored, already-provisioned guest: KubeVirt derives the NoCloud seed's
+`instance-id` from the **new VM's firmware UUID**, so the restored guest sees an instance it has
+never seen before, runs `modules:config` + `modules:final`, and applies the chart's cloud-init —
+including the CA trust. The guest keeps *both* instance directories under `/var/lib/cloud/instances`,
+which is the fingerprint of exactly that.
 
-**Validated on rocky-phys** (§12). Both feared risks turned out fine — libguestfs runs under Talos
-PSA — but two undocumented mechanics had to be fixed first, and both fail with errors that point
-somewhere else entirely: CDI writes `disk.img` `107:107` while the image runs as uid 1001 (needs
-`fsGroup`), and the image leaves `LIBGUESTFS_PATH` unset so the appliance it ships is unreachable.
-Both are now in the chart, and in lab-notes #44. A pod gets no `/dev/kvm`, so `forceTcg` is required
-even on KVM-capable hosts; a 3.5 GiB Ubuntu guest took ~117 s.
+So for the common case — a guest that has cloud-init installed with **NoCloud in its
+`datasource_list`** — the chart's normal trust injection reaches an imported disk unaided, and
+`restore.retrust` is **not** needed.
 
-**Still open:** whether a genuinely *provisioned* guest (one whose cloud-init has already run, which
-is what a real DR package contains) re-runs cloud-init from the NoCloud seed. The validation used a
-pristine cloud image, so it does not settle that — and `virt-customize` resets `/etc/machine-id` by
-default, which may itself change the answer.
+**Where it is still needed:** a guest with no cloud-init at all, or whose `datasource_list` excludes
+NoCloud (an OpenStack-only image is the obvious case) — cloud-init never reads the seed, and nothing
+writes the CA. That is the residual case `restore.retrust` exists for.
+
+The mechanism, when you do need it: KubeVirt exposes no generic guest-exec, so it is **offline** —
+`restore.retrust.enabled: true` holds the VM at `runStrategy: Halted` and runs a Job that waits for
+the import, then `virt-customize`s the disk to write `/etc/ssh/talu_ca.pub` + `TrustedUserCAKeys`.
+Deliberately two-step: the Job does not start the VM, because Flux would reconcile `runStrategy`
+straight back and fight it; Git stays the source of truth for whether a VM runs. Validated on
+rocky-phys after fixing two undocumented mechanics that both fail with misleading errors — CDI writes
+`disk.img` `107:107` while the image runs as uid 1001 (needs `fsGroup`), and the image leaves
+`LIBGUESTFS_PATH` unset so the appliance it ships is unreachable (lab-notes #44). A pod gets no
+`/dev/kvm`, so `forceTcg` is required even on KVM-capable hosts.
+
+`restore.acknowledgeGuestTrust` stays mandatory regardless: the operator should decide which of the
+two cases they are in, because getting it wrong is silent.
 
 This generalises beyond Talu and is worth feeding back into the spec: **DRIM v1 has no notion of
 "post-restore adaptation to the target's access plane."** Any target with a host-side trust anchor
@@ -300,10 +309,37 @@ v1.65.0, KubeVirt v1.8.4. Source images were served from the gateway on the pod 
 | CA actually inside the disk | ✅ `virt-cat` returned the site's real Pomerium User CA, byte-exact, plus `TrustedUserCAKeys` |
 | The Halted hold | ✅ VM stayed `Stopped` for the Job's whole life; flipping `enabled: false` booted it |
 
-**Not proven here:** an end-to-end `ssh <principal>@<vm>@ssh.<domain> -p 2222` login — that needs the
-interactive OIDC flow and the provider's `:2222` forward, so it is not scriptable. What is proven is
-everything upstream of the handshake: the guest carries this site's CA and the matching
-`TrustedUserCAKeys` line. Also unproven: the already-provisioned-guest cloud-init question (§4.3).
+### 10.2 The full round trip — back up a real Talu VM, restore it, log in
+
+The table above imports *foreign* images. The stronger test takes a **real, running, provisioned Talu
+VM** through the whole cycle, which is what a DR package actually contains:
+
+1. `origin1` — an ordinary chart-rendered VM on the site's `ubuntu` golden image (`source:
+   dataSource`), booted so cloud-init genuinely ran. A test SSH public key was added to the rendered
+   cloud-init so the round trip could be checked without the interactive OIDC flow.
+2. **Logged in** (`LOGIN_OK`), wrote a runtime marker `/etc/talu-drim-marker` carrying a random stamp
+   — something no cloud-init would ever recreate — and confirmed `/var/lib/cloud/instances/<id>`
+   existed, i.e. the guest was provisioned.
+3. Halted it and served its PVC's `disk.img` over HTTP: the DR artifact.
+4. `restored4` — a **stock** chart render (no cloud-init edit), `source: import` from that artifact.
+5. Logged in **with the same key**, and inspected the guest.
+
+| Question | Answer |
+|---|---|
+| Does the same key still work after restore? | ✅ `LOGIN_OK as ubuntu@restored4` |
+| Did runtime state survive? | ✅ marker returned **byte-exact** (`DRIM-ROUNDTRIP-…-9105`) |
+| Did cloud-init re-run on the provisioned disk? | ✅ yes — new `instance-id`, and **both** instance dirs present |
+| Did the re-run clobber `authorized_keys`? | ✅ no — the key survived, though `restored4`'s cloud-init declares none |
+| Is the SSH CA trust there? | ✅ `/etc/ssh/talu_ca.pub` present |
+
+This closes both gaps left by the first pass: the SSH handshake is proven (with a key rather than an
+OIDC-issued certificate — the certificate path is separately proven on this lab), and §4.3's
+cloud-init question is answered.
+
+**Still not proven:** an `ssh <principal>@<vm>@ssh.<domain> -p 2222` login *through Pomerium*, which
+needs the interactive OIDC flow and the provider's `:2222` forward. Note the login above had to run
+from a pod in the `pomerium` namespace — the chart's `<vm>-ssh-pin` policy drops `:22` from anywhere
+else, which is itself a live confirmation that the pin works.
 
 **Not the no-KVM VM lab.** Storage there is CephFS-only because the nested node's `/dev` isolation
 breaks rbd-nbd (lab-notes #14/#15), so a `volume-import` into an RBD-backed PVC has nowhere to land.

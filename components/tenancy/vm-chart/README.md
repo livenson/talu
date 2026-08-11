@@ -54,12 +54,19 @@ Three things this mode does **not** do, each of which is silent:
 1. **No signature verification.** `verify-images-cosign.yaml` matches DataVolume *registry* sources
    only, so an imported disk is not checked at all. Integrity is the caller's job (a DRIM package
    carries SHA-256 per artifact in its `index.json`; CDI verifies nothing).
-2. **No guest trust.** An imported guest carries the SSH CA trust of wherever it came from. Talu's
-   access plane is Pomerium Native SSH, so without `/etc/ssh/talu_ca.pub` + `TrustedUserCAKeys`
-   **every human login is rejected** — while the VM runs, the guest agent connects, and health checks
-   pass. Cloud-init is still attached but does not re-run on an already-provisioned disk, so the
-   chart's trust injection does nothing here. `restore.acknowledgeGuestTrust: true` is the required
-   acknowledgement that this is handled out of band; the chart refuses to render without it.
+2. **Maybe no guest trust.** An imported guest carries the SSH CA trust of wherever it came from,
+   and Talu's access plane is Pomerium Native SSH — without `/etc/ssh/talu_ca.pub` +
+   `TrustedUserCAKeys` **every human login is rejected** while the VM runs, the guest agent connects
+   and health checks pass. Whether that bites you depends on the guest:
+   - **Cloud-init present with NoCloud in its `datasource_list`** (the common case): it **re-runs**.
+     KubeVirt derives the NoCloud `instance-id` from the new VM's firmware UUID, so the restored
+     guest sees a new instance and applies this chart's cloud-init, CA trust included. Measured on
+     `rocky-phys`; lab-notes #46. Nothing extra to do.
+   - **No cloud-init, or a `datasource_list` without NoCloud** (an OpenStack-only image): nothing
+     reads the seed and the trust is never written. Use `restore.retrust` below.
+
+   `restore.acknowledgeGuestTrust: true` is required either way — the chart refuses to render without
+   it — because the operator should decide which case they are in. Getting it wrong is silent.
 3. **No consumer access.** `restore.*` and the data disks' URLs are `x-talu-owner: operator` — which
    image a VM may boot is site plumbing. That marker is a contract, not an enforcement (a
    hand-written HelmRelease can set anything); the real gate is the typed API, whose `TenantVM`
@@ -88,9 +95,9 @@ site's real User CA back out of the disk byte-exact. Three things to know:
 - **cirros is useless as a test guest** — `virt-customize` reports "no operating systems were found".
   Use a real cloud image.
 
-> ⚠️ Still open: whether a genuinely *provisioned* guest (cloud-init already run — what a real DR
-> package contains) re-runs cloud-init from the NoCloud seed. The validation used a pristine image,
-> so it does not settle that. If it does re-run, most of this Job is unnecessary.
+> **Most restores do not need this.** A guest with cloud-init and NoCloud re-runs it and picks the CA
+> up for free (see (2) above, lab-notes #46). Reach for `retrust` when the guest cannot read the
+> NoCloud seed at all.
 
 ## Security groups
 
