@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "Talu VM API",
-  "description": "The typed contract for one Talu tenant VM. Ownership is marked with x-talu-owner exactly as in talu-tenant: 'consumer' = the integrator writes it per VM; 'operator' = the site supplies it once from environments/<site>/tenant-defaults.yaml. See docs/architecture/adr-api-layer.md §4 and §10.1.",
+  "description": "The typed contract for one Talu tenant VM. Ownership is marked with x-talu-owner exactly as in talu-tenant: 'consumer' = the integrator writes it per VM; 'operator' = the site supplies it once from environments/<site>/tenant-defaults.yaml. See docs/architecture/adr-api-layer.md \u00a74 and \u00a710.1.",
   "type": "object",
   "required": [
     "projectUuid",
@@ -56,7 +56,7 @@
     },
     "memory": {
       "type": "string",
-      "description": "DEPRECATED legacy sizing, e.g. 1536Mi. Cannot express vCPU — KubeVirt defaults the guest to 1. Kept so pre-split tenants render unchanged; use size instead. Mutually exclusive with size.",
+      "description": "DEPRECATED legacy sizing, e.g. 1536Mi. Cannot express vCPU \u2014 KubeVirt defaults the guest to 1. Kept so pre-split tenants render unchanged; use size instead. Mutually exclusive with size.",
       "x-talu-owner": "consumer"
     },
     "guestSecrets": {
@@ -79,22 +79,22 @@
         "containerDisk",
         "import"
       ],
-      "description": "OPERATOR — which image mechanism the site's catalog uses. 'import' populates the root disk from restore.root.url instead of the catalog (the DR restore path, docs/architecture/drim-target.md §4.1).",
+      "description": "OPERATOR \u2014 which image mechanism the site's catalog uses. 'import' populates the root disk from restore.root.url instead of the catalog (the DR restore path, docs/architecture/drim-target.md \u00a74.1).",
       "x-talu-owner": "operator"
     },
     "image": {
       "type": "string",
-      "description": "OPERATOR — raw registry reference (source=containerDisk).",
+      "description": "OPERATOR \u2014 raw registry reference (source=containerDisk).",
       "x-talu-owner": "operator"
     },
     "dataSource": {
       "type": "string",
-      "description": "OPERATOR — golden-image catalog entry (source=dataSource).",
+      "description": "OPERATOR \u2014 golden-image catalog entry (source=dataSource).",
       "x-talu-owner": "operator"
     },
     "dataSourceNamespace": {
       "type": "string",
-      "description": "OPERATOR — where the catalog lives.",
+      "description": "OPERATOR \u2014 where the catalog lives.",
       "x-talu-owner": "operator"
     },
     "rootDiskSize": {
@@ -104,39 +104,39 @@
     },
     "restore": {
       "type": "object",
-      "description": "OPERATOR — populate the root disk from a DR package instead of the golden-image catalog (source=import). Which image a VM may boot is site plumbing, not a per-VM consumer choice; TenantVM deliberately cannot express it. See docs/architecture/drim-target.md §4.1.",
+      "description": "OPERATOR \u2014 populate the root disk from a DR package instead of the golden-image catalog (source=import). Which image a VM may boot is site plumbing, not a per-VM consumer choice; TenantVM deliberately cannot express it. See docs/architecture/drim-target.md \u00a74.1.",
       "x-talu-owner": "operator",
       "additionalProperties": false,
       "properties": {
         "root": {
           "type": "object",
           "additionalProperties": false,
-          "description": "OPERATOR — the root disk's import source.",
+          "description": "OPERATOR \u2014 the root disk's import source.",
           "properties": {
             "url": {
               "type": "string",
-              "description": "OPERATOR — https:// (presigned, preferred: it leaves no credential in the tenant namespace) or s3://bucket/key.",
+              "description": "OPERATOR \u2014 https:// (presigned, preferred: it leaves no credential in the tenant namespace) or s3://bucket/key.",
               "pattern": "^$|^(https?|s3)://"
             },
             "secretRef": {
               "type": "string",
-              "description": "OPERATOR — Secret{accessKeyId,secretKey} in the tenant namespace; only for s3:// or authenticated https."
+              "description": "OPERATOR \u2014 Secret{accessKeyId,secretKey} in the tenant namespace; only for s3:// or authenticated https."
             },
             "certConfigMap": {
               "type": "string",
-              "description": "OPERATOR — ConfigMap holding a CA bundle for a private HTTPS endpoint."
+              "description": "OPERATOR \u2014 ConfigMap holding a CA bundle for a private HTTPS endpoint."
             }
           }
         },
         "acknowledgeGuestTrust": {
           "type": "boolean",
-          "description": "OPERATOR — required for source=import. An imported guest does not trust this site's SSH User CA and cloud-init does not re-run on a provisioned disk, so the VM boots healthy and rejects every human login. Setting this states that guest trust is handled out of band (drim-target.md §4.3).",
+          "description": "OPERATOR \u2014 required for source=import. An imported guest does not trust this site's SSH User CA and cloud-init does not re-run on a provisioned disk, so the VM boots healthy and rejects every human login. Setting this states that guest trust is handled out of band (drim-target.md \u00a74.3).",
           "default": false
         },
         "retrust": {
           "type": "object",
           "additionalProperties": false,
-          "description": "OPERATOR — write this site's SSH User CA into the imported disk offline (virt-customize) before first boot. While enabled the VM is held Halted; set false once the Job completes to boot it. UNVALIDATED — see the chart README.",
+          "description": "OPERATOR \u2014 write this site's SSH User CA into the imported disk offline (virt-customize) before first boot. While enabled the VM is held Halted; set false once the Job completes to boot it. UNVALIDATED \u2014 see the chart README.",
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -144,21 +144,30 @@
             },
             "image": {
               "type": "string",
-              "description": "OPERATOR — libguestfs image; track the cluster's KubeVirt version."
+              "description": "OPERATOR \u2014 libguestfs image; track the cluster's KubeVirt version."
             },
             "kubectlImage": {
               "type": "string",
-              "description": "OPERATOR — image for the init container that waits on the DataVolume."
+              "description": "OPERATOR \u2014 image for the init container that waits on the DataVolume."
             },
             "forceTcg": {
               "type": "boolean",
-              "description": "OPERATOR — libguestfs boots an appliance VM; without /dev/kvm it must use TCG.",
+              "description": "OPERATOR \u2014 libguestfs boots an appliance VM; without /dev/kvm it must use TCG.",
               "default": false
             },
             "resetCloudInit": {
               "type": "boolean",
-              "description": "OPERATOR — clear the guest's cached cloud-init state so NoCloud re-runs. Off by default: on a restored guest this can undo in-guest configuration.",
+              "description": "OPERATOR \u2014 clear the guest's cached cloud-init state so NoCloud re-runs. Off by default: on a restored guest this can undo in-guest configuration.",
               "default": false
+            },
+            "diskFsGroup": {
+              "type": "integer",
+              "description": "OPERATOR \u2014 supplementary group added to the Job so it can read the imported disk. CDI writes disk.img as 107:107 (qemu); change only if the site's CSI differs.",
+              "default": 107
+            },
+            "appliancePath": {
+              "type": "string",
+              "description": "OPERATOR \u2014 where the libguestfs supermin appliance lives in the image. The KubeVirt image ships it at /usr/local/lib/guestfs/appliance but leaves LIBGUESTFS_PATH unset."
             }
           }
         }
@@ -189,18 +198,18 @@
           },
           "url": {
             "type": "string",
-            "description": "OPERATOR — import source; empty means a blank disk.",
+            "description": "OPERATOR \u2014 import source; empty means a blank disk.",
             "pattern": "^$|^(https?|s3)://",
             "x-talu-owner": "operator"
           },
           "secretRef": {
             "type": "string",
-            "description": "OPERATOR — Secret{accessKeyId,secretKey} for this disk's source.",
+            "description": "OPERATOR \u2014 Secret{accessKeyId,secretKey} for this disk's source.",
             "x-talu-owner": "operator"
           },
           "certConfigMap": {
             "type": "string",
-            "description": "OPERATOR — ConfigMap holding a CA bundle for this disk's source.",
+            "description": "OPERATOR \u2014 ConfigMap holding a CA bundle for this disk's source.",
             "x-talu-owner": "operator"
           }
         }
@@ -208,12 +217,12 @@
     },
     "sshUserCaPubKey": {
       "type": "string",
-      "description": "OPERATOR. Pomerium SSH User CA public key. Injected at reconcile time from ConfigMap pomerium-user-ca — never written by a consumer.",
+      "description": "OPERATOR. Pomerium SSH User CA public key. Injected at reconcile time from ConfigMap pomerium-user-ca \u2014 never written by a consumer.",
       "x-talu-owner": "operator"
     },
     "caTrust": {
       "type": "object",
-      "description": "OPERATOR. How SSH User CA trust reaches the guest — a site-wide choice tied to the golden-image build.",
+      "description": "OPERATOR. How SSH User CA trust reaches the guest \u2014 a site-wide choice tied to the golden-image build.",
       "x-talu-owner": "operator",
       "additionalProperties": false,
       "properties": {

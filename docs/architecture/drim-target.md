@@ -139,10 +139,17 @@ write `/etc/ssh/talu_ca.pub` + `TrustedUserCAKeys` (optionally clearing the cach
 It is deliberately two-step — the Job does not start the VM, because Flux would reconcile
 `runStrategy` straight back and fight it; Git stays the source of truth for whether a VM runs.
 
-**Unvalidated on hardware.** Open risks: libguestfs' appliance VM under Talos PSA, and whether
-clearing the instance-id suffices for a guest whose `datasource_list` excludes NoCloud. Worth testing
-the cheap hypothesis first: a guest whose cached instance-id differs from the NoCloud one may simply
-re-run cloud-init and pick up the CA for free, making most of the Job unnecessary.
+**Validated on rocky-phys** (§12). Both feared risks turned out fine — libguestfs runs under Talos
+PSA — but two undocumented mechanics had to be fixed first, and both fail with errors that point
+somewhere else entirely: CDI writes `disk.img` `107:107` while the image runs as uid 1001 (needs
+`fsGroup`), and the image leaves `LIBGUESTFS_PATH` unset so the appliance it ships is unreachable.
+Both are now in the chart, and in lab-notes #44. A pod gets no `/dev/kvm`, so `forceTcg` is required
+even on KVM-capable hosts; a 3.5 GiB Ubuntu guest took ~117 s.
+
+**Still open:** whether a genuinely *provisioned* guest (one whose cloud-init has already run, which
+is what a real DR package contains) re-runs cloud-init from the NoCloud seed. The validation used a
+pristine cloud image, so it does not settle that — and `virt-customize` resets `/etc/machine-id` by
+default, which may itself change the answer.
 
 This generalises beyond Talu and is worth feeding back into the spec: **DRIM v1 has no notion of
 "post-restore adaptation to the target's access plane."** Any target with a host-side trust anchor
@@ -168,11 +175,17 @@ mirror without them boots a wrong-NIC / wrong-boot-disk guest"** (war-story #8).
 declares none of the three. That is the same class of problem as the spec's own §11.6
 `licenseRebindRequired` flag, and arguably belongs in the VM component's `restore` block.
 
-### 4.5 Compression format (unverified)
+### 4.5 Compression format — **resolved: zstd works**
 
-Packages ship `disk-0.raw.zst`. CDI's import path handles `.gz`, `.xz`, `.tar`, and qcow2; **zstd
-support was not confirmed** and should be treated as absent until tested. Either standardise the
-package on `.xz`, or have the DR service decompress and serve/stage the raw image itself.
+*The first pass of this analysis assumed CDI could not decompress zstd and recommended standardising
+packages on `.xz`. That was wrong.* Measured on rocky-phys: the same cirros disk imported three ways
+(`.raw`, `.raw.gz`, `.raw.zst` over `source.http`) all reached `Succeeded` and produced
+**byte-identical** `disk.img` (identical SHA-256). DRIM's native `disk-0.raw.zst` needs no
+repackaging.
+
+Worth keeping the method in mind: `Succeeded` alone proves nothing, because writing the compressed
+bytes verbatim would also "succeed". The evidence is the hash comparison across formats, not the
+phase. (lab-notes #45.)
 
 ### 4.6 No machine identity for a DR service
 
@@ -270,15 +283,31 @@ Ordered by dependency, not by size:
 Items 1–2 were the minimum viable "Talu is a DRIM target"; 1 is done and 2 awaits a lab run. Items
 3–6 are what makes it unattended.
 
-## 10. Where this can be validated
+## 10. Validated on rocky-phys (2026-08-11)
 
-**The physical lab** (`environments/rocky-phys`) — real KVM, real Rook-Ceph **RBD**, KubeVirt and
-KaaS both validated there.
+The restore path was exercised end to end on the physical lab — real KVM, Rook-Ceph RBD, CDI
+v1.65.0, KubeVirt v1.8.4. Source images were served from the gateway on the pod overlay
+(`172.18.0.1`), since pods have no direct egress.
+
+| What | Result |
+|---|---|
+| `source: import` → `DataVolume` (`http`) → PVC on `ceph-block` | ✅ `Succeeded` in ~41 s |
+| Guest boots the imported disk | ✅ cirros 0.6.3 to login prompt in 17 s; Ubuntu 24.04 with sshd up |
+| `dataDisks[]` blank volume | ✅ provisioned, attached as a third virtio disk |
+| Disk `serial` reaches the hypervisor | ✅ `<serial>data</serial>` on `vdc` in the libvirt domain XML |
+| `.raw` / `.raw.gz` / `.raw.zst` | ✅ all three byte-identical (§4.5) |
+| `restore.retrust` Job | ✅ `Complete` in 117 s on Ubuntu, after two fixes (lab-notes #44) |
+| CA actually inside the disk | ✅ `virt-cat` returned the site's real Pomerium User CA, byte-exact, plus `TrustedUserCAKeys` |
+| The Halted hold | ✅ VM stayed `Stopped` for the Job's whole life; flipping `enabled: false` booted it |
+
+**Not proven here:** an end-to-end `ssh <principal>@<vm>@ssh.<domain> -p 2222` login — that needs the
+interactive OIDC flow and the provider's `:2222` forward, so it is not scriptable. What is proven is
+everything upstream of the handshake: the guest carries this site's CA and the matching
+`TrustedUserCAKeys` line. Also unproven: the already-provisioned-guest cloud-init question (§4.3).
 
 **Not the no-KVM VM lab.** Storage there is CephFS-only because the nested node's `/dev` isolation
 breaks rbd-nbd (lab-notes #14/#15), so a `volume-import` into an RBD-backed PVC has nowhere to land.
-The chart change can be unit-tested with `make kbuild` + `helm template` anywhere; the round trip
-cannot.
+The chart change unit-tests with `make kbuild` + `helm template` anywhere; the round trip does not.
 
 ## 11. Open questions
 
