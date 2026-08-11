@@ -79,19 +79,6 @@
   register: hl_sync
   changed_when: true
 
-# ── Pomerium route (admin-only; no token injection — tenant kubeconfigs carry their own creds) ──
-- name: Copy the Pomerium route patcher
-  ansible.builtin.copy: { src: add-headlamp-route.py, dest: "{{ hl_dir }}/add-headlamp-route.py", mode: "0755" }
-
-- name: Add the clusters.<domain> route + restart Pomerium
-  ansible.builtin.shell: |
-    set -e
-    KUBECONFIG={{ hl_kubeconfig }} python3 {{ hl_dir }}/add-headlamp-route.py \
-      "http://headlamp.{{ headlamp_namespace }}.svc:80" "{{ headlamp_admin_user }}"
-    {{ hl_k }} -n pomerium rollout restart deploy/pomerium
-    {{ hl_k }} -n pomerium rollout status deploy/pomerium --timeout=180s
-  changed_when: true
-
 - ansible.builtin.debug:
     msg: >-
       Headlamp at https://clusters.{{ lab_domain }} — single Pomerium/Dex SSO, shows the provisioned

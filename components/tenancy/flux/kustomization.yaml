@@ -1,8 +1,13 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# The tenant-as-HelmRelease control plane: an in-cluster OCI registry holding the talu-tenant chart, the
-# Flux OCIRepository source that pulls it, and the route-sync CronJob (renders Pomerium ssh://<vm> routes
-# from labelled Services — the one cross-cutting edit no HelmRelease can own).
+# The tenant-as-HelmRelease control plane: an in-cluster OCI registry holding the talu-tenant chart and
+# the Flux OCIRepository source that pulls it.
+#
+# route-sync.yaml is deliberately NOT in this list (adr-pomerium-ingress.md §6 step 6). On the physical
+# lab routes are Ingress objects served by the Pomerium Ingress Controller, and re-applying this
+# component must not resurrect the CronJob — `phys_tenancy` runs `apply -k` over it on every run.
+# The VM lab has NOT migrated and still needs route-sync, so the `tenancy` role applies that one file
+# explicitly. Delete the file once the VM lab moves to Ingress routing too.
 #
 # NOT here: Flux's own controllers (source-controller + helm-controller) — the ansible `tenancy` role
 # installs those via `flux install` (upstream manifests). `chart-publish-job.yaml` is applied on-demand
@@ -11,4 +16,3 @@ kind: Kustomization
 resources:
   - oci-registry.yaml
   - ocirepository.yaml
-  - route-sync.yaml
