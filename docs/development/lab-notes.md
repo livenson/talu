@@ -811,3 +811,29 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     **Presign against the in-cluster endpoint** (`http://garage.garage.svc:3900`) when the consumer is
     CDI — sigv4 signs the `Host` header, so a URL signed for `127.0.0.1:3900` will not verify from a
     pod. boto3 needs `addressing_style: path` for Garage.
+
+52. **Exporting a Cinder volume on RHOSP 17: `openstack image create --volume` is broken, and
+    duplicate volume names poison everything downstream.** Capturing a VM out of OpenStack for a DRIM
+    package (`docs/architecture/drim-target.md` §10.5) needs volume → Glance → file. Two traps:
+    (a) `openstack image create --volume <vol> <name>` fails with *"Uploading data and using container
+    are not allowed at the same time"* on this release, with or without `--disk-format`/
+    `--container-format`. The working call is the deprecated **`cinder upload-to-image --disk-format
+    raw <vol> <name>`**. (b) A failed run leaves a temp volume behind; the retry creates a **second
+    volume with the same name**, and from then on every name-based `openstack volume …` call fails
+    with *"Multiple volume matches found"* — including the cleanup that would have fixed it. The
+    symptom is an automation loop that hangs forever waiting for an image that is never created.
+    **Address volumes by ID**, and delete before create.
+    Measured cost of the export path (10 GiB boot volume): volume-from-snapshot 14 s ·
+    upload-to-image 165 s · **`image save` download 358 s** · sparsify 9 s · zstd 14 s. The download
+    dominates and scales with PROVISIONED size, not used size — 10.7 GB of raw volumes took 1016 s to
+    export and compressed to 1.04 GB.
+
+53. **A restored guest loses its device names — `/dev/vdX` in `/etc/fstab` silently stops mounting.**
+    Measured end to end from OpenStack to Talu (§10.5). Disks captured as `vdb`/`vdc` arrive as
+    **`vdc`/`vdd`**, because KubeVirt/Talu attaches the cloud-init `cidata` disk first. In the same
+    boot, filesystems referenced by `UUID=` mounted correctly and one referenced as `/dev/vdb1` did
+    not — `/dev/vdb1` now addresses the cloud-init disk. With `nofail` the guest boots and the mount
+    is simply absent (silent); without it the guest drops to emergency mode. Talu gives each data disk
+    a virtio `serial`, so `/dev/disk/by-id/virtio-<name>` is stable across the move — but the guest has
+    to have been written to use it. **Check `/etc/fstab` for device-path references BEFORE capture,
+    while the source still exists to fix.**

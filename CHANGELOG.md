@@ -10,7 +10,11 @@ All notable changes to this project are documented here. Format follows
   The recovery path for a portable DR package; see `docs/architecture/drim-target.md`.
 - `docs/architecture/drim-target.md` — analysis of Talu as a DRIM disaster-recovery target,
   with the restore path validated end-to-end on `rocky-phys`.
-- `examples/drim-k8s/` — a worked DRIM capture/restore (manifests + scripts + an S3 helper),
+- `examples/drim/capture-openstack.sh` — capture Cinder volumes into DRIM disk artifacts using only
+  the OpenStack APIs; `examples/drim-k8s/` renamed to `examples/drim/` now that it is not k8s-only.
+- lab-notes #52 (RHOSP export traps + measured export cost) and #53 (a restored guest loses its
+  device names — `/dev/vdX` in fstab silently stops mounting).
+- `examples/drim/` — a worked DRIM capture/restore (manifests + scripts + an S3 helper),
   validated between two KaaS tenant clusters with a StorageClass remap, and again as a **hybrid**
   package (one `vm` + one `k8s` component) published to and retrieved from S3.
 - `drim-target.md` §12 — suggested changes to the DRIM spec, from implementing it against a real

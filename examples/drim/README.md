@@ -1,8 +1,9 @@
-# DRIM `type: k8s` — a worked capture/restore, validated on hardware
+# DRIM — worked capture/restore examples, validated on hardware
 
-A hand-rolled implementation of the two halves of a **DRIM** (`drim/v1alpha1`) Kubernetes component:
-capture an infosystem out of one cluster, restore it into a different one. The DR service that would
-normally do this does not exist yet, so these scripts *are* the reference for what it has to do.
+Hand-rolled implementations of what a **DRIM** (`drim/v1alpha1`) DR service has to do: capture an
+infosystem out of one platform and restore it into another. That service does not exist yet, so these
+scripts *are* the reference. Covers a Kubernetes component, a hybrid package, and a **multi-disk VM
+captured out of OpenStack**.
 
 Validated end-to-end on the physical lab between two Talu KaaS tenant clusters — full write-up and
 results in [`docs/architecture/drim-target.md` §10.3](../../docs/architecture/drim-target.md).
@@ -14,6 +15,7 @@ results in [`docs/architecture/drim-target.md` §10.3](../../docs/architecture/d
 | `restore.sh` | Target side: level-0 checksum gate, unpack, StorageClass remap, apply |
 | `manifest-hybrid.yaml` | A **hybrid** infosystem — one `vm` + one `k8s` component with a `relationships` DAG, which on Talu means two landing zones |
 | `s3.py` | Publish / list / fetch / presign a package against an S3 endpoint (validated against Garage) |
+| `capture-openstack.sh` | Capture Cinder volumes into disk artifacts, API-only — works against any OpenStack with no storage-backend access |
 
 ## Running it
 
@@ -40,6 +42,22 @@ python3 s3.py presign <revision>/snapshots/vm/db-primary/disk-0.raw.zst
 sensitive in the tenant namespace. Sign against the endpoint *the importer* will use — the signature
 covers the `Host` header, so a URL signed for `127.0.0.1:3900` will not verify from inside the cluster.
 
+## Capturing from OpenStack
+
+```sh
+source ~/overcloudrc
+SNAPSHOTS="snap-root snap-data1 snap-data2" OUTDIR=./export ./capture-openstack.sh
+```
+
+Two traps it works around, both of which cost real time (lab-notes #52): `openstack image create
+--volume` is broken on RHOSP 17 — use `cinder upload-to-image` — and a failed run leaving two volumes
+with the same name makes every later name-based lookup ambiguous, so the script addresses volumes by
+**ID** throughout.
+
+`image save` transfers the volume's **provisioned** size, and it dominates: 358 s of a 560 s export
+for one 10 GiB volume. Where the DR service can reach the storage backend, a native export is the
+faster path.
+
 ## The three things that are easy to get wrong
 
 Each of these was found by the run, not by reading the spec:
@@ -54,6 +72,9 @@ Each of these was found by the run, not by reading the spec:
    them.** That is the `WAITING_INPUT` state, not a bug — `restore.sh` stops at exactly that point.
 4. **`metadata.namespace` survives capture too**, pinning every object to the source namespace, so
    `kubectl apply -n <other>` is rejected and no namespace remap is possible. `restore.sh` strips it.
+5. **For VMs: device names do NOT survive.** Disks captured as `vdb`/`vdc` came back as `vdc`/`vdd`,
+   and a `/dev/vdb1` entry in the guest's `/etc/fstab` silently stopped mounting while `UUID=` entries
+   were fine. Check the guest's fstab for device-path references *before* capture. lab-notes #53.
 
 ## What the run proved
 
