@@ -875,13 +875,21 @@ fixed IPs, port security, and all six rules with direction/ethertype/protocol/po
 and a Service requesting the *original* address, with the security group translated to a
 `CiliumNetworkPolicy`.
 
-| Probe against the recovered `10.90.0.150` | Expected from the source SG | Actual |
-|---|---|---|
-| tcp/22 | allow | ✅ **reachable** |
-| tcp/80 | allow | ✅ **reachable** |
-| tcp/5432 | allow from `10.90.0.0/24` | ⚠️ **blocked** |
-| tcp/3306 | deny — not in the SG | ✅ **blocked** |
-| icmp | allow | ❌ **blocked** |
+| Probe against the recovered `10.90.0.150` | Expected from the source SG | Actual | Attributable? |
+|---|---|---|---|
+| tcp/22 | allow | ✅ **reachable** | yes — served by `sshd` |
+| tcp/80 | allow | ✅ **reachable** | yes — served by `python3 -m http.server` |
+| tcp/5432 | allow from `10.90.0.0/24` | ⚠️ blocked | **no — confounded** |
+| tcp/3306 | deny — not in the SG | ✅ blocked | **no — confounded** |
+| icmp | allow | ❌ **blocked** | yes — ICMP needs no listener |
+
+> **Correction.** The two `blocked` rows are **not attributable to policy**. Both in-guest listeners
+> were started with `nc -l -p <port> -q1`, and a later controlled test (§10.9) showed that construct
+> silently fails to listen — busybox `nc` rejects `-q` and prints usage instead. A closed port and a
+> denied port are indistinguishable from outside, so these rows cannot separate "the policy blocked it"
+> from "nothing was listening". The `reachable` rows are unaffected: reachability cannot be faked.
+> Policy enforcement is demonstrated soundly instead in **§10.9** by an A/B that holds the probe and
+> the target fixed and varies only the policy.
 
 #### What is recoverable
 
@@ -889,9 +897,11 @@ and a Service requesting the *original* address, with the security group transla
 on it. Anything connecting *to* the machine by its original address keeps working — which for most
 consumers is what "recover the IP" means.
 
-**Port-based allow/deny.** 22 and 80 reachable, 3306 correctly refused. Note the 3306 row is the
-*non-reachability* assertion §8.2 argues for: a restore that silently opened it would have passed
-every other check in this document.
+**Port-based allow.** 22 and 80 are reachable through the restored rules. The corresponding *deny*
+claim does not hold up here — see the correction above — but the shape of the assertion is still the
+one §8.2 argues for: a restore that silently opened a port would pass every other check in this
+document, so a non-reachability check is the only thing that would catch it. §10.9 runs that check in
+a form where a negative result means something.
 
 #### What is not — and each failure is quiet
 
@@ -901,12 +911,14 @@ breaks: in-guest static configuration, certificates with IP SANs, applications b
 address, and — importantly — **peer firewall rules keyed on this machine's source IP**, because its
 egress appears to come from the pod address, not from `10.90.0.150`.
 
-**CIDR-scoped rules survive syntactically and become unsatisfiable.** tcp/5432 was allowed from
-`10.90.0.0/24`. That rule restored cleanly and is enforced — but on the target `10.90.0.0/24` is now
-only the LB VIP range; no workload lives there, so **the rule can never match anyone**. The probe from
-`10.244.1.192` was blocked, which is *correct* enforcement of a rule that no longer means what it
-meant. Nothing reports this. A database that was reachable from its subnet is now reachable from
-nobody, and every status field is green.
+**CIDR-scoped rules survive syntactically and become unsatisfiable.** *(reasoned — the measurement
+that was meant to show this is the confounded 5432 row.)* tcp/5432 was allowed from `10.90.0.0/24`.
+The rule restored cleanly and is present in the `CiliumNetworkPolicy`, but on the target
+`10.90.0.0/24` holds only the LB VIP range; no workload has an address in it, so **no client can ever
+match the rule**. That is a property of the restored policy text against the target's address plan and
+can be read off both without probing — but it is an inference, not something this run demonstrated.
+Nothing reports it either way. A database that was reachable from its subnet becomes reachable from
+nobody, and every status field stays green.
 
 **Protocol rules outside TCP/UDP ports cannot be expressed at all.** ICMP was allowed at source and is
 blocked after restore — not by policy, but because a Service VIP only forwards the ports enumerated on
@@ -923,9 +935,87 @@ A faithful restore of the system above therefore produces a VM with the target's
 posture: unreachable or wide open, depending on the target, with nothing in the manifest or the
 validation levels to notice. That gap is addressed in the revised spec, not here.
 
-**Still untested** after this run: `bootOrder` / `relationships` DAG enforcement, `startupGate`,
-level-2 `tcp` checks between components, and the whole of `launchModes.validation` (isolation, stubs,
-TTL, cleanup).
+The axes this run left untested — `bootOrder` / `relationships` DAG enforcement, `startupGate`,
+level-2 `tcp` checks, and `launchModes.validation` — are covered in §10.9.
+
+### 10.9 Orchestration: boot order, startup gates, and validation-mode isolation
+
+Everything above restores *artifacts*. This run exercises the part of the spec that decides **what
+happens in what order, and under what containment** — §6.4 `relationships`, §7 `startupGate`, §8.2
+level-2 checks, and `launchModes.validation`. It needs no artifacts, so it runs against stub
+components on the physical lab's Talu cluster with a ~130-line orchestrator implementing §6.4/§7/§8.2
+literally as written.
+
+The manifest under test: `api` (`k8s`, `bootOrder: 20`), `db` (`vm`, `bootOrder: 10`), `smtp-relay`
+(`external`); the relationship `api depends-on db` carrying
+`startupGate: {check: tcp, from: dr-service, target: "db:5432", timeoutSeconds: 120}`; and a
+`launchModes.validation` with `isolation: strict`, a `blackhole-smtp` stub for the external, and
+`ttlSeconds: 600`.
+
+| # | Scenario | Expected per spec | Result |
+|---|---|---|---|
+| 1 | DAG ordering | `db` before `api`; `bootOrder` breaks ties only | ✅ `db -> api -> smtp-relay` |
+| 2 | Cyclic `relationships` | a manifest error, not a hang | ✅ `FAILED / precondition-failed`, `exit=2`, no objects created |
+| 3 | Full validation mode | gate passes, all start, level 2 green, namespace reaped | ✅ all 6 checks passed, 69 s wall |
+| 4 | Gate to a dead port | the dependent component never starts | ✅ `FAILED / precondition-failed`, `failedGate: api->db`, `api` never created |
+| 5 | Isolation A/B | strict blocks out-of-namespace egress; recovery does not | ✅ blocked / reachable |
+
+Scenario 3 in full, times relative to start:
+
+| Check | Result | At / duration |
+|---|---|---|
+| `start:db` | passed | +3.9 s |
+| `gate:api->db` (tcp `db:5432`) | passed | 9.8 s |
+| `start:api` | passed | +17.2 s |
+| `start:smtp-relay` (stub `blackhole-smtp`) | passed | +20.7 s |
+| `level2:api->db:5432` | reachable | 19.1 s |
+| `level2:api->smtp-relay:25` | reachable | 19.1 s |
+| `escape:kubernetes.default.svc:443` | **blocked** (expected) | 9.8 s |
+| cleanup | namespace deleted via `finally` | — |
+
+#### What this establishes
+
+**The dependency graph is the ordering authority, and `bootOrder` is only a tiebreak.** Reading §6.4
+the other way round — `bootOrder` first — is easy and wrong: it would have started `api` before `db`
+in scenario 1 whenever the numbers disagreed with the edges.
+
+**A cycle must be a validation error.** The spec never says so. A naive implementation waits forever
+on a component whose dependency is waiting on it; the honest behaviour is to reject the manifest
+before creating anything, which is what scenario 2 does.
+
+**A failed gate must block the dependent, not just be recorded.** In scenario 4 `api` is never
+created. This is the difference between a gate and a metric.
+
+**Gates fail fast on refusal and slowly on a drop.** Scenario 4's gate resolved in 15.8 s against a
+45 s budget, because a closed port answers with a RST. A *black-holed* target — the isolation case —
+consumes the full budget instead. Both are correct, and a `timeoutSeconds` tuned against a refusing
+target will be far too short in production, where the failure mode is usually a drop.
+
+**`isolation: strict` is enforced, and this is the sound version of the §10.8 claim.** The same probe,
+against the same target (`kubernetes.default.svc:443`), from the same namespace layout: **blocked**
+under validation mode's policy, **reachable** in recovery mode without it. Only the policy differs, so
+the block is attributable to the policy — which is exactly what §10.8's confounded rows could not
+show. The policy itself is a `CiliumNetworkPolicy` with `endpointSelector: {}` allowing egress only
+in-namespace plus UDP/53 to `kube-dns`.
+
+**`finally` semantics matter more than TTL.** Cleanup ran in every scenario including the failures.
+Had it been conditional on success, scenario 4 would have leaked a namespace on the exact path where
+a human is already busy — and the spec's `ttlSeconds` is a backstop for the orchestrator dying, not
+the normal exit path.
+
+#### What this run does not show
+
+The gates and level-2 checks all ran **inside one cluster**. The interesting case is §12's
+cross-landing-zone gate — `api` in a tenant cluster, `db` a VM in another — where `from: dr-service`
+has no network path to either. That is why v1beta1 makes `from` explicit and admits `check: none`.
+Stubs here are one pod plus one Service; a stub that has to satisfy a protocol handshake (the
+`smtp-relay` contract says SMTP) is a harder problem the spec does not address.
+
+**Method note.** The first attempt at scenario 3 failed at the gate, and the cause was the test
+harness: `nc -l -p 5432 -q1` in busybox prints usage and exits rather than listening. That is the same
+construct §10.8 used in-guest, which is why those rows are marked confounded above. Listeners here are
+`python3 -m http.server <port>`, verified to be listening before use.
+
 ## 11. Anatomy: backup → storage → recovery, and the same system as DRIM
 
 The round trip in §10.2 was run with an HTTP artifact server standing in for S3. This section shows

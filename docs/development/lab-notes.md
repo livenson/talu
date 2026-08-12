@@ -952,5 +952,35 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     - **Dropped entirely — ICMP.** A Service VIP only forwards the ports enumerated on it, so there is
       no way to express an icmp allow. Blocked after restore despite being allowed at source.
     - **Never captured — egress.** OpenStack's default allow-all egress has no representation.
-    Test the NEGATIVE assertions: only "3306 must stay blocked" and "5432 is now unreachable"
-    distinguished a working restore from a broken one. Every phase/readiness check was green in both.
+    **Correction (see #61):** the "3306/5432 correctly blocked" claims above are NOT attributable —
+    both in-guest listeners used `nc -l -p <port> -q1`, which does not listen (see #61), so a closed
+    port was indistinguishable from a denied one. The `reachable` and ICMP rows stand; the CIDR
+    conclusion is sound as an inference from the restored policy text, but was not demonstrated by
+    that probe. Enforcement itself is demonstrated properly in #62.
+
+61. **`nc -l -p <port> -q1` does not listen in busybox — it prints usage and exits, so your "port is
+    blocked" result means nothing.** busybox `nc` (alpine images, and BusyBox-based guests) has no
+    `-q`; the applet dumps its usage block to stdout and exits 1, leaving nothing bound. `netstat -ltn`
+    shows no listener and even a loopback `nc -z 127.0.0.1 <port>` fails. This silently invalidated a
+    firewall-recovery result (#60) because from outside, *closed* and *denied* look identical.
+    Use `python3 -m http.server <port>` (verified: binds any port, `python:3-alpine`) or nginx for :80.
+    **Rule: before asserting a flow is blocked, prove the target is listening.** A negative network
+    assertion with no established positive is not evidence.
+
+62. **Cilium `isolation: strict` for a DR validation namespace: `endpointSelector: {}` + egress to
+    own-namespace + UDP/53 to kube-dns — and A/B it, don't assume it.** The policy that works:
+    ```yaml
+    endpointSelector: {}
+    egress:
+      - toEndpoints: [{matchLabels: {"k8s:io.kubernetes.pod.namespace": <ns>}}]
+      - toEndpoints: [{matchLabels: {"k8s:io.kubernetes.pod.namespace": kube-system,
+                                     "k8s:k8s-app": kube-dns}}]
+        toPorts: [{ports: [{port: "53", protocol: UDP}]}]
+    ```
+    Omit the DNS rule and every in-namespace check fails for the wrong reason. Verified by holding the
+    probe and target fixed (`kubernetes.default.svc:443`) and varying only the policy: **blocked** with
+    it, **reachable** without. That A/B is the only form of this test worth recording (see #61).
+    Two behaviours worth knowing when timing gates: a **closed** port fails fast (RST — 15.8 s of a
+    45 s budget) while a **dropped** flow burns the whole timeout, and Talos's PodSecurity `baseline`
+    (#5) means the validation namespace still needs `pod-security.kubernetes.io/enforce=privileged`
+    if any restored component is a VM.

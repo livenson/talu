@@ -1,0 +1,40 @@
+apiVersion: drim/v1beta1
+kind: Infosystem
+metadata: { name: orch-test, id: "d21b0000-0000-4000-8000-00000000abcd" }
+spec:
+  components:
+    - name: api
+      type: k8s
+      workloads: [{ kind: Deployment, name: api, replicas: 1 }]
+      resourceCapture: { include: ["Deployment"], exclude: ["Secret"] }
+      restore: { bootOrder: 20 }
+    - name: db
+      type: vm
+      requirements: { cpu: 1, memoryGiB: 2 }
+      disks: [{ name: root, role: system, sizeGiB: 1 }]
+      restore: { bootOrder: 10 }
+    - name: smtp-relay
+      type: external
+      contract: { protocol: smtp, endpointRef: profile }
+      requiredFor: ["recovery"]
+  relationships:
+    # api MUST NOT start until db answers on 5432
+    - from: api
+      to: db
+      type: depends-on
+      startupGate: { check: tcp, from: dr-service, target: "db:5432", timeoutSeconds: 120 }
+    - { from: api, to: smtp-relay, type: connects-to }
+  validation:
+    levels:
+      - name: connectivity
+        checks:
+          - { from: api, target: "db:5432", expect: reachable }
+          - { from: api, target: "smtp-relay:25", expect: reachable }
+  launchModes:
+    validation:
+      network:
+        isolation: strict
+        stubs: [{ component: smtp-relay, stub: blackhole-smtp }]
+      ttlSeconds: 600
+    recovery:
+      network: { isolation: none }
