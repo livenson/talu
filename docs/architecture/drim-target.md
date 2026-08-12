@@ -704,6 +704,156 @@ mismatch are both invariant violations, so the conclusion stands, but the arithm
 not, and I would want a cleaner probe (fixed-width sequence, no `ls | sort` max) before quoting a
 precise tear width.
 
+### 10.7 Incremental capture — measured on both platforms, and it needs almost no spec change
+
+DRIM §4.3 forbids incremental outright: *"each revision is a complete backup with no references to any
+other revision… no base/delta chains, no cross-revision reference counting, and prune logic is a plain
+prefix delete."* Three invariants ride on that — any revision restores alone, prunes alone, and a
+corrupt object can only kill one revision. The question is whether they have to be given up to get
+incremental. **They do not.**
+
+#### The pattern: synthetic full
+
+Split *how you read* from *what you publish*. Capture only changed blocks; merge them into a copy the
+DR service already holds; publish a **complete, standalone** artifact anyway. The merge happens on the
+DR side — production never re-reads the whole volume, and the restore target never sees a chain.
+
+```
+rev-0   full capture ──────────────► publish rev-0 (FULL, standalone)
+rev-1   export-diff s0→s1 ──┐
+                            └─ apply to held copy ─► publish rev-1 (FULL, standalone)
+rev-2   export-diff s1→s2 ──┘ …                     publish rev-2 (FULL, standalone)
+```
+
+#### Measured, identically on both platforms
+
+| | **Talu** (Rook-Ceph, 1 GiB image, +30 MiB) | **OpenStack** (Cinder/Ceph, 10 GiB Rocky volume, +40 MiB) |
+|---|---|---|
+| full `export` | 1 073 741 824 B — 1 s | 10 737 418 240 B — 92 s |
+| **base** `export-diff` from zero | 314 574 104 B — **29.3 %** | 1 627 411 784 B — **15.2 %** |
+| **increment** | 33 554 604 B — **3.13 % (32×)** | 54 526 244 B — **0.51 % (197×)** |
+| materialise base+increment | 3 s | 28 s |
+| **synthetic full == true full?** | **byte-identical SHA-256** | **byte-identical SHA-256** |
+
+The correctness gate is the point: a materialised synthetic full is not merely *equivalent* to a true
+full export, it is the same bytes. So a published package built this way is indistinguishable from one
+captured the expensive way, and every §4.3 invariant survives.
+
+#### A free win that needs no incremental at all
+
+`export-diff` from zero is **sparse-aware**; `export` is not. On the OpenStack volume the base was
+**1.63 GB against 10.7 GB** — 6.6× smaller and 24 s instead of 92 s — for the *same* full,
+self-contained content. Stacked against the original Cinder/Glance path for that volume:
+
+| producing one FULL artifact for a 10 GiB volume | time | bytes |
+|---|---|---|
+| Cinder → Glance → `image save` (§10.5) | 560 s | 10.7 GB |
+| `rbd export` (§10.6) | 121 s | 10.7 GB |
+| **`rbd export-diff` from zero** | **24 s** | **1.63 GB** |
+
+That is a 23× time reduction over the API path with **no change to DRIM whatsoever** — the artifact is
+still one standalone object. It directly answers the "transfers provisioned size, not used size"
+problem from §10.5.
+
+#### The portability wall — why chains, not synthetic fulls, are the wrong bet
+
+An `rbd export-diff` stream can only be consumed by `rbd import-diff`, i.e. onto Ceph. That collides
+with §1.1's *"restoration on a different environment"*. Checking the actual restore target rather than
+assuming: CDI **does** have staged-import machinery — `DataVolumeSpec.Checkpoints[]` with
+`previous`/`current` and `finalCheckpoint` — but it exists for **VDDK (VMware CBT)** and **imageio
+(oVirt)** sources. For `http`/`s3`, the DRIM transport, **there is no delta application at all**. And
+KubeVirt's own CBT is not available here: this cluster's feature gates are `["Snapshot",
+"HotplugVolumes"]` only.
+
+So a chained package delivered over S3 cannot be restored by the target this document validates.
+Synthetic full sidesteps that entirely — the delta never leaves the DR service.
+
+#### What the spec would actually need
+
+For **synthetic full**: essentially nothing. §4.3's invariants hold unchanged. Two additions make the
+*policy* expressible rather than accidental:
+
+- `backupPolicy.chain: {mode: full | synthetic-full, fullEvery: 7d, maxChainLength: N}` — `fullEvery`
+  matters because a synthetic full inherits any drift in the held copy, and each one still *looks*
+  like a valid standalone package.
+- Per-artifact `encoding` in `index.json` (already argued in §12.5) so a producer can publish a
+  sparse-aware `export-diff`-from-zero base and a consumer knows what it is holding.
+
+§4.3 should also say explicitly that it constrains the **published package**, not the capture method.
+As written it reads as forbidding incremental anywhere, which discourages the one variant that costs
+nothing.
+
+For **true delta chains**, the surface is much larger — `index.json` parent refs, chain-wide level-0
+validation, reference-counted prune, Object Lock spanning dependents, and a declared consumer
+requirement — and it buys storage savings DRIM already mitigates with S3 lifecycle tiering. Not worth
+it until a target can apply a delta.
+
+#### Availability and encryption requirements this introduces
+
+Synthetic full is cheap on the wire but it is **not free on dependencies**. Full-always has a very
+simple posture — read the source, write S3, never read back. Incremental changes that on both sides.
+
+**Availability — source side.** `export-diff --from-snap` needs the **anchor snapshot to still exist
+on production**. That is a retention requirement on the *protected* system, not the archive: one
+anchor per protected volume must survive until the next capture succeeds, and its deletion must be
+transactional with that success or the next run silently degrades to a full and may blow the backup
+window. The space cost is roughly one increment's worth of pinned extents (measured: 33 MB on the
+1 GiB Talu image, 54 MB on the 10 GiB OpenStack volume) — cheap for one anchor, not cheap for many, so
+the policy should be *exactly one*.
+
+**Availability — DR service side.** This is the sharp one. To materialise revision N+1 the service
+needs revision N's bytes, so **the backup path now depends on being able to READ the archive**, where
+before it only had to write. An S3 outage stops backups, not just restores. Two mitigations, and they
+trade against each other:
+
+- Keep a local working copy → backups survive an S3 outage, but the service is genuinely stateful and
+  §9.4's *"state lives in Waldur and S3"* stops being true.
+- Treat the previous published package as the base → state is only a cache, §9.4 holds, but S3 read
+  availability becomes a hard dependency of the backup window.
+
+Either way, the fallback must be explicit: **if the base cannot be obtained, take a full.** Silent
+failure here is what produces an archive of revisions that cannot be materialised.
+
+**Availability — target side.** Unchanged, and that is the whole point: published packages stay
+standalone, so restore and validation have exactly today's requirements.
+
+**Encryption — ordering is a hard constraint.** You cannot delta ciphertext: a small plaintext change
+rewrites the entire encrypted stream, so an `export-diff` of encrypted data is worthless. The pipeline
+must be **capture → delta → materialise → compress → encrypt**, with encryption strictly outermost and
+applied to the materialised full. Any design that encrypts before differencing silently loses the
+entire benefit.
+
+**Encryption — the backup path now needs decrypt.** §4 invariant 3 mandates encryption at rest with
+keys *"versioned separately from the data and delivered outside the package"*. If packages are
+**client-side encrypted** and the previous package is the materialisation base, the DR service must
+**decrypt revision N to produce revision N+1** — so it needs the *previous* revision's key on every
+run, and key rotation must guarantee the prior key stays available for at least one more cycle. That
+is a materially larger key-handling posture than full-always, which only ever encrypts.
+
+With **SSE-KMS** the problem largely dissolves: S3 decrypts transparently for an authorised reader, so
+the service needs read authorisation on the KMS key rather than key material. **If you adopt synthetic
+full, SSE-KMS is the better of the two options §4 offers** — or keep the base as the service's own
+working copy under its own key, so published packages keep per-revision client-side keys and the
+backup path never decrypts the archive.
+
+**Validation.** Two additions over today:
+
+1. **Validate the materialisation, not just the restore.** A synthetic full inherits any drift in the
+   held copy and still *looks* like a valid standalone package — checksums match its own `index.json`
+   because the index was computed from the drifted bytes. The only real check is the one this run
+   performed: compare the materialised artifact against what a true full export produces. Do it on
+   `fullEvery`, and treat a periodic genuine full as the reset.
+2. **The validation environment must be able to decrypt.** §8.2 runs clones in an isolated, ephemeral
+   environment; that environment needs the package key. §7 defers secret delivery to v2, so today this
+   is an operator step — and it is one more place where "the key must reach a throwaway environment"
+   has to be answered before validation can be automated.
+
+#### One operational finding
+
+Materialise **where the data is**. Streaming a 1 GiB image through `kubectl exec` failed with
+`i/o timeout` against the API server; running the same pipeline inside the Rook toolbox pod took 3 s.
+A DR service should merge next to the storage, not pull bytes through a control plane.
+
 ## 11. Anatomy: backup → storage → recovery, and the same system as DRIM
 
 The round trip in §10.2 was run with an HTTP artifact server standing in for S3. This section shows

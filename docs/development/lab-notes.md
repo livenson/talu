@@ -904,3 +904,31 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     to snapshot first relative to the application's write order. The only order-independent guarantee
     is quiescing the guest (`fsfreeze` or shutdown). Note also that an earlier run of the same probe
     saw skew 0 on the naive path — absence of tearing in one sample is not evidence of safety.
+
+58. **`rbd export-diff` from zero is 6.6x smaller and 4x faster than `rbd export` — for the SAME full,
+    standalone content.** `export` writes the provisioned size; `export-diff` is sparse-aware and
+    writes only allocated extents. Measured on a 10 GiB Cinder volume holding a Rocky 9 image:
+    `export` 10 737 418 240 B in 92 s, `export-diff` (no `--from-snap`) **1 627 411 784 B in 24 s**.
+    Against the Cinder/Glance path for the same artifact (560 s / 10.7 GB) that is a **23x time
+    reduction with no loss of self-containment** — the output is still one standalone artifact, so it
+    needs no format or policy change at all. Use `export-diff` from zero as the default full-export
+    mechanism; `rbd export` only when the consumer cannot parse the diff format.
+
+59. **Synthetic full works and is byte-exact on both Ceph deployments — but `rbd import` cannot take
+    a stream, and materialising through `kubectl exec` will not work.** Validated the incremental
+    pattern (capture deltas, publish standalone fulls) on Talu's Rook-Ceph and on RHOSP's Cinder-Ceph:
+    base `export-diff` from zero + `export-diff --from-snap` applied with `import-diff` to a fresh
+    image produced a **SHA-256 identical** to a true full export of the same snapshot, on both.
+    Increment sizes: **3.13 %** of a full (32x) for +30 MiB on a 1 GiB image; **0.51 %** (197x) for
+    +40 MiB on a 10 GiB volume.
+    Two mechanics that cost time:
+    - **`rbd import - <image>` from stdin fails** (exit 22, and it rejects `--size` on Ceph 17.2.6).
+      Build the target with `rbd create --size <MB>` and apply a **full `export-diff` from zero** with
+      `import-diff` instead — that is the canonical incremental-forever shape anyway.
+    - **Streaming a 1 GiB image through `kubectl exec` dies** with `i/o timeout` against the API
+      server. Run the whole `export-diff | import-diff` pipeline INSIDE the toolbox pod (3 s there).
+      Generalises: materialise next to the storage, never pull bytes through a control plane.
+    Note KubeVirt CBT is NOT a shortcut here — this cluster's feature gates are `Snapshot` and
+    `HotplugVolumes` only, and CDI's staged-import checkpoints exist for VDDK/imageio sources, not for
+    `http`/`s3`. There is no way to APPLY a delta on the Talu restore side, which is exactly why the
+    synthetic-full variant (deltas never leave the DR service) is the one worth having.

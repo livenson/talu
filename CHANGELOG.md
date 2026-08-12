@@ -12,6 +12,11 @@ All notable changes to this project are documented here. Format follows
   with the restore path validated end-to-end on `rocky-phys`.
 - `examples/drim/capture-openstack.sh` — capture Cinder volumes into DRIM disk artifacts using only
   the OpenStack APIs; `examples/drim-k8s/` renamed to `examples/drim/` now that it is not k8s-only.
+- `drim-target.md` §10.7 — incremental capture measured on both Ceph deployments: synthetic full is
+  byte-exact, `export-diff` from zero is a 23x free win over the API path, and the availability /
+  encryption requirements the pattern introduces.
+- lab-notes #58 (`export-diff` from zero beats `export` for full artifacts) and #59 (synthetic full
+  validated byte-exact; `rbd import` can't take a stream; materialise next to the storage).
 - lab-notes #56 (`rbd export` is 4.6–5.9x faster than Cinder/Glance and byte-identical) and #57
   (Cinder's "consistent group snapshot" on RBD is NOT atomic — consistency depends on snapshot order).
 - lab-notes #52 (RHOSP export traps + measured export cost), #53 (a restored guest loses its device
