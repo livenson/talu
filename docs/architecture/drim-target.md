@@ -353,7 +353,7 @@ The chart change unit-tests with `make kbuild` + `helm template` anywhere; the r
 
 §10.1–10.2 validate `type: vm`. This validates the other landing zone from §2: a Kubernetes
 component captured out of one KaaS tenant cluster and restored into a **different, freshly
-provisioned** one. Scripts and the manifest it produced: [`examples/drim-k8s/`](../../examples/drim-k8s/).
+provisioned** one. Scripts and the manifest it produced: [`examples/drim/`](../../examples/drim/).
 
 ```mermaid
 flowchart LR
@@ -401,7 +401,7 @@ flowchart LR
 | §7 secrets | ✅ the source secret value appears **nowhere** in the package; the workload waited for the operator to supply it |
 
 **Two capture bugs the run found**, both of which produce silent failures and neither of which
-DRIM's `stripFields` example covers — now [`examples/drim-k8s/`](../../examples/drim-k8s/) and
+DRIM's `stripFields` example covers — now [`examples/drim/`](../../examples/drim/) and
 lab-notes #49:
 
 - **`spec.volumeName` is not enough for a PVC.** The binding annotations
@@ -501,6 +501,97 @@ be signed for the endpoint the *importer* will use, not the one the operator can
 
 **Scope:** the k8s half here restored into a second namespace of the same tenant cluster — the
 cross-cluster case is §10.3. The new claims are the hybrid package and the S3 transport.
+
+### 10.5 A non-Talu source: multi-disk VM from OpenStack (RHOSP 17)
+
+Every run above had Talu on both ends, which left the format's central premise untested — DRIM exists
+to move an infosystem off a platform that is *gone*, and its `source` block is explicitly
+OpenStack-shaped. This run captures a **multi-disk VM from a real RHOSP 17 cloud** (Cinder on
+`hostgroup@tripleo_ceph`) and restores it onto Talu, exercising **`dataDisks[].url` with populated
+disks** — shipped in 0.2.0, but until now only ever tested with a *blank* data disk.
+
+**Source VM.** `1vcpu-2gb`, Rocky 9, boot volume 10 GiB + two 1 GiB data volumes. The guest layout
+avoids LVM deliberately — a captured VM is someone else's, and needing guest packages is not an
+option (`lvm2` is absent from the image). Instead the disks carry a **cross-disk write invariant**:
+
+```
+vdb ├─ vdb1  200 MiB ext4 "rawprobe"  mounted from /etc/fstab by DEVICE PATH  ← the probe
+    └─ vdb2  822 MiB ext4 "drimA"     mounted by UUID   → payloads  /srv/a/rec/<i>.dat
+vdc          1 GiB   ext4 "drimB"     mounted by UUID   → checksums /srv/b/idx/<i>.sha
+```
+
+A writer appends payload → `fsync` → checksum → `fsync`, so a consistent pair satisfies
+`maxA >= maxB >= maxA-1`; a pair captured at two different instants shows up as skew or as an index
+entry whose payload is missing or mis-hashed.
+
+**Capture, two ways** — set A: two `--force` snapshots of the live volumes, issued across a ~7 s
+window while the writer ran (console showed seq 450 → 750), no quiesce. Set B: clean shutdown, then
+snapshot. Export used the API-only path a DR service would use against *any* OpenStack — snapshot →
+temp volume → `cinder upload-to-image` → `image save` → `qemu-img -S 4k` → zstd.
+
+**Timings** (the point of measuring: RTO):
+
+| stage | time |
+|---|---|
+| build the source VM (net, router, keypair, 3 volumes, VM, FIP) | 79 s |
+| set A live snapshots (2 volumes) | 23 s |
+| clean shutdown + set B snapshots (3 volumes) | 17 s + 33 s |
+| export 10 GiB root — vol-from-snap 14 s · upload-to-image 165 s · **glance download 358 s** · sparsify 9 s · zstd 14 s | 560 s |
+| export each 1 GiB data volume | ~81 s |
+| **total export — 5 artifacts, 10.7 GB raw → 1.04 GB compressed** | **1016 s** |
+| OpenStack director → Talu gateway (`scp`, direct) | **18 s (~57 MB/s)** |
+| upload to Garage S3 | 16 s |
+| **import 6 disks + boot 2 VMs on Talu** | **76 s / 101 s** |
+
+**The Glance download is 60 % of export wall-clock and scales with *provisioned* size, not used
+size** — a 10 GiB volume holding 2 GiB costs the full 10 GiB. That single fact dominates RTO for this
+path, and it is the argument for a backend-native export (`rbd export`) when the DR service can reach
+the storage layer, per §6.1's layering rule.
+
+**Result 1 — device identity does not survive, exactly as predicted.** On OpenStack the data disks
+were `vdb`/`vdc`. On Talu they arrive as **`vdc`/`vdd`**, because Talu inserts the cloud-init `cidata`
+disk at `vdb`:
+
+| mount | mechanism | after restore |
+|---|---|---|
+| `/srv/a`, `/srv/b` | `UUID=…` in fstab | ✅ **mounted** |
+| `/srv/rawprobe` | `/dev/vdb1` in fstab | ❌ **not mounted** |
+
+`/dev/vdb1` now addresses the cloud-init disk. `nofail` let the guest boot, and the mount silently did
+not happen — the worst shape of failure. **A guest that references disks by device path does not
+survive a DRIM restore.** Talu's `serial` (`/dev/disk/by-id/virtio-<name>`) is what makes the disks
+re-identifiable at all; see §12.10.
+
+**Result 2 — no tearing detected in the live capture.** A negative result, reported as such:
+
+| | set B (powered off) | set A (live, no quiesce) |
+|---|---|---|
+| cross-disk blob (payload on A, checksum on B) | MATCH | MATCH |
+| `maxA` / `maxB` | 838 / 838 — **skew 0** | 1311 / 1311 — **skew 0** |
+| records checksum-verified against the other disk | 838, **0 bad** | 1311, **0 bad** |
+| guest boots, both UUID filesystems mount | ✅ | ✅ |
+
+Two independent per-volume snapshots ~7 s apart, against a writer doing ~12 fsync'd records/s, did
+**not** produce a detectable inconsistency on Ceph-backed Cinder. This does not show tearing cannot
+happen — only that this probe did not provoke it. **Caveat that limits the claim:** the writer restarts
+its counter at 1 when the service restarts, so the absolute sequence numbers are a high-water mark,
+not a clean RPO delta. The invariant check (every index entry has a matching, correctly-hashed
+payload) is sound; the arithmetic on `maxA`/`maxB` is not.
+
+**What was not run:** the third arm. OpenStack *does* have a consistent multi-volume primitive —
+**generic volume groups** (`group-create` + `group-snapshot-create`), which superseded the deprecated
+consistency groups — and it needs a group type carrying `consistent_group_snapshot_enabled='<is>
+True'`. On this cloud only `default_cgsnapshot_type` (the migration placeholder) existed; a `drim-cg`
+group type was created successfully and both volumes joined a group, so **the capability is present
+but unconfigured by default** — meaning the naive per-volume path measured above is what an operator
+gets unless they opt in. The group snapshot itself needs `--os-volume-api-version 3.14`; the run used
+3.13 and the arm failed. Settling whether the group primitive removes the skew is the obvious
+follow-up.
+
+**Two OpenStack-side traps** (lab-notes #52): `openstack image create --volume` fails on this release
+with *"Uploading data and using container are not allowed at the same time"* regardless of flags — use
+`cinder upload-to-image`. And a failed run that leaves two volumes with the same name makes every
+subsequent name-based lookup ambiguous, which silently breaks automation; address volumes by ID.
 
 ## 11. Anatomy: backup → storage → recovery, and the same system as DRIM
 
@@ -813,6 +904,16 @@ Suggestion: per-artifact `format` and `compression` in `index.json`. Then a DR s
 ahead of time instead of failing at restore. For an **OpenStack** source this matters more: a Cinder
 export may be raw, qcow2, or a Ceph `rbd export-diff` stream, and only the first two are portable.
 
+**This stopped being hypothetical in §10.5.** Two zstd artifacts — the ones holding ~200 MiB of
+incompressible data — were rejected by CDI v1.65.0 with `reserved block type encountered` and
+`window size exceeded`, while the *larger* but highly compressible root artifact imported fine. The
+same two artifacts imported without complaint as **raw**, and `zstd -t` validated every file; all five
+were single-frame with identical 2 MiB windows. Reproduced over two independent transports (an ad-hoc
+HTTP server and presigned S3), so it is not a transport artefact — but it is **not root-caused**, and
+it refines rather than overturns lab-notes #46. The practical lesson is exactly this section's point:
+if the package declared its compression, the DR service could transcode to a format the target is
+known to accept instead of discovering the incompatibility as a crash-looping importer.
+
 ### 12.6 Secrets: v1 should still name them
 
 §7's posture (never capture values) is right. But the manifest also does not record *which* secrets
@@ -858,7 +959,32 @@ silently never ran.
 - **Package-level provenance.** `representation-info/` records tool versions; it should also record
   *which* implementation produced the package, since capture correctness varies by producer.
 
-### 12.10 What the format already gets right
+### 12.10 Disk identity is not preserved — say so, and require UUID/LABEL
+
+DRIM models disks as an ordered list with a `name` and a `role`. Nothing in the format claims device
+order or device *names* survive, and §10.5 measured that they do not: disks captured from OpenStack as
+`vdb`/`vdc` arrive on Talu as `vdc`/`vdd`, because the target inserts its own cloud-init disk first.
+
+The consequence is silent. A guest with `/dev/vdb1` in `/etc/fstab` boots (with `nofail`) and simply
+does not mount that filesystem; without `nofail` it drops to emergency mode. Filesystems referenced by
+`UUID=` mounted correctly in the same boot.
+
+Suggestions, in order of value:
+
+1. **State the non-guarantee normatively** — "device paths are not preserved across restore" belongs
+   next to the disk model, not in an implementer's notebook.
+2. **Add a pre-flight check.** The DR service can read `/etc/fstab` (and bootloader config) at *capture*
+   time and warn when a guest references block devices by path. This is cheap and catches the failure
+   while the source still exists to fix it.
+3. **Let a disk carry its expected in-guest identity** — `disks[].guestIdentity: {uuid, label, serial}`
+   — so a target that *can* honour it (Talu sets a virtio `serial`, giving
+   `/dev/disk/by-id/virtio-<name>`) does, and a target that cannot says so in the validation summary.
+
+For a **non-Talu source** this is sharper still: an OpenStack guest may pin devices by
+`/dev/vdX`, and an RKE2 node's storage may be addressed through yet another naming scheme. The format
+should push producers toward stable identifiers rather than hope.
+
+### 12.11 What the format already gets right
 
 Worth stating, because the list above is all criticism: **`index.json` + BagIt** made the S3 round
 trip verifiable with ten lines of code; **full standalone revisions** (§4.3) meant restore never had
