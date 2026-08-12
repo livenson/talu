@@ -837,3 +837,42 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     a virtio `serial`, so `/dev/disk/by-id/virtio-<name>` is stable across the move — but the guest has
     to have been written to use it. **Check `/etc/fstab` for device-path references BEFORE capture,
     while the source still exists to fix.**
+
+54. **CDI's zstd import is FLAKY — and zstd is undocumented/unsupported upstream. This corrects #46.**
+    #46 said "CDI v1.65.0 decompresses zstd — measured". True but incomplete: it decompresses zstd
+    *sometimes*. Chasing intermittent import failures produced this, and two wrong diagnoses on the
+    way (an ad-hoc HTTP server, then `zstd -T0` multi-threading) — both eliminated:
+    - **Non-deterministic.** Which artifact fails changes between runs of the *same* inputs, and one
+      file produced three different errors across runs: `reserved block type encountered`,
+      `window size exceeded`, `unexpected EOF`.
+    - **Not the artifact.** `zstd -t` passes; every artifact is single-frame with a 2 MiB window,
+      far inside klauspost's `1<<29` default max — so "window size exceeded" can only be a garbage
+      header read at the wrong offset, not the declared window.
+    - **Not the transport.** The same artifacts fetched from a pod three times each returned
+      byte-exact SHA-256 (6/6), and the failures reproduce over *two* transports (a local HTTP server
+      and presigned S3).
+    - **Not the content.** A controlled trio, all decompressing to exactly 1 GiB: 200 MiB
+      incompressible + zeros as **zstd → OK**, the *same bytes* as **gzip → OK**, all-zeros as
+      **zstd → FAILED**. That inverts the pattern seen on the real workload, where the big
+      incompressible artifact failed and the tiny compressible one worked.
+    - **Only zstd.** gzip and raw of identical bytes always imported.
+    Leading hypothesis: `pkg/importer/format-readers.go` builds it as `zstd.NewReader(fr.TopReader())`
+    with **no options**, so it runs with klauspost's default concurrency (one goroutine per CPU) over
+    CDI's chained reader, while the neighbouring gzip/xz readers are strictly sequential.
+    **Practical guidance: ship `gz` (or raw) to CDI, not `zst`** — the KubeVirt docs list only `gz`
+    and `xz` as supported, so zstd is an undocumented code path. And note the sharp edge: a truncated
+    **raw** import has no integrity check and would land silently corrupt, where zstd at least failed
+    loudly.
+
+55. **`rbd export` is available on RHOSP and removes ~93% of the export time — at the cost of
+    blast radius.** The portable Cinder/Glance capture path (#52) spends its time in `image save`,
+    which transfers the volume's PROVISIONED size: 358 s of a 560 s export for one 10 GiB volume.
+    On this cloud `cephadm` is on the controllers and Cinder names its backend in plain text
+    (`volume_driver=…rbd.RBDDriver`, `rbd_pool=volumes`, `rbd_user=openstack`), so:
+    `sudo cephadm shell -- rbd -p volumes --id openstack export volume-<uuid>@snapshot-<snap-uuid> - | zstd`
+    streams straight out with no Glance round trip and no staging on disk. This is DRIM §6.1 working
+    as designed — the manifest keeps Cinder-level identity, the pool/image name is resolved at capture
+    time into `disk-N.meta.json`. It also unlocks the atomic multi-disk snapshot, since Cinder's
+    consistent group snapshot on RBD is `rbd group snap create` underneath. **The cost:** the keyring
+    reads EVERY tenant's volumes, versus a project-scoped Cinder credential — a much larger grant for
+    a DR service to hold.

@@ -588,6 +588,40 @@ gets unless they opt in. The group snapshot itself needs `--os-volume-api-versio
 3.13 and the arm failed. Settling whether the group primitive removes the skew is the obvious
 follow-up.
 
+**Why the export was slow, and the alternative: `rbd export`.** The Cinder/Glance path above is
+portable — it needs nothing but the OpenStack APIs — but `image save` transfers the volume's
+*provisioned* size and cost 358 s of a 560 s export. Cinder here is `hostgroup@tripleo_ceph`, and its
+config names the backend outright: `volume_driver=cinder.volume.drivers.rbd.RBDDriver`,
+`rbd_pool=volumes`, `rbd_user=openstack`. `cephadm` is present on the controllers. So the
+backend-native path is available:
+
+```sh
+# resolve, per DRIM §6.1: Cinder volume UUID -> volumes/volume-<uuid>[@snapshot-<snap-uuid>]
+sudo cephadm shell -- rbd -p volumes --id openstack   export volume-<uuid>@snapshot-<snap-uuid> - | zstd -q -o disk-0.raw.zst
+```
+
+What it buys, and what it costs:
+
+- **It removes the Glance round trip entirely** — no `upload-to-image`, no `image save`, no temp
+  volume, i.e. ~523 s of the measured 560 s. `rbd export` streams to stdout, so it pipes straight into
+  compression and onward with no staging on the director's disk.
+- **It is the DRIM §6.1 layering rule working as designed.** The manifest keeps platform-level
+  identity (Nova server, Cinder volume UUIDs); the pool and image name are *resolved at capture time*
+  and recorded in `disk-N.meta.json` as captured truth — exactly what this run wrote by hand.
+- **It unlocks the atomic multi-disk snapshot.** Cinder's consistent group snapshot on the RBD driver
+  is `rbd group snap create` underneath, which *is* atomic across images. That is the mechanism behind
+  the third arm this run failed to execute, and the reason it is worth executing.
+- **The cost is blast radius.** `rbd export` on the `volumes` pool reads *every tenant's* data, and
+  needs the Ceph public network plus a keyring — a far larger grant than a Cinder API credential
+  scoped to one project. A DR service holding it is a much more attractive target. `rbd export-diff`
+  would also enable incremental capture, which DRIM §4.3 deliberately forgoes in favour of standalone
+  revisions.
+
+The honest framing for the spec: the API path is the portable default, and the backend path is a
+per-site optimisation whose *value grows with volume size* — at 10 GiB it is a 10× saving on the
+dominant stage; at DRIM's §13 example of a 500 GiB data disk it is the difference between a feasible
+and an infeasible RTO.
+
 **Two OpenStack-side traps** (lab-notes #52): `openstack image create --volume` fails on this release
 with *"Uploading data and using container are not allowed at the same time"* regardless of flags — use
 `cinder upload-to-image`. And a failed run that leaves two volumes with the same name makes every
@@ -904,15 +938,49 @@ Suggestion: per-artifact `format` and `compression` in `index.json`. Then a DR s
 ahead of time instead of failing at restore. For an **OpenStack** source this matters more: a Cinder
 export may be raw, qcow2, or a Ceph `rbd export-diff` stream, and only the first two are portable.
 
-**This stopped being hypothetical in §10.5.** Two zstd artifacts — the ones holding ~200 MiB of
-incompressible data — were rejected by CDI v1.65.0 with `reserved block type encountered` and
-`window size exceeded`, while the *larger* but highly compressible root artifact imported fine. The
-same two artifacts imported without complaint as **raw**, and `zstd -t` validated every file; all five
-were single-frame with identical 2 MiB windows. Reproduced over two independent transports (an ad-hoc
-HTTP server and presigned S3), so it is not a transport artefact — but it is **not root-caused**, and
-it refines rather than overturns lab-notes #46. The practical lesson is exactly this section's point:
-if the package declared its compression, the DR service could transcode to a format the target is
-known to accept instead of discovering the incompatibility as a crash-looping importer.
+**This stopped being hypothetical in §10.5, and the investigation overturned the first diagnosis.**
+Two zstd artifacts failed to import while others succeeded. The original write-up called this
+"content-specific, not root-caused". A controlled reproducer says otherwise:
+
+| artifact (all decompress to exactly 1 GiB) | codec | result |
+|---|---|---|
+| 200 MiB incompressible + zeros | zstd | ✅ Succeeded |
+| **same bytes** | gzip | ✅ Succeeded |
+| all zeros (33 KB compressed) | zstd | ❌ Failed |
+
+That is the **opposite** of the §10.5 pattern, where the 210 MB incompressible artifact failed and the
+307 KB compressible one succeeded. Neither size, compression ratio, nor content explains it. What does:
+
+- **It is non-deterministic.** Which artifact fails changes between runs of the *same* inputs.
+- **Three different errors from the same file**: `reserved block type encountered`, `window size
+  exceeded`, and `unexpected EOF` — all decoder-side symptoms of reading a stream that ended early or
+  arrived misaligned.
+- **The artifacts are valid.** `zstd -t` passes on every one; all are single-frame with a 2 MiB window,
+  well inside klauspost's `1<<29` default maximum — so "window size exceeded" cannot be the declared
+  window, only a garbage header read at the wrong offset.
+- **The transport is innocent.** Fetching the same two artifacts from the same server three times each,
+  from a pod, returned byte-exact SHA-256 matches every time (6/6).
+- **Only zstd is affected.** The identical bytes as `gzip`, and as uncompressed `raw`, always imported.
+
+So the fault is inside CDI's zstd read path, not the artifact, the content, or the wire.
+[`pkg/importer/format-readers.go`](https://github.com/kubevirt/containerized-data-importer/blob/v1.65.0/pkg/importer/format-readers.go)
+constructs it as `zstd.NewReader(fr.TopReader())` — **with no options**, so it runs with klauspost's
+default concurrency (one goroutine per CPU) reading through CDI's chained reader, whereas the `gzip`
+and `xz` readers it sits beside are strictly sequential. That asymmetry matches the evidence exactly,
+and it is the leading hypothesis; confirming it needs a change inside CDI, so it is stated as a
+hypothesis rather than a conclusion.
+
+Worth noting separately: **the KubeVirt docs say CDI supports `gz` and `xz` only** — zstd is
+implemented but undocumented, i.e. unsupported in practice. A DRIM package shipping `disk-0.raw.zst`
+is relying on a code path its target does not advertise.
+
+Two consequences for the spec, both reinforcing this section:
+
+1. Declaring `compression` per artifact lets a DR service **transcode to a format the target
+   advertises** rather than discovering the gap as a crash-looping importer.
+2. **Level-0 checksums must be verified after landing, not only on the artifact.** A truncated *raw*
+   import has no integrity check at all — zstd failed loudly here precisely because it validates; the
+   same truncation on `raw` would have produced a silently corrupt disk.
 
 ### 12.6 Secrets: v1 should still name them
 
