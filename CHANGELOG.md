@@ -12,8 +12,9 @@ All notable changes to this project are documented here. Format follows
   with the restore path validated end-to-end on `rocky-phys`.
 - `examples/drim/capture-openstack.sh` — capture Cinder volumes into DRIM disk artifacts using only
   the OpenStack APIs; `examples/drim-k8s/` renamed to `examples/drim/` now that it is not k8s-only.
-- lab-notes #52 (RHOSP export traps + measured export cost) and #53 (a restored guest loses its
-  device names — `/dev/vdX` in fstab silently stops mounting).
+- lab-notes #52 (RHOSP export traps + measured export cost), #53 (a restored guest loses its device
+  names — `/dev/vdX` in fstab silently stops mounting), #54 (CDI's zstd import is flaky and
+  undocumented upstream — corrects #46) and #55 (`rbd export` removes ~93% of export time).
 - `examples/drim/` — a worked DRIM capture/restore (manifests + scripts + an S3 helper),
   validated between two KaaS tenant clusters with a StorageClass remap, and again as a **hybrid**
   package (one `vm` + one `k8s` component) published to and retrieved from S3.
