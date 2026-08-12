@@ -83,3 +83,28 @@ Source `tenant-a` (StorageClass `kubevirt` → kubevirt-csi → infra Ceph RBD) 
 The restored PV data hashed **identical** to the source (`md5 22795d2c…`), the Deployment reached
 2/2, the Service served the restored file, and the source secret value appeared nowhere in the
 package.
+
+## `orchestrate.py` — DRIM ordering, gates and validation mode
+
+A ~180-line orchestrator that implements DRIM §6.4 (`relationships` / `bootOrder`), §7
+(`startupGate`) and §8.2/§8.3 (level-2 checks, `launchModes.validation`) literally as written, so the
+spec's orchestration semantics can be exercised without any artifacts. Results: `docs/architecture/drim-target.md` §10.9.
+
+```sh
+# 1. ordering only — no cluster objects created
+python3 orchestrate.py --manifest manifest-orchestration.yaml --namespace x --dry-run-order
+
+# 2. full validation mode: strict isolation, external stubs, level-2 checks, TTL cleanup
+python3 orchestrate.py --manifest manifest-orchestration.yaml --mode validation --namespace drim-val
+
+# 3. negative control — prove the isolation policy is what blocks, not a missing listener
+python3 orchestrate.py --manifest manifest-orchestration.yaml --mode validation --namespace drim-val \
+    --escape-probe kubernetes.default.svc:443     # expect: blocked
+python3 orchestrate.py --manifest manifest-orchestration.yaml --mode recovery   --namespace drim-rec \
+    --escape-probe kubernetes.default.svc:443     # expect: reachable
+```
+
+Exit codes: `0` pass, `2` manifest precondition (e.g. a cycle in `relationships`), `3` a failed
+`startupGate`. Validation-mode teardown runs in a `finally`, so it fires on failures too.
+
+> Listeners are `python3 -m http.server`, not `nc -l`. See lab-notes #61 for why that matters.

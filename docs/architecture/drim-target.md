@@ -437,10 +437,10 @@ flowchart TB
       K["k8s billing-api<br/>resources + PV data"]
     end
     PKG[("s3://drim-packages/&lt;revision&gt;/<br/>8 objects · 21 193 766 B")]
-    subgraph REC["Restore — fan-out, ordered by bootOrder"]
+    subgraph REC["Restore — fan-out, sequenced by hand"]
       direction LR
-      Z1["Management cluster<br/>talu-vm source: import<br/><b>bootOrder 10</b>"]
-      Z2["KaaS tenant cluster<br/>kubectl apply + PV data<br/><b>bootOrder 20</b>"]
+      Z1["Management cluster<br/>talu-vm source: import<br/>declared bootOrder 10"]
+      Z2["KaaS tenant cluster<br/>kubectl apply + PV data<br/>declared bootOrder 20"]
     end
     V --> PKG
     K --> PKG
@@ -481,8 +481,8 @@ disk-0.meta.json    -> {"role":"system","virtualSizeBytes":117440512,"compressio
 | Upload to S3 (Garage) | ✅ 8 objects, 21 193 766 B — byte-identical total to the local package |
 | Download to a **clean** directory | ✅ all 8 retrieved |
 | Level-0 on the **downloaded** copy | ✅ **6/6 artifacts matched `index.json`** |
-| VM restore, `bootOrder 10` | ✅ CDI imported the **`.zst` straight from a presigned S3 URL**; DataVolume `Succeeded` in ~56 s; guest booted to a login prompt |
-| k8s restore, `bootOrder 20` | ✅ PVC Bound, Deployment up, Service created |
+| VM restore (sequenced first **by hand**) | ✅ CDI imported the **`.zst` straight from a presigned S3 URL**; DataVolume `Succeeded` in ~56 s; guest booted to a login prompt |
+| k8s restore (sequenced second **by hand**) | ✅ PVC Bound, Deployment up, Service created |
 | Application check | ✅ **`md5 b3cdcf6cbdca95b03abaf6ac51e2ba72`, identical to source** |
 
 **Presigned URLs are the right delivery mechanism, and now demonstrated.** The DR service signs a
@@ -499,8 +499,11 @@ be signed for the endpoint the *importer* will use, not the one the operator can
 - The three-line `stripFields` example in the spec is, in practice, a trap; the working set is
   materially larger (§12.1).
 
-**Scope:** the k8s half here restored into a second namespace of the same tenant cluster — the
-cross-cluster case is §10.3. The new claims are the hybrid package and the S3 transport.
+**Scope, stated precisely.** The k8s half restored into a second namespace of the same tenant cluster
+— the cross-cluster case is §10.3. The new claims are the hybrid package and the S3 transport.
+**`bootOrder` was declared in the manifest but not enforced by anything**: the two components were
+restored in that sequence by hand. Nothing computed a DAG from `relationships`, no `startupGate` ran,
+and no level-2 connectivity check was executed. Those axes are covered in §10.8.
 
 ### 10.5 A non-Talu source: multi-disk VM from OpenStack (RHOSP 17)
 
@@ -853,6 +856,189 @@ backup path never decrypts the archive.
 Materialise **where the data is**. Streaming a 1 GiB image through `kubectl exec` failed with
 `i/o timeout` against the API server; running the same pipeline inside the Rook toolbox pod took 3 s.
 A DR service should merge next to the storage, not pull bytes through a control plane.
+
+### 10.8 Network topology and firewall rules — what actually survives a restore
+
+Prompted by a simple question: was the network validated? It had not been. Everything up to §10.7
+tested the *data* path. This tests network identity and firewall state, and the answer is
+"partially, and the partial failures are silent".
+
+**Source** (RHOSP): one VM pinned to a **fixed IP `10.90.0.150`** on `10.90.0.0/24`
+(gateway `.1`, DNS `8.8.8.8`, pool `.100–.200`), MAC `fa:16:3e:1c:1a:0f`, port security on, behind a
+security group with four authored rules — tcp/22 and tcp/80 from `0.0.0.0/0`, tcp/5432 from
+`10.90.0.0/24`, and icmp — plus the two default egress-allow rules.
+
+**Captured** into a topology block DRIM has no field for: CIDR, gateway, DNS, allocation pools, MAC,
+fixed IPs, port security, and all six rules with direction/ethertype/protocol/port-range/remote.
+
+**Recovered** on Talu by giving the tenant a `CiliumLoadBalancerIPPool` carrying the *original* CIDR
+and a Service requesting the *original* address, with the security group translated to a
+`CiliumNetworkPolicy`.
+
+| Probe against the recovered `10.90.0.150` | Expected from the source SG | Actual | Attributable? |
+|---|---|---|---|
+| tcp/22 | allow | ✅ **reachable** | yes — served by `sshd` |
+| tcp/80 | allow | ✅ **reachable** | yes — served by `python3 -m http.server` |
+| tcp/5432 | allow from `10.90.0.0/24` | ⚠️ blocked | **no — confounded** |
+| tcp/3306 | deny — not in the SG | ✅ blocked | **no — confounded** |
+| icmp | allow | ❌ **blocked** | yes — ICMP needs no listener |
+
+> **Correction.** The two `blocked` rows are **not attributable to policy**. Both in-guest listeners
+> were started with `nc -l -p <port> -q1`, and a later controlled test (§10.9) showed that construct
+> silently fails to listen — busybox `nc` rejects `-q` and prints usage instead. A closed port and a
+> denied port are indistinguishable from outside, so these rows cannot separate "the policy blocked it"
+> from "nothing was listening". The `reachable` rows are unaffected: reachability cannot be faked.
+> Policy enforcement is demonstrated soundly instead in **§10.9** by an A/B that holds the probe and
+> the target fixed and varies only the policy.
+
+#### What is recoverable
+
+**The addressable identity, exactly.** LB-IPAM granted the requested `10.90.0.150` and the VM answers
+on it. Anything connecting *to* the machine by its original address keeps working — which for most
+consumers is what "recover the IP" means.
+
+**Port-based allow.** 22 and 80 are reachable through the restored rules. The corresponding *deny*
+claim does not hold up here — see the correction above — but the shape of the assertion is still the
+one §8.2 argues for: a restore that silently opened a port would pass every other check in this
+document, so a non-reachability check is the only thing that would catch it. §10.9 runs that check in
+a form where a negative result means something.
+
+#### What is not — and each failure is quiet
+
+**The guest's own address is not preserved.** The Service holds `10.90.0.150`; the endpoint is a pod
+IP (`10.244.4.5`) and the guest sees `10.0.2.2`. So anything depending on the machine's *self* view
+breaks: in-guest static configuration, certificates with IP SANs, applications binding a specific
+address, and — importantly — **peer firewall rules keyed on this machine's source IP**, because its
+egress appears to come from the pod address, not from `10.90.0.150`.
+
+**CIDR-scoped rules survive syntactically and become unsatisfiable.** *(reasoned — the measurement
+that was meant to show this is the confounded 5432 row.)* tcp/5432 was allowed from `10.90.0.0/24`.
+The rule restored cleanly and is present in the `CiliumNetworkPolicy`, but on the target
+`10.90.0.0/24` holds only the LB VIP range; no workload has an address in it, so **no client can ever
+match the rule**. That is a property of the restored policy text against the target's address plan and
+can be read off both without probing — but it is an inference, not something this run demonstrated.
+Nothing reports it either way. A database that was reachable from its subnet becomes reachable from
+nobody, and every status field stays green.
+
+**Protocol rules outside TCP/UDP ports cannot be expressed at all.** ICMP was allowed at source and is
+blocked after restore — not by policy, but because a Service VIP only forwards the ports enumerated on
+it. There is no port to enumerate for ICMP.
+
+**Egress was never captured.** The source's default allow-all egress has no representation, so an
+infosystem whose security depended on egress restriction would be restored without it.
+
+#### Consequence for the format
+
+DRIM models network *attachment* — a logical name and an addressing mode — and nothing else. It has no
+concept of a security group, a firewall rule, a subnet as captured state, a router, or a floating IP.
+A faithful restore of the system above therefore produces a VM with the target's default security
+posture: unreachable or wide open, depending on the target, with nothing in the manifest or the
+validation levels to notice. That gap is addressed in the revised spec, not here.
+
+The axes this run left untested — `bootOrder` / `relationships` DAG enforcement, `startupGate`,
+level-2 `tcp` checks, and `launchModes.validation` — are covered in §10.9.
+
+### 10.9 Orchestration: boot order, startup gates, and validation-mode isolation
+
+Everything above restores *artifacts*. This run exercises the part of the spec that decides **what
+happens in what order, and under what containment** — §6.4 `relationships`, §7 `startupGate`, §8.2
+level-2 checks, and `launchModes.validation`. It needs no artifacts, so it runs against stub
+components on the physical lab's Talu cluster with a ~130-line orchestrator implementing §6.4/§7/§8.2
+literally as written.
+
+The manifest under test: `api` (`k8s`, `bootOrder: 20`), `db` (`vm`, `bootOrder: 10`), `smtp-relay`
+(`external`); the relationship `api depends-on db` carrying
+`startupGate: {check: tcp, from: dr-service, target: "db:5432", timeoutSeconds: 120}`; and a
+`launchModes.validation` with `isolation: strict`, a `blackhole-smtp` stub for the external, and
+`ttlSeconds: 600`.
+
+| # | Scenario | Expected per spec | Result |
+|---|---|---|---|
+| 1 | DAG ordering | `db` before `api`; `bootOrder` breaks ties only | ✅ `db -> api -> smtp-relay` |
+| 2 | Cyclic `relationships` | a manifest error, not a hang | ✅ `FAILED / precondition-failed`, `exit=2`, no objects created |
+| 3 | Full validation mode | gate passes, all start, level 2 green, namespace reaped | ✅ all 6 checks passed, 69 s wall |
+| 4 | Gate to a dead port | the dependent component never starts | ✅ `FAILED / precondition-failed`, `failedGate: api->db`, `api` never created |
+| 5 | Isolation A/B | strict blocks out-of-namespace egress; recovery does not | ✅ blocked / reachable |
+
+Scenario 3 in full, times relative to start:
+
+| Check | Result | At / duration |
+|---|---|---|
+| `start:db` | passed | +3.9 s |
+| `gate:api->db` (tcp `db:5432`) | passed | 9.8 s |
+| `start:api` | passed | +17.2 s |
+| `start:smtp-relay` (stub `blackhole-smtp`) | passed | +20.7 s |
+| `level2:api->db:5432` | reachable | 19.1 s |
+| `level2:api->smtp-relay:25` | reachable | 19.1 s |
+| `escape:kubernetes.default.svc:443` | **blocked** (expected) | 9.8 s |
+| cleanup | namespace deleted via `finally` | — |
+
+#### What this establishes
+
+**The dependency graph is the ordering authority, and `bootOrder` is only a tiebreak.** Reading §6.4
+the other way round — `bootOrder` first — is easy and wrong: it would have started `api` before `db`
+in scenario 1 whenever the numbers disagreed with the edges.
+
+**A cycle must be a validation error.** The spec never says so. A naive implementation waits forever
+on a component whose dependency is waiting on it; the honest behaviour is to reject the manifest
+before creating anything, which is what scenario 2 does.
+
+**A failed gate must block the dependent, not just be recorded.** In scenario 4 `api` is never
+created. This is the difference between a gate and a metric.
+
+**Gates fail fast on refusal and slowly on a drop.** Scenario 4's gate resolved in 15.8 s against a
+45 s budget, because a closed port answers with a RST. A *black-holed* target — the isolation case —
+consumes the full budget instead. Both are correct, and a `timeoutSeconds` tuned against a refusing
+target will be far too short in production, where the failure mode is usually a drop.
+
+**`isolation: strict` is enforced, and this is the sound version of the §10.8 claim.** The same probe,
+against the same target (`kubernetes.default.svc:443`), from the same namespace layout: **blocked**
+under validation mode's policy, **reachable** in recovery mode without it. Only the policy differs, so
+the block is attributable to the policy — which is exactly what §10.8's confounded rows could not
+show. The policy itself is a `CiliumNetworkPolicy` with `endpointSelector: {}` allowing egress only
+in-namespace plus UDP/53 to `kube-dns`.
+
+**`finally` semantics matter more than TTL.** Cleanup ran in every scenario including the failures.
+Had it been conditional on success, scenario 4 would have leaked a namespace on the exact path where
+a human is already busy — and the spec's `ttlSeconds` is a backstop for the orchestrator dying, not
+the normal exit path.
+
+#### What this run does not show
+
+The gates and level-2 checks all ran **inside one cluster**. The interesting case is §12's
+cross-landing-zone gate — `api` in a tenant cluster, `db` a VM in another — where `from: dr-service`
+has no network path to either. That is why v1beta1 makes `from` explicit and admits `check: none`.
+Stubs here are one pod plus one Service; a stub that has to satisfy a protocol handshake (the
+`smtp-relay` contract says SMTP) is a harder problem the spec does not address.
+
+**Method note.** The first attempt at scenario 3 failed at the gate, and the cause was the test
+harness: `nc -l -p 5432 -q1` in busybox prints usage and exits rather than listening. That is the same
+construct §10.8 used in-guest, which is why those rows are marked confounded above. Listeners here are
+`python3 -m http.server <port>`, verified to be listening before use.
+
+### 10.10 What all of this says about Talu as a target — a machine-readable answer
+
+The findings in §10.1–10.9 are the answer to "can Talu be a DRIM target", but in prose they are
+unusable at the moment they matter: when an operator is deciding whether a specific infosystem can be
+protected here. Nearly every one of them is a **silent degradation** — a manifest field Talu accepts
+and quietly does less with — and every one is statically knowable before any restore is attempted.
+
+They are therefore also published as a **capability descriptor** (`drim.capability/v1`), consumed by
+a validator that reports `(manifest × target) → faithful | degraded | dropped | unsupported` per
+field, using the same vocabulary as the post-restore report so `intended → predicted → achieved` can
+be diffed. Both live in the revised spec alongside a second descriptor for the RHOSP lab; the design
+rationale is that spec's §10.5.
+
+Every claim in Talu's descriptor cites the §10 run that established it, and carries `verified` or
+`declared` — because a descriptor of confident but untested claims manufactures exactly the false
+assurance the report exists to remove. Talu's currently carries **4 declared, untested claims**,
+which the report renders explicitly rather than hiding.
+
+Run against DRIM's own §13 hybrid example, it returns one blocking finding, four degraded and five
+dropped fields — including that the example requires `kubernetesVersion: ">=1.28 <1.35"` against this
+lab's 1.35.7 cluster, and that a `tcp` startupGate between the `vm` and `tenant-cluster` landing zones
+cannot be executed at all because neither declares a path to the other (§10.9's untested case, now at
+least *reported* rather than silently skipped).
 
 ## 11. Anatomy: backup → storage → recovery, and the same system as DRIM
 
