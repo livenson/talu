@@ -792,3 +792,22 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     `metadata.finalizers`, and the claim binds normally against the target's own provisioner.
     Related capture trap in the same pass: a naive namespace include-list picks up the auto-created
     **`kube-root-ca.crt` ConfigMap**, which holds the *source* cluster's CA bundle — never restore it.
+
+50. **A captured Kubernetes object carries `metadata.namespace`, so it can only be restored into the
+    namespace it came from.** Found while restoring a DRIM package into a second namespace: every
+    `kubectl apply -n <other>` is rejected with *"the namespace from the provided object does not
+    match"*. Strip `metadata.namespace` at capture (or remap at restore) — without it a namespace
+    remap is impossible, which also makes DRIM's validation mode (restore a clone into a temporary
+    namespace, alongside the live system) unimplementable. Companion to #49; both belong in the same
+    scrub pass.
+
+51. **Garage is reachable for S3 round trips, but drive it from the gateway, not from a pod.** The
+    obvious approach — an `amazon/aws-cli` pod — fails: `docker.io/amazon/aws-cli` is not in the
+    pull-through mirror and the direct pull to `auth.docker.io` times out on the flaky WAN (the #42
+    cold-cache-looks-like-no-egress shape). The gateway *does* have egress, so
+    `python3 -m venv ~/s3venv && ~/s3venv/bin/pip install boto3` plus
+    `kubectl -n garage port-forward svc/garage 3900:3900` gives a working S3 client in about a minute.
+    Measured: an 8-object / 21 193 766 B package uploaded and re-downloaded with all SHA-256s intact.
+    **Presign against the in-cluster endpoint** (`http://garage.garage.svc:3900`) when the consumer is
+    CDI — sigv4 signs the `Host` header, so a URL signed for `127.0.0.1:3900` will not verify from a
+    pod. boto3 needs `addressing_style: path` for Garage.

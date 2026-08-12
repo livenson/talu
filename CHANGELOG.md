@@ -10,8 +10,11 @@ All notable changes to this project are documented here. Format follows
   The recovery path for a portable DR package; see `docs/architecture/drim-target.md`.
 - `docs/architecture/drim-target.md` — analysis of Talu as a DRIM disaster-recovery target,
   with the restore path validated end-to-end on `rocky-phys`.
-- `examples/drim-k8s/` — a worked DRIM `type: k8s` capture/restore (manifest + scripts), validated
-  between two KaaS tenant clusters with a StorageClass remap.
+- `examples/drim-k8s/` — a worked DRIM capture/restore (manifests + scripts + an S3 helper),
+  validated between two KaaS tenant clusters with a StorageClass remap, and again as a **hybrid**
+  package (one `vm` + one `k8s` component) published to and retrieved from S3.
+- `drim-target.md` §12 — suggested changes to the DRIM spec, from implementing it against a real
+  target, including what changes for non-Talu sources (OpenStack, RKE2).
 - `phys_kamaji`: raise the operator memory limit off the chart's 100Mi default — at 100Mi it is
   OOMKilled and NEW tenant clusters silently never provision (lab-notes #48).
 - lab-notes #48 (Kamaji operator OOM) and #49 (PVC binding annotations must be stripped, or a

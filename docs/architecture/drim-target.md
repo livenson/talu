@@ -422,6 +422,86 @@ made the stuck cluster go `Ready` in ~20 s. Fixed in `phys_kamaji`; lab-notes #4
 made the StorageClass remap a real test — but it means kubevirt-csi-to-kubevirt-csi restore is still
 unexercised. And `resourceCapture` covered the five common kinds, not Ingress/NetworkPolicy/RBAC.
 
+### 10.4 One package, both landing zones, shared through S3
+
+§10.2 and §10.3 each validated one component type with the artifact served over plain HTTP. This run
+does the thing the format is actually for: **a single hybrid package** — DRIM's §13 shape, one `vm`
+and one `k8s` component with a `relationships` DAG — **published to and retrieved from S3**, then
+restored into the *two different landing zones* §2 predicts.
+
+```mermaid
+flowchart TB
+    subgraph CAP["Capture"]
+      direction LR
+      V["VM db-primary<br/>volume export → zstd"]
+      K["k8s billing-api<br/>resources + PV data"]
+    end
+    PKG[("s3://drim-packages/&lt;revision&gt;/<br/>8 objects · 21 193 766 B")]
+    subgraph REC["Restore — fan-out, ordered by bootOrder"]
+      direction LR
+      Z1["Management cluster<br/>talu-vm source: import<br/><b>bootOrder 10</b>"]
+      Z2["KaaS tenant cluster<br/>kubectl apply + PV data<br/><b>bootOrder 20</b>"]
+    end
+    V --> PKG
+    K --> PKG
+    PKG -->|"presigned GET"| Z1
+    PKG -->|"fetch + unpack"| Z2
+    Z1 -.->|"relationships: depends-on<br/>startupGate tcp"| Z2
+```
+
+**The package as stored** (`aws s3 ls`-equivalent listing; sizes are bytes, exact):
+
+```
+      1079  index.json
+       599  manifest-sha256.txt                                  # BagIt (§4.2)
+      3766  manifest.yaml                                        # both components + relationships
+       386  representation-info/tool-versions.json
+       186  snapshots/k8s/pv/billing-data.tar.zst                # PV data
+      1136  snapshots/k8s/resources.tar.zst                      # 4 stripped objects
+       296  snapshots/vm/db-primary/disk-0.meta.json
+  21186318  snapshots/vm/db-primary/disk-0.raw.zst               # full volume export
+  ---- 8 objects, 21 193 766 bytes total ----
+```
+
+Contents of the two archives, for the avoidance of doubt:
+
+```
+resources.tar.zst   -> resources.json (3625 B): Deployment, Service, ConfigMap, PVC — no Secret
+billing-data.tar.zst -> ./  ./lost+found/  ./invoices.txt (63 B)
+disk-0.meta.json    -> {"role":"system","virtualSizeBytes":117440512,"compression":"zstd",
+                        "uncompressedSha256":"809dc3e0…","resolvedBackend":{
+                          "driver":"rook-ceph.rbd.csi.ceph.com","storageClass":"ceph-block",
+                          "volumeMode":"Filesystem"}}
+```
+
+**Results:**
+
+| Step | Result |
+|---|---|
+| Upload to S3 (Garage) | ✅ 8 objects, 21 193 766 B — byte-identical total to the local package |
+| Download to a **clean** directory | ✅ all 8 retrieved |
+| Level-0 on the **downloaded** copy | ✅ **6/6 artifacts matched `index.json`** |
+| VM restore, `bootOrder 10` | ✅ CDI imported the **`.zst` straight from a presigned S3 URL**; DataVolume `Succeeded` in ~56 s; guest booted to a login prompt |
+| k8s restore, `bootOrder 20` | ✅ PVC Bound, Deployment up, Service created |
+| Application check | ✅ **`md5 b3cdcf6cbdca95b03abaf6ac51e2ba72`, identical to source** |
+
+**Presigned URLs are the right delivery mechanism, and now demonstrated.** The DR service signs a
+GET against the *in-cluster* endpoint (`http://garage.garage.svc:3900`) and hands the chart a plain
+URL; CDI fetches it with no credential anywhere near the tenant namespace. This is what §4.1
+recommends, and it is what the run used. Note the signature covers the `Host` header, so the URL must
+be signed for the endpoint the *importer* will use, not the one the operator can reach.
+
+**Two more findings**, both about `stripFields`:
+
+- **`metadata.namespace` survives capture** and pins every object to the source namespace, so
+  `kubectl apply -n <other>` is rejected outright. Any namespace remap is impossible without
+  stripping it — and DRIM's own validation mode (§8.2, "a temporary namespace") *requires* one.
+- The three-line `stripFields` example in the spec is, in practice, a trap; the working set is
+  materially larger (§12.1).
+
+**Scope:** the k8s half here restored into a second namespace of the same tenant cluster — the
+cross-cluster case is §10.3. The new claims are the hybrid package and the S3 transport.
+
 ## 11. Anatomy: backup → storage → recovery, and the same system as DRIM
 
 The round trip in §10.2 was run with an HTTP artifact server standing in for S3. This section shows
@@ -656,7 +736,138 @@ three ways through `source.http`:
 Identical results from all three, so DRIM's native `.zst` needs no repackaging (§4.5). Note the
 landed hash is *not* the source hash (`809dc3e0…`) — that is §11.3's resize, not corruption.
 
-## 12. Open questions
+## 12. Suggested changes to the DRIM spec
+
+Everything below comes from implementing the format against a real target, not from reading it. The
+ordering is by how much pain each one causes an implementer. Where a source other than Talu changes
+the picture — **OpenStack** for VMs, **RKE2** for Kubernetes — that is called out, because a format
+whose only proven producer is one platform will grow platform assumptions silently.
+
+### 12.1 `stripFields`: make the minimum set normative, per kind
+
+The three-line example (`metadata.uid`, `metadata.resourceVersion`, `status`, `spec.clusterIP`) reads
+like the answer. It is not, and every field missing from it produced a **silent** failure:
+
+| Must also be stripped | What happens if you don't |
+|---|---|
+| `metadata.namespace` | `kubectl apply -n <other>` is rejected; **no namespace remap is possible**, which validation mode requires |
+| `pv.kubernetes.io/bind-completed`, `…/bound-by-controller` | PVC restores as **`Lost`**; pods `Pending` forever with no explanation |
+| `volume.kubernetes.io/storage-provisioner` (+ `beta` alias) | Names the **source** CSI driver, contradicting a remapped StorageClass |
+| `volume.kubernetes.io/selected-node` | Names a node that does not exist in the target |
+| `metadata.ownerReferences` | Dangling UID references; garbage-collected immediately after restore |
+| `metadata.finalizers` | Deletion of a failed restore hangs |
+| `spec.volumeName` | Binds to a PV that isn't there |
+
+Suggestion: publish a **normative baseline `stripFields` per `kind`** that implementations apply
+*before* the manifest's own list, and make the manifest's list additive. Implementers should not have
+to rediscover the PVC binding annotations by watching a restore hang.
+
+Also make **exclusion** normative for auto-generated objects. A naive namespace include-list captures
+`kube-root-ca.crt` — the **source cluster's CA bundle**. On RKE2 the same class of object is larger:
+`default-token-*`/projected SA tokens, and RKE2's own `rke2-*` addon ConfigMaps in `kube-system`.
+
+### 12.2 `resourceCapture` is namespace-scoped only — real apps are not
+
+`include`/`exclude` name namespaced kinds. Anything non-trivial also needs **cluster-scoped** state:
+CRDs, ClusterRole/ClusterRoleBinding, StorageClasses, IngressClasses, ValidatingWebhookConfigurations.
+An operator-backed application restored without its CRDs simply fails to reconcile, and the manifest
+has nowhere to say so.
+
+This is the single biggest gap for a **non-Talu source**. An RKE2 cluster typically carries
+cert-manager, an ingress controller and several operators, all cluster-scoped. Suggestion: add
+`resourceCapture.clusterScoped: {include, exclude}` with an explicit warning that cluster-scoped
+restore is *merge* semantics, not create — the target may already have a different version of the
+same CRD, which is a conflict the format should let you declare a policy for
+(`onConflict: fail | skip | overwrite`).
+
+### 12.3 A component does not say where it lands
+
+§13's hybrid example has a `vm` and a `k8s` component and one profile with `platform.vm` and
+`platform.k8s`. The binding is implicit: type → platform key. That works only while there is exactly
+one target per type. It breaks as soon as there are two — which is the normal case for us (a VM lands
+on the management cluster, a Kubernetes component lands in a *tenant* cluster, and a second Kubernetes
+component might belong in a different tenant cluster entirely).
+
+Suggestion: `components[].targetRef` naming a key under the profile's `platform`, defaulting to the
+type. Cheap, backward-compatible, and it makes the fan-out explicit instead of inferred. §10.4 had to
+hard-code the fan-out because the manifest could not express it.
+
+### 12.4 Say what a checksum is *of*
+
+`index.json` holds SHA-256 per artifact, which is right. What the spec never says is that this is the
+**only** thing you can verify. CDI expands an imported image to fill the target volume, so the landed
+`disk.img` legitimately does not match the artifact hash (112 MiB in, 1 GiB out — §11.3). An
+implementer who checks the restored volume concludes the package is corrupt.
+
+Suggestion: state explicitly that integrity is verified **on the artifact before restore**, and add an
+optional `uncompressedSha256` per disk (we added one to `disk-0.meta.json` on our own initiative) so a
+target *can* verify post-decompression but pre-resize.
+
+### 12.5 Declare artifact format in `index.json`, not in the filename
+
+`disk-0.raw.zst` encodes format and compression positionally. A consumer has to parse filenames to
+know whether it can ingest the thing. We measured that CDI v1.65.0 handles `.gz`, `.xz` **and `.zst`**
+transparently — but a different target might not, and it can only find out by trying.
+
+Suggestion: per-artifact `format` and `compression` in `index.json`. Then a DR service can transcode
+ahead of time instead of failing at restore. For an **OpenStack** source this matters more: a Cinder
+export may be raw, qcow2, or a Ceph `rbd export-diff` stream, and only the first two are portable.
+
+### 12.6 Secrets: v1 should still name them
+
+§7's posture (never capture values) is right. But the manifest also does not record *which* secrets
+exist, so the operator at `WAITING_INPUT` is told to act with no list. In §10.3 the restored
+Deployment simply would not start, and the only way to learn why was to read the pod's
+`CreateContainerConfigError`.
+
+Suggestion — no v2 needed, because **names are not secret**: `secretsRequired: [{name, kind,
+consumedBy, description}]`, values forbidden. It turns a dead end into a checklist, and it is exactly
+what the runbook has to contain anyway.
+
+### 12.7 Network modes are aspirational; say which are best-effort
+
+`static-remap | dhcp | preserve` reads as three equal options. On Talu's tier-1 binding only `dhcp` is
+honourable (§4.4). On **OpenStack** `preserve` is usually impossible too — floating IPs and Neutron
+port bindings do not travel to another cloud, and MAC preservation depends on the target allowing it.
+
+Suggestion: mark the modes as *requests*, require a `fallback`, and make the DR service report which
+mode was actually achieved in the `validation-summary`. Silently downgrading `preserve` to `dhcp` and
+declaring success is worse than saying so.
+
+### 12.8 Cross-zone `startupGate` may be unverifiable
+
+`startupGate: {check: tcp, target: "db-primary:5432"}` assumes the checker can reach the target. In a
+hybrid package the two components land in **different clusters** with no guaranteed path — in §10.4
+nothing in the tenant cluster could open a TCP connection to a VM on the management cluster's pod
+network. The gate is then either skipped or fails for the wrong reason.
+
+Suggestion: allow `startupGate.from: <component|dr-service>` so it is clear who probes, and permit
+`check: none` with a plain delay — an honest "we cannot verify this ordering" beats a check that
+silently never ran.
+
+### 12.9 Smaller things
+
+- **`source` should be a discriminated union.** It is OpenStack-shaped (`serverId`, Cinder `volumes`).
+  We had to invent `platform: talu` / `talu-kaas` with `cluster`/`namespace`/`claim` fields. Define
+  `platform` as the discriminator and let each platform contribute its own identity block.
+- **`guestAgent: qemu-ga` should be optional and verifiable.** An imported OpenStack image may not
+  have it; level-1's `guest-agent` check then fails for a healthy VM.
+- **`kubernetesVersion: ">=1.28"` needs an upper bound in practice.** Our KaaS tenant version is
+  capped by the newest CAPK image, not by the management cluster, so `>=` alone cannot be satisfied
+  safely.
+- **Package-level provenance.** `representation-info/` records tool versions; it should also record
+  *which* implementation produced the package, since capture correctness varies by producer.
+
+### 12.10 What the format already gets right
+
+Worth stating, because the list above is all criticism: **`index.json` + BagIt** made the S3 round
+trip verifiable with ten lines of code; **full standalone revisions** (§4.3) meant restore never had
+to resolve a chain; **the secrets posture** produced exactly the intended stop-and-ask behaviour; and
+**`bootOrder` + `relationships`** were sufficient to drive a two-zone fan-out once we knew where each
+component belonged. The bones are right — the gaps above are all "the spec assumed a detail the
+implementer must not have to rediscover".
+
+## 13. Open questions
 
 1. **Does a DRIM `type: k8s` recovery always provision a fresh KaaS cluster**, or may it restore into
    an existing one? Fresh is cleaner and matches "original infrastructure destroyed," but costs a

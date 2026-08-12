@@ -12,6 +12,8 @@ results in [`docs/architecture/drim-target.md` §10.3](../../docs/architecture/d
 | `manifest.yaml` | The DRIM manifest produced by the validated run — a real one, not a sketch |
 | `capture.sh` | Source side: resource dump + `stripFields` scrub + PV data archive |
 | `restore.sh` | Target side: level-0 checksum gate, unpack, StorageClass remap, apply |
+| `manifest-hybrid.yaml` | A **hybrid** infosystem — one `vm` + one `k8s` component with a `relationships` DAG, which on Talu means two landing zones |
+| `s3.py` | Publish / list / fetch / presign a package against an S3 endpoint (validated against Garage) |
 
 ## Running it
 
@@ -22,6 +24,21 @@ KUBECONFIG=/path/to/source.kubeconfig NS=billing ./capture.sh      # prints the 
 # 3 · restore into the TARGET cluster
 KUBECONFIG=/path/to/target.kubeconfig PKG=/path/to/pkg/<revision> ./restore.sh
 ```
+
+## Sharing the package through S3
+
+```sh
+export S3_ENDPOINT=http://garage.garage.svc:3900 S3_BUCKET=drim-packages
+export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_DEFAULT_REGION=garage
+python3 s3.py put  /path/to/pkg/<revision> <revision>   # upload
+python3 s3.py ls                                        # sizes + etags
+python3 s3.py get  <revision> ./fetched                 # download to a clean dir, then re-verify
+python3 s3.py presign <revision>/snapshots/vm/db-primary/disk-0.raw.zst
+```
+
+**Hand the VM restore a presigned URL, not credentials.** CDI then fetches the artifact with nothing
+sensitive in the tenant namespace. Sign against the endpoint *the importer* will use — the signature
+covers the `Host` header, so a URL signed for `127.0.0.1:3900` will not verify from inside the cluster.
 
 ## The three things that are easy to get wrong
 
@@ -35,6 +52,8 @@ Each of these was found by the run, not by reading the spec:
    *source* cluster's CA bundle. Never restore it into another cluster.
 3. **Secrets are excluded by design (§7), so the workload will not start until an operator supplies
    them.** That is the `WAITING_INPUT` state, not a bug — `restore.sh` stops at exactly that point.
+4. **`metadata.namespace` survives capture too**, pinning every object to the source namespace, so
+   `kubectl apply -n <other>` is rejected and no namespace remap is possible. `restore.sh` strips it.
 
 ## What the run proved
 
