@@ -1016,6 +1016,30 @@ harness: `nc -l -p 5432 -q1` in busybox prints usage and exits rather than liste
 construct §10.8 used in-guest, which is why those rows are marked confounded above. Listeners here are
 `python3 -m http.server <port>`, verified to be listening before use.
 
+### 10.10 What all of this says about Talu as a target — a machine-readable answer
+
+The findings in §10.1–10.9 are the answer to "can Talu be a DRIM target", but in prose they are
+unusable at the moment they matter: when an operator is deciding whether a specific infosystem can be
+protected here. Nearly every one of them is a **silent degradation** — a manifest field Talu accepts
+and quietly does less with — and every one is statically knowable before any restore is attempted.
+
+They are therefore also published as a **capability descriptor** (`drim.capability/v1`), consumed by
+a validator that reports `(manifest × target) → faithful | degraded | dropped | unsupported` per
+field, using the same vocabulary as the post-restore report so `intended → predicted → achieved` can
+be diffed. Both live in the revised spec alongside a second descriptor for the RHOSP lab; the design
+rationale is that spec's §10.5.
+
+Every claim in Talu's descriptor cites the §10 run that established it, and carries `verified` or
+`declared` — because a descriptor of confident but untested claims manufactures exactly the false
+assurance the report exists to remove. Talu's currently carries **4 declared, untested claims**,
+which the report renders explicitly rather than hiding.
+
+Run against DRIM's own §13 hybrid example, it returns one blocking finding, four degraded and five
+dropped fields — including that the example requires `kubernetesVersion: ">=1.28 <1.35"` against this
+lab's 1.35.7 cluster, and that a `tcp` startupGate between the `vm` and `tenant-cluster` landing zones
+cannot be executed at all because neither declares a path to the other (§10.9's untested case, now at
+least *reported* rather than silently skipped).
+
 ## 11. Anatomy: backup → storage → recovery, and the same system as DRIM
 
 The round trip in §10.2 was run with an HTTP artifact server standing in for S3. This section shows
