@@ -765,3 +765,49 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     **only from the `pomerium` namespace**, so a validation pod that SSHes to a tenant VM must run
     there or it is silently dropped. `docker.io/alpine/git` carries an ssh client; the KubeVirt
     libguestfs image does not.
+
+48. **The Kamaji operator OOMKills at the chart's default 100Mi, and the only symptom is that NEW
+    tenant clusters never provision.** Hit on **rocky-phys** while building a DR restore target. The
+    failure mode is nasty because everything that already exists keeps working: running tenant
+    clusters are unaffected (their control-plane Deployments exist; nothing needs reconciling), so
+    the lab looks healthy. A newly-applied `TenantControlPlane` gets its certificates and its
+    LoadBalancer Service, then **stops** — `status: Provisioning` forever, `kubernetesResources.deployment`
+    empty, **no events, and no error in the operator log**, because the process is killed (exit 137)
+    before it can log one. `kubectl -n kamaji-system get pod` is where the truth is:
+    `CrashLoopBackOff` with a double-digit restart count. Fix = raise the limit
+    (`--set resources.limits.memory=512Mi`, now the `phys_kamaji` default): the stuck TCP went
+    **Ready within ~20 s** of the operator staying up. Suspect this any time a CAPI/Kamaji cluster
+    stalls with a healthy-looking control plane and no diagnostics — check the operator's restarts
+    before reading anything else.
+
+49. **`stripFields: [spec.volumeName]` is NOT enough to make a PVC restorable elsewhere — the
+    binding ANNOTATIONS have to go too, or it restores straight to `Lost`.** Found while validating
+    a DRIM `type: k8s` restore across two tenant clusters. A captured PVC carries
+    `pv.kubernetes.io/bind-completed: "yes"` and `pv.kubernetes.io/bound-by-controller: "yes"`; on
+    restore the binding controller believes the claim was already bound, finds no PV, and parks it in
+    **`Lost`** — where it stays. The pods sit `Pending` and nothing says why. It also carries
+    `volume.kubernetes.io/storage-provisioner` (+ the `beta` alias) naming the SOURCE cluster's CSI
+    driver, which then contradicts a remapped StorageClass, and `volume.kubernetes.io/selected-node`
+    naming a node that does not exist in the target. Strip all five plus `spec.volumeName` and
+    `metadata.finalizers`, and the claim binds normally against the target's own provisioner.
+    Related capture trap in the same pass: a naive namespace include-list picks up the auto-created
+    **`kube-root-ca.crt` ConfigMap**, which holds the *source* cluster's CA bundle — never restore it.
+
+50. **A captured Kubernetes object carries `metadata.namespace`, so it can only be restored into the
+    namespace it came from.** Found while restoring a DRIM package into a second namespace: every
+    `kubectl apply -n <other>` is rejected with *"the namespace from the provided object does not
+    match"*. Strip `metadata.namespace` at capture (or remap at restore) — without it a namespace
+    remap is impossible, which also makes DRIM's validation mode (restore a clone into a temporary
+    namespace, alongside the live system) unimplementable. Companion to #49; both belong in the same
+    scrub pass.
+
+51. **Garage is reachable for S3 round trips, but drive it from the gateway, not from a pod.** The
+    obvious approach — an `amazon/aws-cli` pod — fails: `docker.io/amazon/aws-cli` is not in the
+    pull-through mirror and the direct pull to `auth.docker.io` times out on the flaky WAN (the #42
+    cold-cache-looks-like-no-egress shape). The gateway *does* have egress, so
+    `python3 -m venv ~/s3venv && ~/s3venv/bin/pip install boto3` plus
+    `kubectl -n garage port-forward svc/garage 3900:3900` gives a working S3 client in about a minute.
+    Measured: an 8-object / 21 193 766 B package uploaded and re-downloaded with all SHA-256s intact.
+    **Presign against the in-cluster endpoint** (`http://garage.garage.svc:3900`) when the consumer is
+    CDI — sigv4 signs the `Host` header, so a URL signed for `127.0.0.1:3900` will not verify from a
+    pod. boto3 needs `addressing_style: path` for Garage.

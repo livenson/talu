@@ -21,9 +21,18 @@
   args: { creates: "{{ kam_dir }}/kamaji-{{ kamaji_chart_version }}.tgz" }
 
 - name: Install/upgrade Kamaji (default kamaji-etcd datastore on the default SC)
+  # RESOURCES: the chart ships limits memory=100Mi, which the operator outgrows once it is watching
+  # a couple of tenant control planes' worth of Secrets — it is then OOMKilled (exit 137) in a loop.
+  # The failure is SILENT in the worst way: existing tenant clusters keep running (their control-plane
+  # Deployments already exist), so nothing looks broken, but NEW TenantControlPlanes never get a
+  # Deployment at all. They sit in Provisioning with no events and no operator error, because the
+  # process dies before it can log one. Raising the limit fixed it instantly on rocky-phys — a stuck
+  # tenant-dr TCP went Ready within ~20 s of the operator staying up. See lab-notes #48.
   ansible.builtin.command: >
     helm upgrade --install kamaji {{ kam_dir }}/kamaji-{{ kamaji_chart_version }}.tgz
     --namespace kamaji-system --create-namespace --wait --timeout 8m
+    --set resources.limits.memory={{ kamaji_memory_limit }}
+    --set resources.requests.memory={{ kamaji_memory_request }}
   environment: { KUBECONFIG: "{{ kam_kubeconfig }}" }
   changed_when: true
 

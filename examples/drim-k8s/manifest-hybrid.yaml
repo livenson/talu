@@ -1,0 +1,110 @@
+apiVersion: drim/v1alpha1
+kind: Infosystem
+metadata:
+  name: billing-system
+  id: "d21b0000-0000-4000-8000-00000000c001"
+  owner: "org:talu/project:billing"
+  labels: { criticality: tier-2, rpo: "24h", rto: "2h" }
+spec:
+  # A HYBRID infosystem: one package, two component types — which on Talu means two different
+  # landing zones (drim-target.md §2). The DR service must fan out, not apply once.
+  components:
+    - name: db-primary
+      type: vm
+      requirements: { cpu: 1, memoryGiB: 2, architecture: x86_64 }
+      disks:
+        - { name: root, role: system, sizeGiB: 1 }
+      networks:
+        - { name: default, addresses: { mode: dhcp } }
+      source:
+        platform: talu
+        region: rocky-phys
+        cluster: management
+      restore:
+        method: volume-import
+        bootOrder: 10                 # lower starts earlier — the DB before the API
+        guestAgent: qemu-ga
+
+    - name: billing-api
+      type: k8s
+      requirements:
+        kubernetesVersion: ">=1.30"
+        namespaces: ["billing"]
+      workloads:
+        - { kind: Deployment, name: billing-api, replicas: 2 }
+      persistentVolumes:
+        - { claim: billing-data, sizeGiB: 1, role: data, backupMethod: filesystem }
+      resourceCapture:
+        include: ["Deployment", "Service", "ConfigMap", "PVC"]
+        exclude: ["Secret"]
+        stripFields:
+          - metadata.uid
+          - metadata.resourceVersion
+          - status
+          - spec.clusterIP
+          - spec.volumeName
+          # NOT in the spec's example, but mandatory — without these the PVC restores as Lost.
+          - metadata.annotations['pv.kubernetes.io/bind-completed']
+          - metadata.annotations['pv.kubernetes.io/bound-by-controller']
+          - metadata.annotations['volume.kubernetes.io/storage-provisioner']
+          - metadata.annotations['volume.kubernetes.io/selected-node']
+      source:
+        platform: talu-kaas
+        cluster: tenant-a
+        namespace: billing
+        storageClass: kubevirt
+      restore:
+        bootOrder: 20
+
+  relationships:
+    - from: billing-api
+      to: db-primary
+      type: depends-on
+      startupGate:
+        check: tcp
+        target: "db-primary:22"
+        timeoutSeconds: 600
+
+  validation:
+    levels:
+      - name: package
+        checks: [{ type: checksum }, { type: manifest-schema }]
+      - name: infrastructure
+        checks:
+          - { type: vm-running, target: db-primary }
+          - { type: k8s-workload-ready, target: billing-api, condition: "replicas >= 1" }
+      - name: application
+        checks:
+          - { type: script, runOn: billing-api, script: 'md5sum /usr/share/nginx/html/data/invoices.txt' }
+    policy: { failFast: false, report: summary }
+
+  launchModes:
+    validation:
+      network: { isolation: strict, addressing: ephemeral }
+      ttlSeconds: 7200
+    recovery:
+      network: { isolation: none, addressing: from-profile }
+      scale: as-declared
+
+  profiles:
+    - name: talu-rocky-phys
+      platform:
+        vm:                                   # landing zone 1 — the management cluster
+          provider: talu
+          region: rocky-phys
+          flavorMapping:
+            - { match: { cpu: 1, memoryGiB: 2 }, flavor: talu-small }
+          storage: { system: { volumeType: ceph-block } }
+        k8s:                                  # landing zone 2 — a KaaS tenant cluster
+          provider: talu-kaas
+          kubeconfigRef: kamaji
+          storageClass: kubevirt
+      s3:
+        endpoint: "http://garage.garage.svc:3900"
+        bucket: drim-packages
+
+  backupPolicy:
+    schedule: "0 3 * * *"
+    retention: { daily: 14 }
+    validateEvery: 7d
+    encryption: { mode: sse-kms, keyRef: "kms://dr-packages" }   # NOT satisfiable by Garage — §7
