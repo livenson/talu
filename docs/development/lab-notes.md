@@ -876,3 +876,31 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     consistent group snapshot on RBD is `rbd group snap create` underneath. **The cost:** the keyring
     reads EVERY tenant's volumes, versus a project-scoped Cinder credential — a much larger grant for
     a DR service to hold.
+
+56. **`rbd export` is 4.6–5.9× faster than the Cinder/Glance export, and byte-identical — measured.**
+    Follow-up to #55, now with numbers. Same snapshots, same cloud: a 10 GiB root volume took **560 s**
+    through snapshot → temp volume → `upload-to-image` → `image save`, and **121 s** through
+    `rbd export | gzip`; one 1 GiB data volume, same run and same snapshot, **77 s vs 16 s**; all five
+    artifacts **1016 s vs 173 s**. **Correctness first:** exporting the same snapshot both ways gave
+    the identical SHA-256, so nothing is traded away. The win is deleting the Glance round trip —
+    no temp volume, no image, and `rbd export` streams to stdout so nothing stages on disk. Run it
+    from the cinder-volume container, which already has the keyring:
+    `sudo podman exec openstack-cinder-volume-podman-0 rbd -p volumes --id openstack export volume-<uuid>@snapshot-<uuid> -`.
+    Find that container via `pcs status` — it is a pacemaker bundle and moves between controllers.
+    Controllers are reachable from the director on the **ctlplane** addresses in
+    `~/overcloud-deploy/*/tripleo-ansible-inventory.yaml`, NOT the internalapi ones in `/etc/hosts`.
+
+57. **Cinder's "consistent group snapshot" on RBD is NOT atomic — it is a loop, and consistency is a
+    coin flip on snapshot order.** This corrects the assumption in #55. With a group type carrying
+    `consistent_group_snapshot_enabled='<is> True'`, `group-snapshot-create` produced two ordinary
+    per-volume RBD snapshots **1 s apart**; `rbd group list` on the pool returns **empty** (exit 0),
+    so no `rbd group snap create` is involved. Measured against a cross-disk write invariant
+    (payload→fsync on disk A, checksum→fsync on disk B):
+    - independent snapshots, 4 s apart, **A before B** → skew **+47 records**: disk B holds index
+      entries whose payloads do not exist on disk A. **Torn.**
+    - group snapshot, 1 s apart, **B before A** → skew **0**. Clean *because the order was
+      favourable*, not because anything was atomic: an older index can only lag the payload.
+    The lesson: on RHOSP+Ceph, multi-disk crash consistency depends on which volume the driver happens
+    to snapshot first relative to the application's write order. The only order-independent guarantee
+    is quiescing the guest (`fsfreeze` or shutdown). Note also that an earlier run of the same probe
+    saw skew 0 on the naive path — absence of tearing in one sample is not evidence of safety.

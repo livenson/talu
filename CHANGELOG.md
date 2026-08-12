@@ -12,6 +12,8 @@ All notable changes to this project are documented here. Format follows
   with the restore path validated end-to-end on `rocky-phys`.
 - `examples/drim/capture-openstack.sh` — capture Cinder volumes into DRIM disk artifacts using only
   the OpenStack APIs; `examples/drim-k8s/` renamed to `examples/drim/` now that it is not k8s-only.
+- lab-notes #56 (`rbd export` is 4.6–5.9x faster than Cinder/Glance and byte-identical) and #57
+  (Cinder's "consistent group snapshot" on RBD is NOT atomic — consistency depends on snapshot order).
 - lab-notes #52 (RHOSP export traps + measured export cost), #53 (a restored guest loses its device
   names — `/dev/vdX` in fstab silently stops mounting), #54 (CDI's zstd import is flaky and
   undocumented upstream — corrects #46) and #55 (`rbd export` removes ~93% of export time).

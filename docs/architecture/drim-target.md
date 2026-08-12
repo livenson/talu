@@ -560,7 +560,7 @@ disk at `vdb`:
 `/dev/vdb1` now addresses the cloud-init disk. `nofail` let the guest boot, and the mount silently did
 not happen — the worst shape of failure. **A guest that references disks by device path does not
 survive a DRIM restore.** Talu's `serial` (`/dev/disk/by-id/virtio-<name>`) is what makes the disks
-re-identifiable at all; see §12.10.
+re-identifiable at all; see §12.11.
 
 **Result 2 — no tearing detected in the live capture.** A negative result, reported as such:
 
@@ -608,9 +608,9 @@ What it buys, and what it costs:
 - **It is the DRIM §6.1 layering rule working as designed.** The manifest keeps platform-level
   identity (Nova server, Cinder volume UUIDs); the pool and image name are *resolved at capture time*
   and recorded in `disk-N.meta.json` as captured truth — exactly what this run wrote by hand.
-- **It unlocks the atomic multi-disk snapshot.** Cinder's consistent group snapshot on the RBD driver
-  is `rbd group snap create` underneath, which *is* atomic across images. That is the mechanism behind
-  the third arm this run failed to execute, and the reason it is worth executing.
+- **It was expected to unlock an atomic multi-disk snapshot** — the assumption being that Cinder's
+  consistent group snapshot on the RBD driver is `rbd group snap create` underneath. **§10.6 measured
+  that and it is false**; the correction is there.
 - **The cost is blast radius.** `rbd export` on the `volumes` pool reads *every tenant's* data, and
   needs the Ceph public network plus a keyring — a far larger grant than a Cinder API credential
   scoped to one project. A DR service holding it is a much more attractive target. `rbd export-diff`
@@ -626,6 +626,83 @@ and an infeasible RTO.
 with *"Uploading data and using container are not allowed at the same time"* regardless of flags — use
 `cinder upload-to-image`. And a failed run that leaves two volumes with the same name makes every
 subsequent name-based lookup ambiguous, which silently breaks automation; address volumes by ID.
+
+### 10.6 `rbd export`, and what "consistent group snapshot" actually does
+
+§10.5 left two threads: the export was slow for a structural reason, and the consistency question was
+never settled. Both are settled here, and **one earlier claim of mine turned out to be wrong**.
+
+Same source shape as §10.5 (multi-disk VM, cross-disk write invariant: payload → `fsync` on disk A,
+then its checksum → `fsync` on disk B, so a consistent pair satisfies `maxA >= maxB >= maxA-1`). This
+time both capture arms ran **against the same running writer**, minutes apart at most:
+
+- **arm A** — two independent `volume snapshot create --force`, the default an operator gets.
+- **arm C** — `cinder --os-volume-api-version 3.14 group-snapshot-create` on a group whose type
+  carries `consistent_group_snapshot_enabled='<is> True'`.
+
+Export used the backend directly, from the cinder-volume container that already holds the keyring:
+
+```sh
+ssh tripleo-admin@<ctrl-with-cinder-volume> \
+  "sudo podman exec openstack-cinder-volume-podman-0 \
+     rbd -p volumes --id openstack export volume-<vol-uuid>@snapshot-<snap-uuid> -" \
+| gzip -1 > <name>.raw.gz
+```
+
+The RBD naming is exactly what DRIM §6.1 predicts — Cinder volume UUID → `volumes/volume-<uuid>`,
+Cinder snapshot UUID → `@snapshot-<uuid>` — resolved at capture time, recorded as captured truth.
+
+#### Result 1 — `rbd export` is 4.6–5.9× faster, and byte-identical
+
+| | Cinder/Glance path (§10.5) | `rbd export` \| gzip | speed-up |
+|---|---|---|---|
+| 10 GiB root volume | 560 s | **121 s** | **4.6×** |
+| one 1 GiB data volume (same run, same snapshot) | 77 s | **16 s** | **4.8×** |
+| all five artifacts | 1016 s | **173 s** | **5.9×** |
+
+**Correctness gate first:** the same snapshot exported both ways produced the **identical** SHA-256
+(`bb9e5d64…`), so the speed-up is not bought with different bytes. It comes from deleting the Glance
+round trip — no temp volume, no `upload-to-image`, no `image save`, and `rbd export` streams to stdout
+so nothing is staged on disk. Onward: 1.16 GB to the Talu gateway in 19 s (~61 MB/s), S3 upload 13 s,
+then **six gzip artifacts imported in 50 s** with both VMs running at 76 s.
+
+That last number matters on its own: every artifact here was **gzip**, following #62's finding that
+CDI's zstd path is flaky and undocumented. Six for six, no retries — the guidance holds.
+
+#### Result 2 — the naive path really does tear, and the "consistent" one is not atomic
+
+| | arm C (group snapshot) | arm A (independent) |
+|---|---|---|
+| `maxA` / `maxB` | 640 / 640 — **skew 0** | 2943 / 2990 — **skew +47** |
+| records checked / bad | 641 / **0** | 2990 / 1 |
+| cross-disk blob | MATCH | MATCH |
+
+**Arm A is torn.** `maxB > maxA` means disk B holds 47 index entries whose payloads do not exist on
+disk A — the invariant is violated, and 47 records ≈ 4 s of writing at ~12 records/s. §10.5's negative
+result ("no tearing detected") was simply an unlucky probe, not evidence of safety.
+
+**But arm C is not clean because it is atomic.** `rbd group list` on the pool returns **empty**
+(exit 0, no groups), and the two member snapshots are ordinary per-volume RBD snapshots taken **1 s
+apart** (13:50:42 and 13:50:43) — while arm A's were **4 s apart** (13:54:19 and 13:54:23). Cinder's
+"consistent group snapshot" on this RBD driver is a *loop of individual snapshots*, not
+`rbd group snap create`.
+
+The reason arm C survived is subtler and more useful than atomicity:
+
+> Arm C happened to snapshot **B before A** (index first, then payload). Since the writer always
+> writes A then B, an older B can only *lag* A — which satisfies `maxA >= maxB`. Arm A snapshotted
+> **A before B**, so B kept advancing for 4 more seconds and ended up ahead. **Consistency here is a
+> function of snapshot order versus application write order, not of any atomicity guarantee.**
+
+That is a much sharper finding than "use consistency groups", and it corrects the claim in this
+document's own §10.5 bullet, which asserted the `rbd group snap create` mechanism from reasoning
+rather than measurement.
+
+**One number I cannot fully reconcile:** arm A reports skew +47 but only **1** checksum mismatch,
+where ~47 would be expected if all 47 surplus index entries lacked payloads. The skew figure and the
+mismatch are both invariant violations, so the conclusion stands, but the arithmetic between them does
+not, and I would want a cleaner probe (fixed-width sequence, no `ls | sort` max) before quoting a
+precise tear width.
 
 ## 11. Anatomy: backup → storage → recovery, and the same system as DRIM
 
@@ -934,8 +1011,14 @@ target *can* verify post-decompression but pre-resize.
 know whether it can ingest the thing. We measured that CDI v1.65.0 handles `.gz`, `.xz` **and `.zst`**
 transparently — but a different target might not, and it can only find out by trying.
 
-Suggestion: per-artifact `format` and `compression` in `index.json`. Then a DR service can transcode
-ahead of time instead of failing at restore. For an **OpenStack** source this matters more: a Cinder
+**The layout hard-codes the codec, and that is the root of the problem.** §4's package tree spells out
+`disk-0.raw.zst`, `resources.tar.zst`, `pv/<pvc>.tar.zst` — every artifact is zstd by construction. So
+a producer following the spec ships the *one* codec CDI neither documents nor handles reliably, while
+the two it does advertise (`gz`, `xz`) worked on every attempt, including six-for-six in §10.6.
+
+Suggestion, in order: (1) **drop the codec from the layout** — name artifacts `disk-0.raw` and let the
+extension follow the actual encoding; (2) put per-artifact `format` and `compression` in `index.json`
+so a DR service can transcode ahead of time instead of failing at restore. For an **OpenStack** source this matters more: a Cinder
 export may be raw, qcow2, or a Ceph `rbd export-diff` stream, and only the first two are portable.
 
 **This stopped being hypothetical in §10.5, and the investigation overturned the first diagnosis.**
@@ -1027,7 +1110,32 @@ silently never ran.
 - **Package-level provenance.** `representation-info/` records tool versions; it should also record
   *which* implementation produced the package, since capture correctness varies by producer.
 
-### 12.10 Disk identity is not preserved — say so, and require UUID/LABEL
+### 12.10 `consistency: crash | quiesced` is not enough — the platform may not offer atomicity at all
+
+DRIM §14.1 proposes a per-component `consistency: crash | quiesced` flag. §10.6 shows the flag would
+be *unfalsifiable* as specified, because the platform underneath may not provide what the operator
+believes they asked for:
+
+- Two independent per-volume snapshots **tear** — measured, a 47-record skew across a 4-second gap.
+- Cinder's **`consistent_group_snapshot_enabled` group snapshot did not tear** — but `rbd group list`
+  is empty, so it is *not* an atomic RBD group snapshot; it is a loop of ordinary per-volume
+  snapshots, 1 s apart instead of 4 s.
+- Arm C survived only because it happened to snapshot the disks in the **favourable order** relative
+  to the application's write ordering.
+
+So a DR service that sets `consistency: quiesced` because the platform advertises consistency groups
+would be recording a guarantee it does not have. Suggestions:
+
+1. **Make the flag record what was *done*, not what was wanted** — e.g. `consistency: {requested,
+   achieved, method}` where `method` names the actual primitive (`fs-freeze`, `group-snapshot`,
+   `independent-snapshots`) and lands in the package as captured truth.
+2. **Require quiesce at the guest** for any real guarantee. The only mechanism that does not depend on
+   snapshot ordering is stopping the writes — `fsfreeze` via guest agent, or a clean shutdown, which
+   was the one arm that was clean by construction in §10.5.
+3. **Validation should test the invariant, not the phase.** A restored multi-disk VM that boots proves
+   nothing; §10.6's tear was invisible until an application-level cross-disk check ran.
+
+### 12.11 Disk identity is not preserved — say so, and require UUID/LABEL
 
 DRIM models disks as an ordered list with a `name` and a `role`. Nothing in the format claims device
 order or device *names* survive, and §10.5 measured that they do not: disks captured from OpenStack as
@@ -1052,7 +1160,7 @@ For a **non-Talu source** this is sharper still: an OpenStack guest may pin devi
 `/dev/vdX`, and an RKE2 node's storage may be addressed through yet another naming scheme. The format
 should push producers toward stable identifiers rather than hope.
 
-### 12.11 What the format already gets right
+### 12.12 What the format already gets right
 
 Worth stating, because the list above is all criticism: **`index.json` + BagIt** made the S3 round
 trip verifiable with ten lines of code; **full standalone revisions** (§4.3) meant restore never had
