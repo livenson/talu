@@ -932,3 +932,25 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     `HotplugVolumes` only, and CDI's staged-import checkpoints exist for VDDK/imageio sources, not for
     `http`/`s3`. There is no way to APPLY a delta on the Talu restore side, which is exactly why the
     synthetic-full variant (deltas never leave the DR service) is the one worth having.
+
+60. **You can recover a VM's original IP on Talu — but only its ADDRESSABLE identity, and CIDR-based
+    firewall rules silently stop matching anyone.** Captured a RHOSP VM pinned to `10.90.0.150` on
+    `10.90.0.0/24` behind a security group (tcp/22 + tcp/80 from anywhere, tcp/5432 from
+    `10.90.0.0/24`, icmp), then recovered it on Talu with a `CiliumLoadBalancerIPPool` carrying the
+    ORIGINAL CIDR plus a Service annotated `lbipam.cilium.io/ips: 10.90.0.150`. LB-IPAM granted the
+    exact address and the VM answered on it. What does and does not survive:
+    - **Recovered:** the address other systems connect TO, and port-based allow/deny (22 and 80
+      reachable, 3306 correctly refused).
+    - **NOT recovered — the guest's own view.** The Service holds the IP; the endpoint is a pod IP and
+      the guest still sees `10.0.2.2` (masquerade). So in-guest static config, certs with IP SANs, and
+      **peer firewall rules keyed on this machine's source address** all break — its egress carries the
+      pod IP, not `10.90.0.150`.
+    - **Silently degraded — CIDR-scoped rules.** `tcp/5432 from 10.90.0.0/24` restored and enforced
+      correctly, but on the target that CIDR is only the LB VIP range, so it matches NOBODY. The
+      database went from reachable-by-its-subnet to reachable-by-nothing with every status green.
+      Reference peer GROUPS, not literal CIDRs, and have the restore report unmapped ones.
+    - **Dropped entirely — ICMP.** A Service VIP only forwards the ports enumerated on it, so there is
+      no way to express an icmp allow. Blocked after restore despite being allowed at source.
+    - **Never captured — egress.** OpenStack's default allow-all egress has no representation.
+    Test the NEGATIVE assertions: only "3306 must stay blocked" and "5432 is now unreachable"
+    distinguished a working restore from a broken one. Every phase/readiness check was green in both.

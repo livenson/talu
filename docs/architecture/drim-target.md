@@ -437,10 +437,10 @@ flowchart TB
       K["k8s billing-api<br/>resources + PV data"]
     end
     PKG[("s3://drim-packages/&lt;revision&gt;/<br/>8 objects · 21 193 766 B")]
-    subgraph REC["Restore — fan-out, ordered by bootOrder"]
+    subgraph REC["Restore — fan-out, sequenced by hand"]
       direction LR
-      Z1["Management cluster<br/>talu-vm source: import<br/><b>bootOrder 10</b>"]
-      Z2["KaaS tenant cluster<br/>kubectl apply + PV data<br/><b>bootOrder 20</b>"]
+      Z1["Management cluster<br/>talu-vm source: import<br/>declared bootOrder 10"]
+      Z2["KaaS tenant cluster<br/>kubectl apply + PV data<br/>declared bootOrder 20"]
     end
     V --> PKG
     K --> PKG
@@ -481,8 +481,8 @@ disk-0.meta.json    -> {"role":"system","virtualSizeBytes":117440512,"compressio
 | Upload to S3 (Garage) | ✅ 8 objects, 21 193 766 B — byte-identical total to the local package |
 | Download to a **clean** directory | ✅ all 8 retrieved |
 | Level-0 on the **downloaded** copy | ✅ **6/6 artifacts matched `index.json`** |
-| VM restore, `bootOrder 10` | ✅ CDI imported the **`.zst` straight from a presigned S3 URL**; DataVolume `Succeeded` in ~56 s; guest booted to a login prompt |
-| k8s restore, `bootOrder 20` | ✅ PVC Bound, Deployment up, Service created |
+| VM restore (sequenced first **by hand**) | ✅ CDI imported the **`.zst` straight from a presigned S3 URL**; DataVolume `Succeeded` in ~56 s; guest booted to a login prompt |
+| k8s restore (sequenced second **by hand**) | ✅ PVC Bound, Deployment up, Service created |
 | Application check | ✅ **`md5 b3cdcf6cbdca95b03abaf6ac51e2ba72`, identical to source** |
 
 **Presigned URLs are the right delivery mechanism, and now demonstrated.** The DR service signs a
@@ -499,8 +499,11 @@ be signed for the endpoint the *importer* will use, not the one the operator can
 - The three-line `stripFields` example in the spec is, in practice, a trap; the working set is
   materially larger (§12.1).
 
-**Scope:** the k8s half here restored into a second namespace of the same tenant cluster — the
-cross-cluster case is §10.3. The new claims are the hybrid package and the S3 transport.
+**Scope, stated precisely.** The k8s half restored into a second namespace of the same tenant cluster
+— the cross-cluster case is §10.3. The new claims are the hybrid package and the S3 transport.
+**`bootOrder` was declared in the manifest but not enforced by anything**: the two components were
+restored in that sequence by hand. Nothing computed a DAG from `relationships`, no `startupGate` ran,
+and no level-2 connectivity check was executed. Those axes are covered in §10.8.
 
 ### 10.5 A non-Talu source: multi-disk VM from OpenStack (RHOSP 17)
 
@@ -854,6 +857,75 @@ Materialise **where the data is**. Streaming a 1 GiB image through `kubectl exec
 `i/o timeout` against the API server; running the same pipeline inside the Rook toolbox pod took 3 s.
 A DR service should merge next to the storage, not pull bytes through a control plane.
 
+### 10.8 Network topology and firewall rules — what actually survives a restore
+
+Prompted by a simple question: was the network validated? It had not been. Everything up to §10.7
+tested the *data* path. This tests network identity and firewall state, and the answer is
+"partially, and the partial failures are silent".
+
+**Source** (RHOSP): one VM pinned to a **fixed IP `10.90.0.150`** on `10.90.0.0/24`
+(gateway `.1`, DNS `8.8.8.8`, pool `.100–.200`), MAC `fa:16:3e:1c:1a:0f`, port security on, behind a
+security group with four authored rules — tcp/22 and tcp/80 from `0.0.0.0/0`, tcp/5432 from
+`10.90.0.0/24`, and icmp — plus the two default egress-allow rules.
+
+**Captured** into a topology block DRIM has no field for: CIDR, gateway, DNS, allocation pools, MAC,
+fixed IPs, port security, and all six rules with direction/ethertype/protocol/port-range/remote.
+
+**Recovered** on Talu by giving the tenant a `CiliumLoadBalancerIPPool` carrying the *original* CIDR
+and a Service requesting the *original* address, with the security group translated to a
+`CiliumNetworkPolicy`.
+
+| Probe against the recovered `10.90.0.150` | Expected from the source SG | Actual |
+|---|---|---|
+| tcp/22 | allow | ✅ **reachable** |
+| tcp/80 | allow | ✅ **reachable** |
+| tcp/5432 | allow from `10.90.0.0/24` | ⚠️ **blocked** |
+| tcp/3306 | deny — not in the SG | ✅ **blocked** |
+| icmp | allow | ❌ **blocked** |
+
+#### What is recoverable
+
+**The addressable identity, exactly.** LB-IPAM granted the requested `10.90.0.150` and the VM answers
+on it. Anything connecting *to* the machine by its original address keeps working — which for most
+consumers is what "recover the IP" means.
+
+**Port-based allow/deny.** 22 and 80 reachable, 3306 correctly refused. Note the 3306 row is the
+*non-reachability* assertion §8.2 argues for: a restore that silently opened it would have passed
+every other check in this document.
+
+#### What is not — and each failure is quiet
+
+**The guest's own address is not preserved.** The Service holds `10.90.0.150`; the endpoint is a pod
+IP (`10.244.4.5`) and the guest sees `10.0.2.2`. So anything depending on the machine's *self* view
+breaks: in-guest static configuration, certificates with IP SANs, applications binding a specific
+address, and — importantly — **peer firewall rules keyed on this machine's source IP**, because its
+egress appears to come from the pod address, not from `10.90.0.150`.
+
+**CIDR-scoped rules survive syntactically and become unsatisfiable.** tcp/5432 was allowed from
+`10.90.0.0/24`. That rule restored cleanly and is enforced — but on the target `10.90.0.0/24` is now
+only the LB VIP range; no workload lives there, so **the rule can never match anyone**. The probe from
+`10.244.1.192` was blocked, which is *correct* enforcement of a rule that no longer means what it
+meant. Nothing reports this. A database that was reachable from its subnet is now reachable from
+nobody, and every status field is green.
+
+**Protocol rules outside TCP/UDP ports cannot be expressed at all.** ICMP was allowed at source and is
+blocked after restore — not by policy, but because a Service VIP only forwards the ports enumerated on
+it. There is no port to enumerate for ICMP.
+
+**Egress was never captured.** The source's default allow-all egress has no representation, so an
+infosystem whose security depended on egress restriction would be restored without it.
+
+#### Consequence for the format
+
+DRIM models network *attachment* — a logical name and an addressing mode — and nothing else. It has no
+concept of a security group, a firewall rule, a subnet as captured state, a router, or a floating IP.
+A faithful restore of the system above therefore produces a VM with the target's default security
+posture: unreachable or wide open, depending on the target, with nothing in the manifest or the
+validation levels to notice. That gap is addressed in the revised spec, not here.
+
+**Still untested** after this run: `bootOrder` / `relationships` DAG enforcement, `startupGate`,
+level-2 `tcp` checks between components, and the whole of `launchModes.validation` (isolation, stubs,
+TTL, cleanup).
 ## 11. Anatomy: backup → storage → recovery, and the same system as DRIM
 
 The round trip in §10.2 was run with an HTTP artifact server standing in for S3. This section shows
