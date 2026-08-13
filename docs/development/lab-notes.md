@@ -904,3 +904,83 @@ CDI v1.65.0 · ceph-csi 3.17.0 · **Dex v2.45.1** · **Pomerium v0.33.0** (Nativ
     to snapshot first relative to the application's write order. The only order-independent guarantee
     is quiescing the guest (`fsfreeze` or shutdown). Note also that an earlier run of the same probe
     saw skew 0 on the naive path — absence of tearing in one sample is not evidence of safety.
+
+58. **`rbd export-diff` from zero is 6.6x smaller and 4x faster than `rbd export` — for the SAME full,
+    standalone content.** `export` writes the provisioned size; `export-diff` is sparse-aware and
+    writes only allocated extents. Measured on a 10 GiB Cinder volume holding a Rocky 9 image:
+    `export` 10 737 418 240 B in 92 s, `export-diff` (no `--from-snap`) **1 627 411 784 B in 24 s**.
+    Against the Cinder/Glance path for the same artifact (560 s / 10.7 GB) that is a **23x time
+    reduction with no loss of self-containment** — the output is still one standalone artifact, so it
+    needs no format or policy change at all. Use `export-diff` from zero as the default full-export
+    mechanism; `rbd export` only when the consumer cannot parse the diff format.
+
+59. **Synthetic full works and is byte-exact on both Ceph deployments — but `rbd import` cannot take
+    a stream, and materialising through `kubectl exec` will not work.** Validated the incremental
+    pattern (capture deltas, publish standalone fulls) on Talu's Rook-Ceph and on RHOSP's Cinder-Ceph:
+    base `export-diff` from zero + `export-diff --from-snap` applied with `import-diff` to a fresh
+    image produced a **SHA-256 identical** to a true full export of the same snapshot, on both.
+    Increment sizes: **3.13 %** of a full (32x) for +30 MiB on a 1 GiB image; **0.51 %** (197x) for
+    +40 MiB on a 10 GiB volume.
+    Two mechanics that cost time:
+    - **`rbd import - <image>` from stdin fails** (exit 22, and it rejects `--size` on Ceph 17.2.6).
+      Build the target with `rbd create --size <MB>` and apply a **full `export-diff` from zero** with
+      `import-diff` instead — that is the canonical incremental-forever shape anyway.
+    - **Streaming a 1 GiB image through `kubectl exec` dies** with `i/o timeout` against the API
+      server. Run the whole `export-diff | import-diff` pipeline INSIDE the toolbox pod (3 s there).
+      Generalises: materialise next to the storage, never pull bytes through a control plane.
+    Note KubeVirt CBT is NOT a shortcut here — this cluster's feature gates are `Snapshot` and
+    `HotplugVolumes` only, and CDI's staged-import checkpoints exist for VDDK/imageio sources, not for
+    `http`/`s3`. There is no way to APPLY a delta on the Talu restore side, which is exactly why the
+    synthetic-full variant (deltas never leave the DR service) is the one worth having.
+
+60. **You can recover a VM's original IP on Talu — but only its ADDRESSABLE identity, and CIDR-based
+    firewall rules silently stop matching anyone.** Captured a RHOSP VM pinned to `10.90.0.150` on
+    `10.90.0.0/24` behind a security group (tcp/22 + tcp/80 from anywhere, tcp/5432 from
+    `10.90.0.0/24`, icmp), then recovered it on Talu with a `CiliumLoadBalancerIPPool` carrying the
+    ORIGINAL CIDR plus a Service annotated `lbipam.cilium.io/ips: 10.90.0.150`. LB-IPAM granted the
+    exact address and the VM answered on it. What does and does not survive:
+    - **Recovered:** the address other systems connect TO, and port-based allow/deny (22 and 80
+      reachable, 3306 correctly refused).
+    - **NOT recovered — the guest's own view.** The Service holds the IP; the endpoint is a pod IP and
+      the guest still sees `10.0.2.2` (masquerade). So in-guest static config, certs with IP SANs, and
+      **peer firewall rules keyed on this machine's source address** all break — its egress carries the
+      pod IP, not `10.90.0.150`.
+    - **Silently degraded — CIDR-scoped rules.** `tcp/5432 from 10.90.0.0/24` restored and enforced
+      correctly, but on the target that CIDR is only the LB VIP range, so it matches NOBODY. The
+      database went from reachable-by-its-subnet to reachable-by-nothing with every status green.
+      Reference peer GROUPS, not literal CIDRs, and have the restore report unmapped ones.
+    - **Dropped entirely — ICMP.** A Service VIP only forwards the ports enumerated on it, so there is
+      no way to express an icmp allow. Blocked after restore despite being allowed at source.
+    - **Never captured — egress.** OpenStack's default allow-all egress has no representation.
+    **Correction (see #61):** the "3306/5432 correctly blocked" claims above are NOT attributable —
+    both in-guest listeners used `nc -l -p <port> -q1`, which does not listen (see #61), so a closed
+    port was indistinguishable from a denied one. The `reachable` and ICMP rows stand; the CIDR
+    conclusion is sound as an inference from the restored policy text, but was not demonstrated by
+    that probe. Enforcement itself is demonstrated properly in #62.
+
+61. **`nc -l -p <port> -q1` does not listen in busybox — it prints usage and exits, so your "port is
+    blocked" result means nothing.** busybox `nc` (alpine images, and BusyBox-based guests) has no
+    `-q`; the applet dumps its usage block to stdout and exits 1, leaving nothing bound. `netstat -ltn`
+    shows no listener and even a loopback `nc -z 127.0.0.1 <port>` fails. This silently invalidated a
+    firewall-recovery result (#60) because from outside, *closed* and *denied* look identical.
+    Use `python3 -m http.server <port>` (verified: binds any port, `python:3-alpine`) or nginx for :80.
+    **Rule: before asserting a flow is blocked, prove the target is listening.** A negative network
+    assertion with no established positive is not evidence.
+
+62. **Cilium `isolation: strict` for a DR validation namespace: `endpointSelector: {}` + egress to
+    own-namespace + UDP/53 to kube-dns — and A/B it, don't assume it.** The policy that works:
+    ```yaml
+    endpointSelector: {}
+    egress:
+      - toEndpoints: [{matchLabels: {"k8s:io.kubernetes.pod.namespace": <ns>}}]
+      - toEndpoints: [{matchLabels: {"k8s:io.kubernetes.pod.namespace": kube-system,
+                                     "k8s:k8s-app": kube-dns}}]
+        toPorts: [{ports: [{port: "53", protocol: UDP}]}]
+    ```
+    Omit the DNS rule and every in-namespace check fails for the wrong reason. Verified by holding the
+    probe and target fixed (`kubernetes.default.svc:443`) and varying only the policy: **blocked** with
+    it, **reachable** without. That A/B is the only form of this test worth recording (see #61).
+    Two behaviours worth knowing when timing gates: a **closed** port fails fast (RST — 15.8 s of a
+    45 s budget) while a **dropped** flow burns the whole timeout, and Talos's PodSecurity `baseline`
+    (#5) means the validation namespace still needs `pod-security.kubernetes.io/enforce=privileged`
+    if any restored component is a VM.
