@@ -13,8 +13,9 @@ needs no cooperation from the hardware provider.
 
 ## 1 · Context — what "add a node" means in Talu today
 
-On the physical lab ([`../development/lab-notes.md`](../development/lab-notes.md), memory
-`talu-phys-lab`) a Talos node is a **libvirt VM** on one of compute1–4. Adding one is
+On the physical lab ([`../development/lab-notes.md`](../development/lab-notes.md),
+[`../../ansible/group_vars/phys.yml`](../../ansible/group_vars/phys.yml)) a Talos node is a
+**libvirt VM** on one of compute1–4. Adding one is
 [`ansible/roles/phys_talos_vms`](../../ansible/roles/phys_talos_vms/): `virt-install` from a
 `metal-amd64.raw.zst` written straight to a virtio disk, a DHCP-reserved address, then
 `talosctl apply-config`. Two tags, `vm-create` and `talos-bootstrap`. It works, it is idempotent, and
@@ -91,9 +92,9 @@ Three things block elastic node churn in Talu today. Only the third is about pro
 ### 4.1 · Hyperconvergence — the hard one
 
 [`ansible/roles/phys_rook/defaults/main.yml`](../../ansible/roles/phys_rook/defaults/main.yml) sets
-`rook_osd_device_filter: "^vdb$"`, and `phys_talos_vms`'s `vm-create.yml` attaches a 129 GiB Ceph disk
+`rook_osd_device_filter: "^vdb$"`, and `phys_talos_vms`'s `vm-create.yml` attaches a 120 GiB Ceph disk
 to **every** node. A node is therefore not a unit of compute — it is a unit of compute *and* a Ceph
-OSD. Removing one means draining an OSD and backfilling ~129 GiB.
+OSD. Removing one means draining an OSD and backfilling ~120 GiB (`ceph_gb: 120` per node).
 
 **Elastic node churn and hyperconverged storage are incompatible.** The fix is a role split, and it is
 the same split KubeVirt's own autoscaling guidance recommends (infra tainted `CriticalAddonsOnly`, VM
@@ -301,7 +302,7 @@ spec:
     matchLabels:                      # (control plane + Ceph OSDs) simply never carries
       talu.io/tier: elastic           # this label — §4.1 is enforced by omission.
   target:
-    machineDeploymentRef: { name: talu-phys-elastic, namespace: talu-system }
+    machineDeploymentRef: { name: talu-phys-elastic, namespace: talu-pool }
 
   # ── scale-up: headroom, not pod pressure (§4.3) ──────────────────────────────
   bounds: { minNodes: 2, maxNodes: 8 }
