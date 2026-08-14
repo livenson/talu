@@ -19,6 +19,8 @@ one layer up.
   [`adr-api-layer.md`](adr-api-layer.md).
 - **Proposed — multi-site DR & failover** (RBD snapshot mirroring, front door, access-plane failover):
   [`disaster-recovery.md`](disaster-recovery.md).
+- **Proposed — elastic bare metal** (an owned machine pool behind the substrate: Metal3/CAPM3, a
+  synthetic BMC plane, and a Karpenter-shaped pool-manager): [`adr-elastic-bare-metal.md`](adr-elastic-bare-metal.md).
 - **Analysis — Talu as a DRIM recovery target** (restoring a portable disaster-recovery package onto
   Talu; what's missing): [`drim-target.md`](drim-target.md).
 - Operating guide & validated gotchas (the hard-won lab lessons): [`../../CLAUDE.md`](../../CLAUDE.md)
